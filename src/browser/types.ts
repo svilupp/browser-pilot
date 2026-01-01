@@ -174,3 +174,136 @@ export class NavigationError extends Error {
     this.name = 'NavigationError';
   }
 }
+
+// ============ Emulation Types ============
+
+export interface ViewportOptions {
+  /** Viewport width in pixels */
+  width: number;
+  /** Viewport height in pixels */
+  height: number;
+  /** Device scale factor (default: 1) */
+  deviceScaleFactor?: number;
+  /** Whether to emulate mobile (default: false) */
+  isMobile?: boolean;
+  /** Whether the meta viewport tag should be accounted for (default: false) */
+  hasTouch?: boolean;
+  /** Whether to emulate landscape orientation (default: false) */
+  isLandscape?: boolean;
+}
+
+export interface GeolocationOptions {
+  /** Latitude in degrees */
+  latitude: number;
+  /** Longitude in degrees */
+  longitude: number;
+  /** Accuracy in meters (default: 1) */
+  accuracy?: number;
+}
+
+export interface UserAgentOptions {
+  /** User agent string */
+  userAgent: string;
+  /** Accept-Language header value */
+  acceptLanguage?: string;
+  /** Platform override (e.g., "Win32", "MacIntel") */
+  platform?: string;
+  /** User agent metadata for Client Hints */
+  userAgentMetadata?: UserAgentMetadata;
+}
+
+export interface UserAgentMetadata {
+  brands?: Array<{ brand: string; version: string }>;
+  fullVersionList?: Array<{ brand: string; version: string }>;
+  fullVersion?: string;
+  platform?: string;
+  platformVersion?: string;
+  architecture?: string;
+  model?: string;
+  mobile?: boolean;
+  bitness?: string;
+  wow64?: boolean;
+}
+
+export interface EmulationState {
+  viewport?: ViewportOptions;
+  userAgent?: UserAgentOptions;
+  geolocation?: GeolocationOptions;
+  timezone?: string;
+  locale?: string;
+}
+
+// ============ Console & Dialog Types ============
+
+export type ConsoleMessageType =
+  | 'log'
+  | 'debug'
+  | 'info'
+  | 'error'
+  | 'warning'
+  | 'dir'
+  | 'dirxml'
+  | 'table'
+  | 'trace'
+  | 'clear'
+  | 'startGroup'
+  | 'startGroupCollapsed'
+  | 'endGroup'
+  | 'assert'
+  | 'profile'
+  | 'profileEnd'
+  | 'count'
+  | 'timeEnd';
+
+export interface ConsoleMessage {
+  /** Message type */
+  type: ConsoleMessageType;
+  /** Message text */
+  text: string;
+  /** Arguments passed to console method */
+  args: unknown[];
+  /** Source URL */
+  url?: string;
+  /** Line number */
+  lineNumber?: number;
+  /** Column number */
+  columnNumber?: number;
+  /** Stack trace if available */
+  stackTrace?: string[];
+  /** Timestamp */
+  timestamp: number;
+}
+
+export interface PageError {
+  /** Error message */
+  message: string;
+  /** Source URL */
+  url?: string;
+  /** Line number */
+  lineNumber?: number;
+  /** Column number */
+  columnNumber?: number;
+  /** Stack trace */
+  stackTrace?: string[];
+  /** Timestamp */
+  timestamp: number;
+}
+
+export type DialogType = 'alert' | 'confirm' | 'prompt' | 'beforeunload';
+
+export interface Dialog {
+  /** Dialog type */
+  type: DialogType;
+  /** Dialog message */
+  message: string;
+  /** Default value for prompt dialogs */
+  defaultValue?: string;
+  /** Accept the dialog (click OK) */
+  accept(promptText?: string): Promise<void>;
+  /** Dismiss the dialog (click Cancel) */
+  dismiss(): Promise<void>;
+}
+
+export type ConsoleHandler = (message: ConsoleMessage) => void;
+export type ErrorHandler = (error: PageError) => void;
+export type DialogHandler = (dialog: Dialog) => void | Promise<void>;

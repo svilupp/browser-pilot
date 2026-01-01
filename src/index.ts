@@ -21,24 +21,62 @@ export {
   type ActionResult,
   Browser,
   type BrowserOptions,
+  type ConsoleHandler,
+  type ConsoleMessage,
+  type ConsoleMessageType,
   type CustomSelectConfig,
   connect,
+  type Dialog,
+  type DialogHandler,
+  type DialogType,
   type Download,
   type ElementInfo,
   ElementNotFoundError,
+  type EmulationState,
+  type ErrorHandler,
   type FileInput,
   type FillOptions,
+  type GeolocationOptions,
   type InteractiveElement,
   NavigationError,
   type NetworkIdleOptions,
   Page,
+  type PageError,
   type PageSnapshot,
   type SnapshotNode,
   type SubmitOptions,
   TimeoutError,
   type TypeOptions,
+  type UserAgentMetadata,
+  type UserAgentOptions,
+  type ViewportOptions,
   type WaitForOptions,
 } from './browser/index.ts';
+
+// Emulation
+export { devices, type DeviceDescriptor, type DeviceName } from './emulation/index.ts';
+
+// Network Interception
+export {
+  RequestInterceptor,
+  type ContinueRequestOptions,
+  type FailRequestOptions,
+  type FulfillRequestOptions,
+  type InterceptedRequest,
+  type RequestActions,
+  type RequestHandler,
+  type RequestPattern,
+  type ResourceType,
+  type RouteOptions,
+} from './network/index.ts';
+
+// Storage (Cookies)
+export type {
+  ClearCookiesOptions,
+  Cookie,
+  DeleteCookieOptions,
+  SetCookieOptions,
+} from './storage/index.ts';
 
 // CDP Client (for advanced usage)
 export {

@@ -397,6 +397,234 @@ console.log(result.steps);
 
 See [Batch Actions Guide](../guides/batch-actions.md) for details.
 
+## Emulation
+
+### emulate(device)
+
+Emulate a device (viewport, user agent, touch).
+
+```typescript
+import { devices } from 'browser-pilot';
+
+await page.emulate(devices['iPhone 14']);
+```
+
+**Available devices:** `iPhone 14`, `iPhone 14 Pro Max`, `Pixel 7`, `iPad Pro 11`, `Desktop Chrome`, `Desktop Firefox`
+
+### setViewport(options)
+
+Set viewport dimensions.
+
+```typescript
+await page.setViewport({ width: 1280, height: 720, deviceScaleFactor: 2, isMobile: true });
+await page.clearViewport(); // Reset
+```
+
+### setUserAgent(userAgent)
+
+Set user agent string.
+
+```typescript
+await page.setUserAgent('Custom UA');
+await page.setUserAgent({ userAgent: '...', platform: 'Win32' });
+```
+
+### setGeolocation(options)
+
+Override geolocation.
+
+```typescript
+await page.setGeolocation({ latitude: 37.7749, longitude: -122.4194, accuracy: 10 });
+await page.clearGeolocation();
+```
+
+### setTimezone(timezoneId)
+
+Set timezone.
+
+```typescript
+await page.setTimezone('America/New_York');
+```
+
+### setLocale(locale)
+
+Set locale.
+
+```typescript
+await page.setLocale('fr-FR');
+```
+
+### getEmulationState()
+
+Get current emulation state.
+
+```typescript
+const state = page.getEmulationState();
+// { viewport, userAgent, geolocation, timezone, locale }
+```
+
+## Request Interception
+
+### intercept(pattern, handler)
+
+Low-level request interception with full control.
+
+```typescript
+const unsubscribe = await page.intercept('*api*', async (request, actions) => {
+  if (request.url.includes('blocked')) {
+    await actions.fail({ reason: 'BlockedByClient' });
+  } else if (request.url.includes('mock')) {
+    await actions.fulfill({ status: 200, body: '{"ok":true}' });
+  } else {
+    await actions.continue({ headers: { ...request.headers, 'X-Custom': 'value' } });
+  }
+});
+
+unsubscribe(); // Remove handler
+```
+
+### route(pattern, response)
+
+Simple request mocking.
+
+```typescript
+await page.route('**/api/users', { status: 200, body: { users: [] } });
+await page.route('**/api/error', { status: 500, body: 'Error' });
+```
+
+### blockResources(types)
+
+Block resource types.
+
+```typescript
+await page.blockResources(['Image', 'Font', 'Stylesheet']);
+```
+
+**Resource types:** `Document`, `Stylesheet`, `Image`, `Media`, `Font`, `Script`, `XHR`, `Fetch`, `WebSocket`, `Other`
+
+### disableInterception()
+
+Disable all request interception.
+
+```typescript
+await page.disableInterception();
+```
+
+## Cookies & Storage
+
+### cookies(urls?)
+
+Get cookies.
+
+```typescript
+const cookies = await page.cookies();
+const cookies = await page.cookies(['https://example.com']);
+```
+
+### setCookie(cookie) / setCookies(cookies)
+
+Set cookie(s).
+
+```typescript
+await page.setCookie({ name: 'session', value: 'abc', domain: '.example.com' });
+await page.setCookies([
+  { name: 'a', value: '1', domain: '.example.com' },
+  { name: 'b', value: '2', domain: '.example.com' },
+]);
+```
+
+**Options:** `name`, `value`, `domain`, `path`, `expires`, `httpOnly`, `secure`, `sameSite`
+
+### deleteCookie(options) / deleteCookies(options[])
+
+Delete cookie(s).
+
+```typescript
+await page.deleteCookie({ name: 'session', domain: '.example.com' });
+```
+
+### clearCookies(options?)
+
+Clear all cookies or by domain.
+
+```typescript
+await page.clearCookies();
+await page.clearCookies({ domain: 'example.com' });
+```
+
+### localStorage / sessionStorage
+
+```typescript
+await page.setLocalStorage('key', 'value');
+const value = await page.getLocalStorage('key');
+await page.removeLocalStorage('key');
+await page.clearLocalStorage();
+
+// Same API for sessionStorage
+await page.setSessionStorage('key', 'value');
+await page.getSessionStorage('key');
+await page.removeSessionStorage('key');
+await page.clearSessionStorage();
+```
+
+## Console & Dialogs
+
+### onConsole(handler)
+
+Subscribe to console messages.
+
+```typescript
+const unsubscribe = await page.onConsole((msg) => {
+  console.log(`[${msg.type}] ${msg.text}`);
+  // msg.args, msg.stackTrace, msg.timestamp
+});
+
+unsubscribe();
+```
+
+### onError(handler)
+
+Subscribe to page errors.
+
+```typescript
+const unsubscribe = await page.onError((err) => {
+  console.error(`${err.message} at ${err.url}:${err.lineNumber}`);
+});
+```
+
+### onDialog(handler)
+
+Handle JavaScript dialogs (alert, confirm, prompt, beforeunload).
+
+```typescript
+await page.onDialog(async (dialog) => {
+  console.log(`${dialog.type}: ${dialog.message}`);
+  if (dialog.type === 'confirm') {
+    await dialog.accept();
+  } else if (dialog.type === 'prompt') {
+    await dialog.accept('my answer');
+  } else {
+    await dialog.dismiss();
+  }
+});
+
+await page.onDialog(null); // Remove handler
+```
+
+### collectConsole(action) / collectErrors(action)
+
+Collect messages during an action.
+
+```typescript
+const { result, messages } = await page.collectConsole(async () => {
+  return await page.click('#button');
+});
+
+const { result, errors } = await page.collectErrors(async () => {
+  return await page.evaluate('throw new Error("test")');
+});
+```
+
 ## Types
 
 ```typescript

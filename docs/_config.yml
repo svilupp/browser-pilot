@@ -1,0 +1,20 @@
+title: browser-pilot
+description: Lightweight CDP-based browser automation for AI agents
+theme: jekyll-theme-cayman
+baseurl: /browser-pilot
+url: https://svilupp.github.io
+
+# Markdown settings
+markdown: kramdown
+kramdown:
+  input: GFM
+  syntax_highlighter: rouge
+
+# Include files
+include:
+  - _config.yml
+
+# Exclude files
+exclude:
+  - llms.txt
+  - skill/

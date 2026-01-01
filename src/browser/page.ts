@@ -10,20 +10,46 @@ import {
   waitForNetworkIdle as waitForIdle,
   waitForNavigation as waitForNav,
 } from '../wait/index.ts';
+import type { DeviceDescriptor } from '../emulation/index.ts';
+import {
+  RequestInterceptor,
+  type RequestHandler,
+  type RequestPattern,
+  type ResourceType,
+  type RouteOptions,
+} from '../network/index.ts';
+import type {
+  ClearCookiesOptions,
+  Cookie,
+  DeleteCookieOptions,
+  SetCookieOptions,
+} from '../storage/types.ts';
 import {
   type ActionOptions,
+  type ConsoleHandler,
+  type ConsoleMessage,
+  type ConsoleMessageType,
   type CustomSelectConfig,
+  type Dialog,
+  type DialogHandler,
+  type DialogType,
   type Download,
   type ElementInfo,
   ElementNotFoundError,
+  type EmulationState,
+  type ErrorHandler,
   type FileInput,
   type FillOptions,
+  type GeolocationOptions,
   type NetworkIdleOptions,
+  type PageError,
   type PageSnapshot,
   type SnapshotNode,
   type SubmitOptions,
   TimeoutError,
   type TypeOptions,
+  type UserAgentOptions,
+  type ViewportOptions,
   type WaitForOptions,
 } from './types.ts';
 
@@ -33,6 +59,12 @@ export class Page {
   private cdp: CDPClient;
   private rootNodeId: number | null = null;
   private batchExecutor: BatchExecutor;
+  private emulationState: EmulationState = {};
+  private interceptor: RequestInterceptor | null = null;
+  private consoleHandlers = new Set<ConsoleHandler>();
+  private errorHandlers = new Set<ErrorHandler>();
+  private dialogHandler: DialogHandler | null = null;
+  private consoleEnabled = false;
 
   constructor(cdp: CDPClient) {
     this.cdp = cdp;
@@ -1055,6 +1087,549 @@ export class Page {
    */
   async batch(steps: Step[], options?: BatchOptions): Promise<BatchResult> {
     return this.batchExecutor.execute(steps, options);
+  }
+
+  // ============ Emulation ============
+
+  /**
+   * Set the viewport size and device metrics
+   */
+  async setViewport(options: ViewportOptions): Promise<void> {
+    const {
+      width,
+      height,
+      deviceScaleFactor = 1,
+      isMobile = false,
+      hasTouch = false,
+      isLandscape = false,
+    } = options;
+
+    await this.cdp.send('Emulation.setDeviceMetricsOverride', {
+      width,
+      height,
+      deviceScaleFactor,
+      mobile: isMobile,
+      screenWidth: width,
+      screenHeight: height,
+      screenOrientation: {
+        type: isLandscape ? 'landscapePrimary' : 'portraitPrimary',
+        angle: isLandscape ? 90 : 0,
+      },
+    });
+
+    if (hasTouch) {
+      await this.cdp.send('Emulation.setTouchEmulationEnabled', {
+        enabled: true,
+        maxTouchPoints: 5,
+      });
+    }
+
+    this.emulationState.viewport = options;
+  }
+
+  /**
+   * Clear viewport override, return to default
+   */
+  async clearViewport(): Promise<void> {
+    await this.cdp.send('Emulation.clearDeviceMetricsOverride');
+    await this.cdp.send('Emulation.setTouchEmulationEnabled', { enabled: false });
+    this.emulationState.viewport = undefined;
+  }
+
+  /**
+   * Set the user agent string and optional metadata
+   */
+  async setUserAgent(options: string | UserAgentOptions): Promise<void> {
+    const opts: UserAgentOptions =
+      typeof options === 'string' ? { userAgent: options } : options;
+
+    await this.cdp.send('Emulation.setUserAgentOverride', {
+      userAgent: opts.userAgent,
+      acceptLanguage: opts.acceptLanguage,
+      platform: opts.platform,
+      userAgentMetadata: opts.userAgentMetadata,
+    });
+
+    this.emulationState.userAgent = opts;
+  }
+
+  /**
+   * Set geolocation coordinates
+   */
+  async setGeolocation(options: GeolocationOptions): Promise<void> {
+    const { latitude, longitude, accuracy = 1 } = options;
+
+    // Grant geolocation permission first
+    await this.cdp.send('Browser.grantPermissions', {
+      permissions: ['geolocation'],
+    });
+
+    await this.cdp.send('Emulation.setGeolocationOverride', {
+      latitude,
+      longitude,
+      accuracy,
+    });
+
+    this.emulationState.geolocation = options;
+  }
+
+  /**
+   * Clear geolocation override
+   */
+  async clearGeolocation(): Promise<void> {
+    await this.cdp.send('Emulation.clearGeolocationOverride');
+    this.emulationState.geolocation = undefined;
+  }
+
+  /**
+   * Set timezone override
+   */
+  async setTimezone(timezoneId: string): Promise<void> {
+    await this.cdp.send('Emulation.setTimezoneOverride', { timezoneId });
+    this.emulationState.timezone = timezoneId;
+  }
+
+  /**
+   * Set locale override
+   */
+  async setLocale(locale: string): Promise<void> {
+    await this.cdp.send('Emulation.setLocaleOverride', { locale });
+    this.emulationState.locale = locale;
+  }
+
+  /**
+   * Emulate a specific device
+   */
+  async emulate(device: DeviceDescriptor): Promise<void> {
+    await this.setViewport(device.viewport);
+    await this.setUserAgent(device.userAgent);
+  }
+
+  /**
+   * Get current emulation state
+   */
+  getEmulationState(): EmulationState {
+    return { ...this.emulationState };
+  }
+
+  // ============ Request Interception ============
+
+  /**
+   * Add request interception handler
+   * @param pattern URL pattern or resource type to match
+   * @param handler Handler function for matched requests
+   * @returns Unsubscribe function
+   */
+  async intercept(
+    pattern: string | RequestPattern,
+    handler: RequestHandler
+  ): Promise<() => void> {
+    // Lazy initialize interceptor
+    if (!this.interceptor) {
+      this.interceptor = new RequestInterceptor(this.cdp);
+      await this.interceptor.enable();
+    }
+
+    const normalizedPattern: RequestPattern =
+      typeof pattern === 'string' ? { urlPattern: pattern } : pattern;
+
+    return this.interceptor.addHandler(normalizedPattern, handler);
+  }
+
+  /**
+   * Route requests matching pattern to a mock response
+   * Convenience wrapper around intercept()
+   */
+  async route(urlPattern: string, options: RouteOptions): Promise<() => void> {
+    return this.intercept({ urlPattern }, async (_request, actions) => {
+      let body = options.body;
+      const headers = { ...options.headers };
+
+      // Auto-serialize objects to JSON
+      if (typeof body === 'object') {
+        body = JSON.stringify(body);
+        headers['content-type'] ??= 'application/json';
+      }
+
+      if (options.contentType) {
+        headers['content-type'] = options.contentType;
+      }
+
+      await actions.fulfill({
+        status: options.status ?? 200,
+        headers,
+        body: body as string,
+      });
+    });
+  }
+
+  /**
+   * Block requests matching resource types
+   */
+  async blockResources(types: ResourceType[]): Promise<() => void> {
+    return this.intercept({}, async (request, actions) => {
+      if (types.includes(request.resourceType)) {
+        await actions.fail({ reason: 'BlockedByClient' });
+      } else {
+        await actions.continue();
+      }
+    });
+  }
+
+  /**
+   * Disable all request interception
+   */
+  async disableInterception(): Promise<void> {
+    if (this.interceptor) {
+      await this.interceptor.disable();
+      this.interceptor = null;
+    }
+  }
+
+  // ============ Cookies & Storage ============
+
+  /**
+   * Get all cookies for the current page
+   */
+  async cookies(urls?: string[]): Promise<Cookie[]> {
+    const targetUrls = urls ?? [await this.url()];
+    const result = await this.cdp.send<{ cookies: Cookie[] }>('Network.getCookies', {
+      urls: targetUrls,
+    });
+    return result.cookies;
+  }
+
+  /**
+   * Set a cookie
+   */
+  async setCookie(options: SetCookieOptions): Promise<boolean> {
+    const { name, value, domain, path = '/', expires, httpOnly, secure, sameSite, url } =
+      options;
+
+    let expireTime: number | undefined;
+    if (expires instanceof Date) {
+      expireTime = Math.floor(expires.getTime() / 1000);
+    } else if (typeof expires === 'number') {
+      expireTime = expires;
+    }
+
+    const result = await this.cdp.send<{ success: boolean }>('Network.setCookie', {
+      name,
+      value,
+      domain,
+      path,
+      expires: expireTime,
+      httpOnly,
+      secure,
+      sameSite,
+      url: url ?? (domain ? undefined : await this.url()),
+    });
+
+    return result.success;
+  }
+
+  /**
+   * Set multiple cookies
+   */
+  async setCookies(cookies: SetCookieOptions[]): Promise<void> {
+    for (const cookie of cookies) {
+      await this.setCookie(cookie);
+    }
+  }
+
+  /**
+   * Delete a specific cookie
+   */
+  async deleteCookie(options: DeleteCookieOptions): Promise<void> {
+    const { name, domain, path, url } = options;
+
+    await this.cdp.send('Network.deleteCookies', {
+      name,
+      domain,
+      path,
+      url: url ?? (domain ? undefined : await this.url()),
+    });
+  }
+
+  /**
+   * Delete multiple cookies
+   */
+  async deleteCookies(cookies: DeleteCookieOptions[]): Promise<void> {
+    for (const cookie of cookies) {
+      await this.deleteCookie(cookie);
+    }
+  }
+
+  /**
+   * Clear all cookies
+   */
+  async clearCookies(options?: ClearCookiesOptions): Promise<void> {
+    if (options?.domain) {
+      // Get cookies for domain and delete them
+      const domainCookies = await this.cookies([`https://${options.domain}`]);
+      for (const cookie of domainCookies) {
+        await this.deleteCookie({
+          name: cookie.name,
+          domain: cookie.domain,
+          path: cookie.path,
+        });
+      }
+    } else {
+      // Clear all cookies via Storage domain
+      await this.cdp.send('Storage.clearCookies', {});
+    }
+  }
+
+  /**
+   * Get localStorage value
+   */
+  async getLocalStorage(key: string): Promise<string | null> {
+    const result = await this.cdp.send<{ result: { value: unknown } }>('Runtime.evaluate', {
+      expression: `localStorage.getItem(${JSON.stringify(key)})`,
+      returnByValue: true,
+    });
+    return result.result.value as string | null;
+  }
+
+  /**
+   * Set localStorage value
+   */
+  async setLocalStorage(key: string, value: string): Promise<void> {
+    await this.cdp.send('Runtime.evaluate', {
+      expression: `localStorage.setItem(${JSON.stringify(key)}, ${JSON.stringify(value)})`,
+    });
+  }
+
+  /**
+   * Remove localStorage item
+   */
+  async removeLocalStorage(key: string): Promise<void> {
+    await this.cdp.send('Runtime.evaluate', {
+      expression: `localStorage.removeItem(${JSON.stringify(key)})`,
+    });
+  }
+
+  /**
+   * Clear localStorage
+   */
+  async clearLocalStorage(): Promise<void> {
+    await this.cdp.send('Runtime.evaluate', {
+      expression: 'localStorage.clear()',
+    });
+  }
+
+  /**
+   * Get sessionStorage value
+   */
+  async getSessionStorage(key: string): Promise<string | null> {
+    const result = await this.cdp.send<{ result: { value: unknown } }>('Runtime.evaluate', {
+      expression: `sessionStorage.getItem(${JSON.stringify(key)})`,
+      returnByValue: true,
+    });
+    return result.result.value as string | null;
+  }
+
+  /**
+   * Set sessionStorage value
+   */
+  async setSessionStorage(key: string, value: string): Promise<void> {
+    await this.cdp.send('Runtime.evaluate', {
+      expression: `sessionStorage.setItem(${JSON.stringify(key)}, ${JSON.stringify(value)})`,
+    });
+  }
+
+  /**
+   * Remove sessionStorage item
+   */
+  async removeSessionStorage(key: string): Promise<void> {
+    await this.cdp.send('Runtime.evaluate', {
+      expression: `sessionStorage.removeItem(${JSON.stringify(key)})`,
+    });
+  }
+
+  /**
+   * Clear sessionStorage
+   */
+  async clearSessionStorage(): Promise<void> {
+    await this.cdp.send('Runtime.evaluate', {
+      expression: 'sessionStorage.clear()',
+    });
+  }
+
+  // ============ Console & Errors ============
+
+  /**
+   * Enable console message capture
+   */
+  private async enableConsole(): Promise<void> {
+    if (this.consoleEnabled) return;
+
+    // Subscribe to console events
+    this.cdp.on('Runtime.consoleAPICalled', this.handleConsoleMessage.bind(this));
+    this.cdp.on('Runtime.exceptionThrown', this.handleException.bind(this));
+    this.cdp.on('Page.javascriptDialogOpening', this.handleDialogOpening.bind(this));
+
+    this.consoleEnabled = true;
+  }
+
+  /**
+   * Handle console API calls
+   */
+  private handleConsoleMessage(params: Record<string, unknown>): void {
+    const args = params['args'] as Array<{ value?: unknown; description?: string }> | undefined;
+    const stackTrace = params['stackTrace'] as {
+      callFrames?: Array<{ url: string; lineNumber: number }>;
+    } | undefined;
+
+    const message: ConsoleMessage = {
+      type: params['type'] as ConsoleMessageType,
+      text: this.formatConsoleArgs(args ?? []),
+      args: args?.map((a) => a.value) ?? [],
+      timestamp: params['timestamp'] as number,
+      stackTrace: stackTrace?.callFrames?.map((f) => `${f.url}:${f.lineNumber}`),
+    };
+
+    for (const handler of this.consoleHandlers) {
+      try {
+        handler(message);
+      } catch (e) {
+        console.error('[Console handler error]', e);
+      }
+    }
+  }
+
+  /**
+   * Handle JavaScript exceptions
+   */
+  private handleException(params: Record<string, unknown>): void {
+    const details = params['exceptionDetails'] as Record<string, unknown>;
+    const exception = details['exception'] as { description?: string } | undefined;
+    const stackTrace = details['stackTrace'] as {
+      callFrames?: Array<{ url: string; lineNumber: number }>;
+    } | undefined;
+
+    const error: PageError = {
+      message: exception?.description ?? (details['text'] as string),
+      url: details['url'] as string | undefined,
+      lineNumber: details['lineNumber'] as number | undefined,
+      columnNumber: details['columnNumber'] as number | undefined,
+      timestamp: params['timestamp'] as number,
+      stackTrace: stackTrace?.callFrames?.map((f) => `${f.url}:${f.lineNumber}`),
+    };
+
+    for (const handler of this.errorHandlers) {
+      try {
+        handler(error);
+      } catch (e) {
+        console.error('[Error handler error]', e);
+      }
+    }
+  }
+
+  /**
+   * Handle dialog opening
+   */
+  private async handleDialogOpening(params: Record<string, unknown>): Promise<void> {
+    const dialog: Dialog = {
+      type: params['type'] as DialogType,
+      message: params['message'] as string,
+      defaultValue: params['defaultPrompt'] as string | undefined,
+      accept: async (promptText?: string) => {
+        await this.cdp.send('Page.handleJavaScriptDialog', {
+          accept: true,
+          promptText,
+        });
+      },
+      dismiss: async () => {
+        await this.cdp.send('Page.handleJavaScriptDialog', {
+          accept: false,
+        });
+      },
+    };
+
+    if (this.dialogHandler) {
+      try {
+        await this.dialogHandler(dialog);
+      } catch (e) {
+        console.error('[Dialog handler error]', e);
+        // Auto-dismiss on error
+        await dialog.dismiss();
+      }
+    } else {
+      // Auto-dismiss by default
+      await dialog.dismiss();
+    }
+  }
+
+  /**
+   * Format console arguments to string
+   */
+  private formatConsoleArgs(
+    args: Array<{ value?: unknown; description?: string }>
+  ): string {
+    return args
+      .map((arg) => {
+        if (arg.value !== undefined) return String(arg.value);
+        if (arg.description) return arg.description;
+        return '[object]';
+      })
+      .join(' ');
+  }
+
+  /**
+   * Subscribe to console messages
+   */
+  async onConsole(handler: ConsoleHandler): Promise<() => void> {
+    await this.enableConsole();
+    this.consoleHandlers.add(handler);
+    return () => this.consoleHandlers.delete(handler);
+  }
+
+  /**
+   * Subscribe to page errors
+   */
+  async onError(handler: ErrorHandler): Promise<() => void> {
+    await this.enableConsole();
+    this.errorHandlers.add(handler);
+    return () => this.errorHandlers.delete(handler);
+  }
+
+  /**
+   * Set dialog handler (only one at a time)
+   */
+  async onDialog(handler: DialogHandler | null): Promise<void> {
+    await this.enableConsole();
+    this.dialogHandler = handler;
+  }
+
+  /**
+   * Collect console messages during an action
+   */
+  async collectConsole<T>(fn: () => Promise<T>): Promise<{ result: T; messages: ConsoleMessage[] }> {
+    const messages: ConsoleMessage[] = [];
+    const unsubscribe = await this.onConsole((msg) => messages.push(msg));
+
+    try {
+      const result = await fn();
+      return { result, messages };
+    } finally {
+      unsubscribe();
+    }
+  }
+
+  /**
+   * Collect errors during an action
+   */
+  async collectErrors<T>(fn: () => Promise<T>): Promise<{ result: T; errors: PageError[] }> {
+    const errors: PageError[] = [];
+    const unsubscribe = await this.onError((err) => errors.push(err));
+
+    try {
+      const result = await fn();
+      return { result, errors };
+    } finally {
+      unsubscribe();
+    }
   }
 
   // ============ Lifecycle ============

@@ -65,6 +65,9 @@ Complex patterns (custom dropdowns, multi-step forms) are composed from primitiv
 | Provider interface | `src/providers/types.ts:5-60` |
 | BrowserBase provider | `src/providers/browserbase.ts:23-99` |
 | Snapshot (accessibility tree) | `src/browser/page.ts:821-967` |
+| Device presets | `src/emulation/devices.ts` |
+| Request interceptor | `src/network/interceptor.ts` |
+| Cookie/storage types | `src/storage/types.ts` |
 | CLI | `src/cli/index.ts` |
 
 ## CDP Client Pattern

@@ -1,5 +1,11 @@
 # browser-pilot
 
+[![Docs](https://img.shields.io/badge/docs-API%20Reference-blue?style=flat&logo=gitbook&logoColor=white)](https://svilupp.github.io/browser-pilot/)
+[![npm version](https://img.shields.io/npm/v/browser-pilot.svg)](https://www.npmjs.com/package/browser-pilot)
+[![CI status](https://github.com/svilupp/browser-pilot/workflows/CI/badge.svg)](https://github.com/svilupp/browser-pilot/actions)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.0-blue?style=flat&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![License](https://img.shields.io/npm/l/browser-pilot.svg)](https://github.com/svilupp/browser-pilot/blob/main/LICENSE)
+
 Lightweight CDP-based browser automation for AI agents. Zero dependencies, works in Node.js, Bun, and Cloudflare Workers.
 
 ```typescript
@@ -201,6 +207,69 @@ const result = await page.evaluate(() => document.title)
 ```typescript
 await page.setInputFiles(selector, [{ name: 'file.pdf', mimeType: 'application/pdf', buffer: data }])
 const download = await page.waitForDownload(() => page.click('#download-btn'))
+```
+
+### Emulation
+
+```typescript
+import { devices } from 'browser-pilot';
+
+await page.emulate(devices['iPhone 14']);     // Full device emulation
+await page.setViewport({ width: 1280, height: 720, deviceScaleFactor: 2 });
+await page.setUserAgent('Custom UA');
+await page.setGeolocation({ latitude: 37.7749, longitude: -122.4194 });
+await page.setTimezone('America/New_York');
+await page.setLocale('fr-FR');
+```
+
+Devices: `iPhone 14`, `iPhone 14 Pro Max`, `Pixel 7`, `iPad Pro 11`, `Desktop Chrome`, `Desktop Firefox`
+
+### Request Interception
+
+```typescript
+// Block images and fonts
+await page.blockResources(['Image', 'Font']);
+
+// Mock API responses
+await page.route('**/api/users', { status: 200, body: { users: [] } });
+
+// Full control
+await page.intercept('*api*', async (request, actions) => {
+  if (request.url.includes('blocked')) await actions.fail();
+  else await actions.continue({ headers: { ...request.headers, 'X-Custom': 'value' } });
+});
+```
+
+### Cookies & Storage
+
+```typescript
+// Cookies
+const cookies = await page.cookies();
+await page.setCookie({ name: 'session', value: 'abc', domain: '.example.com' });
+await page.clearCookies();
+
+// localStorage / sessionStorage
+await page.setLocalStorage('key', 'value');
+const value = await page.getLocalStorage('key');
+await page.clearLocalStorage();
+```
+
+### Console & Dialogs
+
+```typescript
+// Capture console messages
+await page.onConsole((msg) => console.log(`[${msg.type}] ${msg.text}`));
+
+// Handle dialogs (alert, confirm, prompt)
+await page.onDialog(async (dialog) => {
+  if (dialog.type === 'confirm') await dialog.accept();
+  else await dialog.dismiss();
+});
+
+// Collect messages during an action
+const { result, messages } = await page.collectConsole(async () => {
+  return await page.click('#button');
+});
 ```
 
 ### Options
