@@ -188,16 +188,32 @@ export class BatchExecutor {
       }
 
       case 'scroll': {
+        // Scroll to absolute coordinates
         if (step.x !== undefined || step.y !== undefined) {
           await this.page.scroll('body', { x: step.x, y: step.y, timeout, optional });
           return {};
         }
-        if (!step.selector) throw new Error('scroll requires selector or coordinates');
+        // Page-level scroll with direction (no selector needed)
+        if (!step.selector && (step.direction || step.amount !== undefined)) {
+          const amount = step.amount ?? 500;
+          const direction = step.direction ?? 'down';
+          const deltaY = direction === 'down' ? amount : direction === 'up' ? -amount : 0;
+          const deltaX = direction === 'right' ? amount : direction === 'left' ? -amount : 0;
+          await this.page.evaluate(`window.scrollBy(${deltaX}, ${deltaY})`);
+          return {};
+        }
+        if (!step.selector) throw new Error('scroll requires selector, coordinates, or direction');
         await this.page.scroll(step.selector, { timeout, optional });
         return { selectorUsed: this.getUsedSelector(step.selector) };
       }
 
       case 'wait': {
+        // Simple timeout wait (no selector, no waitFor)
+        if (!step.selector && !step.waitFor) {
+          const delay = step.timeout ?? 1000;
+          await new Promise((resolve) => setTimeout(resolve, delay));
+          return {};
+        }
         if (step.waitFor === 'navigation') {
           await this.page.waitForNavigation({ timeout, optional });
           return {};
@@ -207,7 +223,7 @@ export class BatchExecutor {
           return {};
         }
         if (!step.selector)
-          throw new Error('wait requires selector (or waitFor: navigation/networkIdle)');
+          throw new Error('wait requires selector (or waitFor: navigation/networkIdle, or timeout for simple delay)');
         await this.page.waitFor(step.selector, {
           timeout,
           optional,
@@ -237,8 +253,19 @@ export class BatchExecutor {
         return { value: result };
       }
 
+      case 'switchFrame': {
+        if (!step.selector) throw new Error('switchFrame requires selector');
+        await this.page.switchToFrame(step.selector, { timeout, optional });
+        return { selectorUsed: this.getUsedSelector(step.selector) };
+      }
+
+      case 'switchToMain': {
+        await this.page.switchToMain();
+        return {};
+      }
+
       default:
-        throw new Error(`Unknown action: ${(step as Step).action}`);
+        throw new Error(`Unknown action: ${(step as Step).action}. Run 'bp actions' for available actions.`);
     }
   }
 

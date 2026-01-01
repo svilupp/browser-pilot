@@ -23,7 +23,7 @@ describe('CLI Basic Functionality', () => {
     const result = await runCLI(['--help']);
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('browser-pilot');
+    expect(result.stdout).toContain('bp - Browser automation CLI');
   });
 
   test('should show version or usage', async () => {

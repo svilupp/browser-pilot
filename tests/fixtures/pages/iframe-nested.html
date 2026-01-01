@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Nested Iframe Container</title>
+  <style>
+    body { font-family: system-ui, sans-serif; padding: 15px; background: #e3f2fd; }
+    iframe { border: 2px solid #1976d2; border-radius: 4px; }
+    button { padding: 8px 16px; background: #1976d2; color: white; border: none; border-radius: 4px; cursor: pointer; }
+    .result { margin-top: 10px; padding: 8px; background: #bbdefb; border-radius: 4px; }
+    h2 { margin-top: 0; color: #1565c0; }
+  </style>
+</head>
+<body>
+  <h2>Nested Iframe Container (Level 1)</h2>
+
+  <button id="level1-btn" data-testid="level1-button">Level 1 Button</button>
+  <div id="level1-result" class="result" style="display: none;"></div>
+
+  <h3>Inner Iframe (Level 2)</h3>
+  <iframe
+    id="inner-frame"
+    data-testid="inner-frame"
+    src="iframe-child.html"
+    width="350"
+    height="280"
+    title="Inner Frame">
+  </iframe>
+
+  <script>
+    document.getElementById('level1-btn').addEventListener('click', () => {
+      document.getElementById('level1-result').style.display = 'block';
+      document.getElementById('level1-result').textContent = 'Level 1 button clicked!';
+
+      window.parent.postMessage({
+        type: 'iframe-action',
+        message: 'Button clicked in nested iframe (level 1)'
+      }, '*');
+    });
+  </script>
+</body>
+</html>

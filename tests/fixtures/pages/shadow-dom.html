@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Shadow DOM Test Page</title>
+  <style>
+    body { font-family: system-ui, sans-serif; padding: 20px; }
+    .result { margin-top: 10px; padding: 10px; background: #e8f5e9; border-radius: 4px; }
+    .section { margin-bottom: 20px; padding: 15px; border: 1px solid #ddd; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <h1>Shadow DOM Test Page</h1>
+
+  <!-- Level 1: Simple shadow DOM -->
+  <div class="section">
+    <h2>Level 1: Simple Shadow DOM</h2>
+    <simple-button></simple-button>
+    <div id="simple-result" class="result" style="display: none;"></div>
+  </div>
+
+  <!-- Level 2: Nested shadow DOM (2 levels deep) -->
+  <div class="section">
+    <h2>Level 2: Nested Shadow DOM</h2>
+    <outer-component></outer-component>
+    <div id="nested-result" class="result" style="display: none;"></div>
+  </div>
+
+  <!-- Level 3: Triple nested shadow DOM -->
+  <div class="section">
+    <h2>Level 3: Triple Nested Shadow DOM</h2>
+    <triple-outer></triple-outer>
+    <div id="triple-result" class="result" style="display: none;"></div>
+  </div>
+
+  <!-- Shadow DOM with form elements -->
+  <div class="section">
+    <h2>Shadow DOM Form</h2>
+    <shadow-form></shadow-form>
+    <div id="form-result" class="result" style="display: none;"></div>
+  </div>
+
+  <!-- Mixed light and shadow DOM -->
+  <div class="section">
+    <h2>Mixed Light + Shadow DOM</h2>
+    <div class="light-container">
+      <mixed-component></mixed-component>
+    </div>
+    <div id="mixed-result" class="result" style="display: none;"></div>
+  </div>
+
+  <script>
+    // Simple button component (1 level)
+    class SimpleButton extends HTMLElement {
+      constructor() {
+        super();
+        const shadow = this.attachShadow({ mode: 'open' });
+        shadow.innerHTML = `
+          <style>
+            button { padding: 10px 20px; background: #2196f3; color: white; border: none; border-radius: 4px; cursor: pointer; }
+            button:hover { background: #1976d2; }
+          </style>
+          <button data-testid="shadow-button">Click me (Shadow)</button>
+        `;
+        shadow.querySelector('button').addEventListener('click', () => {
+          document.getElementById('simple-result').style.display = 'block';
+          document.getElementById('simple-result').textContent = 'Simple shadow button clicked!';
+        });
+      }
+    }
+    customElements.define('simple-button', SimpleButton);
+
+    // Inner component for nesting
+    class InnerButton extends HTMLElement {
+      constructor() {
+        super();
+        const shadow = this.attachShadow({ mode: 'open' });
+        shadow.innerHTML = `
+          <style>
+            button { padding: 8px 16px; background: #4caf50; color: white; border: none; border-radius: 4px; cursor: pointer; }
+          </style>
+          <button data-testid="nested-button">Nested Button (L2)</button>
+        `;
+        shadow.querySelector('button').addEventListener('click', () => {
+          document.getElementById('nested-result').style.display = 'block';
+          document.getElementById('nested-result').textContent = 'Nested shadow button clicked!';
+        });
+      }
+    }
+    customElements.define('inner-button', InnerButton);
+
+    // Outer component containing inner (2 levels)
+    class OuterComponent extends HTMLElement {
+      constructor() {
+        super();
+        const shadow = this.attachShadow({ mode: 'open' });
+        shadow.innerHTML = `
+          <div style="padding: 10px; border: 1px dashed #ccc;">
+            <p>Outer shadow container</p>
+            <inner-button></inner-button>
+          </div>
+        `;
+      }
+    }
+    customElements.define('outer-component', OuterComponent);
+
+    // Deep inner for triple nesting
+    class DeepInner extends HTMLElement {
+      constructor() {
+        super();
+        const shadow = this.attachShadow({ mode: 'open' });
+        shadow.innerHTML = `
+          <button data-testid="deep-button" style="padding: 8px 16px; background: #ff9800; color: white; border: none; border-radius: 4px;">
+            Deep Button (L3)
+          </button>
+        `;
+        shadow.querySelector('button').addEventListener('click', () => {
+          document.getElementById('triple-result').style.display = 'block';
+          document.getElementById('triple-result').textContent = 'Triple nested button clicked!';
+        });
+      }
+    }
+    customElements.define('deep-inner', DeepInner);
+
+    // Middle layer for triple nesting
+    class TripleMiddle extends HTMLElement {
+      constructor() {
+        super();
+        const shadow = this.attachShadow({ mode: 'open' });
+        shadow.innerHTML = `
+          <div style="padding: 8px; border: 1px dotted #999;">
+            <deep-inner></deep-inner>
+          </div>
+        `;
+      }
+    }
+    customElements.define('triple-middle', TripleMiddle);
+
+    // Outer layer for triple nesting (3 levels)
+    class TripleOuter extends HTMLElement {
+      constructor() {
+        super();
+        const shadow = this.attachShadow({ mode: 'open' });
+        shadow.innerHTML = `
+          <div style="padding: 10px; border: 1px dashed #666;">
+            <p>Triple nested container</p>
+            <triple-middle></triple-middle>
+          </div>
+        `;
+      }
+    }
+    customElements.define('triple-outer', TripleOuter);
+
+    // Shadow form component
+    class ShadowForm extends HTMLElement {
+      constructor() {
+        super();
+        const shadow = this.attachShadow({ mode: 'open' });
+        shadow.innerHTML = `
+          <style>
+            form { display: flex; flex-direction: column; gap: 10px; max-width: 300px; }
+            input, select { padding: 8px; border: 1px solid #ccc; border-radius: 4px; }
+            button { padding: 10px; background: #9c27b0; color: white; border: none; border-radius: 4px; cursor: pointer; }
+            label { font-weight: bold; }
+          </style>
+          <form>
+            <label for="shadow-input">Name:</label>
+            <input type="text" id="shadow-input" data-testid="shadow-input" placeholder="Enter name">
+
+            <label for="shadow-email">Email:</label>
+            <input type="email" id="shadow-email" data-testid="shadow-email" placeholder="Enter email">
+
+            <label>
+              <input type="checkbox" data-testid="shadow-checkbox"> Subscribe to newsletter
+            </label>
+
+            <button type="submit" data-testid="shadow-submit">Submit</button>
+          </form>
+        `;
+        shadow.querySelector('form').addEventListener('submit', (e) => {
+          e.preventDefault();
+          const name = shadow.querySelector('#shadow-input').value;
+          const email = shadow.querySelector('#shadow-email').value;
+          const subscribed = shadow.querySelector('[data-testid="shadow-checkbox"]').checked;
+          document.getElementById('form-result').style.display = 'block';
+          document.getElementById('form-result').textContent = `Form submitted: ${name}, ${email}, subscribed: ${subscribed}`;
+        });
+      }
+    }
+    customElements.define('shadow-form', ShadowForm);
+
+    // Mixed component with slot
+    class MixedComponent extends HTMLElement {
+      constructor() {
+        super();
+        const shadow = this.attachShadow({ mode: 'open' });
+        shadow.innerHTML = `
+          <style>
+            .wrapper { padding: 10px; border: 2px solid #607d8b; border-radius: 4px; }
+            button { padding: 8px 16px; background: #607d8b; color: white; border: none; border-radius: 4px; cursor: pointer; }
+          </style>
+          <div class="wrapper">
+            <p>Mixed shadow content</p>
+            <button data-testid="mixed-shadow-btn">Shadow Button</button>
+            <slot></slot>
+          </div>
+        `;
+        shadow.querySelector('button').addEventListener('click', () => {
+          document.getElementById('mixed-result').style.display = 'block';
+          document.getElementById('mixed-result').textContent = 'Mixed shadow button clicked!';
+        });
+      }
+    }
+    customElements.define('mixed-component', MixedComponent);
+  </script>
+</body>
+</html>

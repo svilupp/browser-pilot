@@ -6,10 +6,41 @@ import { addBatchToPage, connect, type Step } from '../../index.ts';
 import { output } from '../index.ts';
 import { getDefaultSession, loadSession, type SessionData, updateSession } from '../session.ts';
 
+interface ExecOptions {
+  session?: string;
+  output?: 'json' | 'pretty';
+  trace?: boolean;
+  dialog?: 'accept' | 'dismiss';
+}
+
+function parseExecArgs(args: string[]): { actionsJson: string | undefined; options: ExecOptions } {
+  const options: ExecOptions = {};
+  let actionsJson: string | undefined;
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]!;
+    if (arg === '--dialog') {
+      const value = args[++i];
+      if (value === 'accept' || value === 'dismiss') {
+        options.dialog = value;
+      } else {
+        throw new Error('--dialog must be "accept" or "dismiss"');
+      }
+    } else if (!actionsJson && !arg.startsWith('-')) {
+      actionsJson = arg;
+    }
+  }
+
+  return { actionsJson, options };
+}
+
 export async function execCommand(
   args: string[],
   globalOptions: { session?: string; output?: 'json' | 'pretty'; trace?: boolean }
 ): Promise<void> {
+  // Parse exec-specific options
+  const { actionsJson, options: execOptions } = parseExecArgs(args);
+
   // Get session
   let session: SessionData | null;
   if (globalOptions.session) {
@@ -22,16 +53,15 @@ export async function execCommand(
   }
 
   // Parse actions from arguments
-  const actionsJson = args[0];
   if (!actionsJson) {
-    throw new Error('No actions provided. Usage: bp exec \'{"action":"goto","url":"..."}\'');
+    throw new Error('No actions provided. Usage: bp exec \'{"action":"goto","url":"..."}\'\n\nRun \'bp actions\' for complete action reference.');
   }
 
   let actions: Step | Step[];
   try {
     actions = JSON.parse(actionsJson);
   } catch {
-    throw new Error('Invalid JSON. Actions must be valid JSON.');
+    throw new Error('Invalid JSON. Actions must be valid JSON.\n\nRun \'bp actions\' for complete action reference.');
   }
 
   // Connect to browser
@@ -43,6 +73,17 @@ export async function execCommand(
 
   try {
     const page = addBatchToPage(await browser.page());
+
+    // Set up dialog handling if --dialog flag is provided
+    if (execOptions.dialog) {
+      await page.onDialog(async (dialog) => {
+        if (execOptions.dialog === 'accept') {
+          await dialog.accept();
+        } else {
+          await dialog.dismiss();
+        }
+      });
+    }
 
     // Execute actions
     const steps = Array.isArray(actions) ? actions : [actions];

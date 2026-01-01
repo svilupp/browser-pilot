@@ -3,6 +3,7 @@
  */
 
 export {
+  DEEP_QUERY_SCRIPT,
   type NavigationOptions,
   type WaitOptions,
   type WaitResult,

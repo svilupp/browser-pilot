@@ -21,12 +21,51 @@ export interface WaitResult {
 }
 
 /**
+ * Deep query script that pierces shadow DOM boundaries
+ * Searches the document and all shadow roots recursively
+ * Exported for use in page.ts and other modules
+ */
+export const DEEP_QUERY_SCRIPT = `
+function deepQuery(selector, root = document) {
+  // Try direct query first (fastest path)
+  let el = root.querySelector(selector);
+  if (el) return el;
+
+  // Search in shadow roots recursively
+  const searchShadows = (node) => {
+    // Check if this node has a shadow root
+    if (node.shadowRoot) {
+      el = node.shadowRoot.querySelector(selector);
+      if (el) return el;
+      // Search children of shadow root
+      for (const child of node.shadowRoot.querySelectorAll('*')) {
+        el = searchShadows(child);
+        if (el) return el;
+      }
+    }
+    // Search children that might have shadow roots
+    for (const child of node.querySelectorAll('*')) {
+      if (child.shadowRoot) {
+        el = searchShadows(child);
+        if (el) return el;
+      }
+    }
+    return null;
+  };
+
+  return searchShadows(root);
+}
+`;
+
+/**
  * Check if an element is visible in the viewport
+ * Pierces shadow DOM boundaries automatically
  */
 async function isElementVisible(cdp: CDPClient, selector: string): Promise<boolean> {
   const result = await cdp.send<{ result: { value: boolean } }>('Runtime.evaluate', {
     expression: `(() => {
-      const el = document.querySelector(${JSON.stringify(selector)});
+      ${DEEP_QUERY_SCRIPT}
+      const el = deepQuery(${JSON.stringify(selector)});
       if (!el) return false;
       const style = getComputedStyle(el);
       if (style.display === 'none') return false;
@@ -43,10 +82,14 @@ async function isElementVisible(cdp: CDPClient, selector: string): Promise<boole
 
 /**
  * Check if an element exists in the DOM
+ * Pierces shadow DOM boundaries automatically
  */
 async function isElementAttached(cdp: CDPClient, selector: string): Promise<boolean> {
   const result = await cdp.send<{ result: { value: boolean } }>('Runtime.evaluate', {
-    expression: `document.querySelector(${JSON.stringify(selector)}) !== null`,
+    expression: `(() => {
+      ${DEEP_QUERY_SCRIPT}
+      return deepQuery(${JSON.stringify(selector)}) !== null;
+    })()`,
     returnByValue: true,
   });
 

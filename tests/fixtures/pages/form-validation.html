@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Form Validation Test Page</title>
+  <style>
+    body { font-family: system-ui, sans-serif; padding: 20px; max-width: 500px; margin: 0 auto; }
+    form { display: flex; flex-direction: column; gap: 15px; }
+    .field { display: flex; flex-direction: column; gap: 5px; }
+    label { font-weight: bold; }
+    input { padding: 10px; border: 1px solid #ccc; border-radius: 4px; font-size: 16px; }
+    input.error { border-color: #f44336; background: #ffebee; }
+    input.valid { border-color: #4caf50; background: #e8f5e9; }
+    .error-message { color: #f44336; font-size: 14px; }
+    .error-message[role="alert"] { padding: 8px; background: #ffebee; border-radius: 4px; }
+    button { padding: 12px; background: #2196f3; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; }
+    button:hover { background: #1976d2; }
+    button:disabled { background: #ccc; cursor: not-allowed; }
+    .success-message { padding: 15px; background: #e8f5e9; border: 1px solid #4caf50; border-radius: 4px; color: #2e7d32; }
+    .server-error { padding: 15px; background: #ffebee; border: 1px solid #f44336; border-radius: 4px; color: #c62828; }
+    h1 { color: #333; }
+  </style>
+</head>
+<body>
+  <h1>Form Validation Test Page</h1>
+
+  <form id="validation-form" novalidate>
+    <!-- Email with blur validation -->
+    <div class="field">
+      <label for="email">Email</label>
+      <input
+        type="email"
+        id="email"
+        name="email"
+        data-testid="email-input"
+        placeholder="Enter email"
+        required
+      >
+      <div id="email-error" class="error-message" style="display: none;"></div>
+    </div>
+
+    <!-- Username with async validation -->
+    <div class="field">
+      <label for="username">Username</label>
+      <input
+        type="text"
+        id="username"
+        name="username"
+        data-testid="username-input"
+        placeholder="Enter username"
+        required
+        minlength="3"
+      >
+      <div id="username-error" class="error-message" style="display: none;"></div>
+    </div>
+
+    <!-- Password with strength check -->
+    <div class="field">
+      <label for="password">Password</label>
+      <input
+        type="password"
+        id="password"
+        name="password"
+        data-testid="password-input"
+        placeholder="Enter password"
+        required
+        minlength="8"
+      >
+      <div id="password-error" class="error-message" style="display: none;"></div>
+    </div>
+
+    <!-- Confirm password -->
+    <div class="field">
+      <label for="confirm-password">Confirm Password</label>
+      <input
+        type="password"
+        id="confirm-password"
+        name="confirmPassword"
+        data-testid="confirm-password-input"
+        placeholder="Confirm password"
+        required
+      >
+      <div id="confirm-password-error" class="error-message" style="display: none;"></div>
+    </div>
+
+    <button type="submit" data-testid="submit-btn">Submit</button>
+  </form>
+
+  <div id="result" style="margin-top: 20px; display: none;"></div>
+
+  <script>
+    const form = document.getElementById('validation-form');
+    const emailInput = document.getElementById('email');
+    const usernameInput = document.getElementById('username');
+    const passwordInput = document.getElementById('password');
+    const confirmPasswordInput = document.getElementById('confirm-password');
+
+    // Taken emails/usernames for validation testing
+    const takenEmails = ['test@taken.com', 'admin@example.com'];
+    const takenUsernames = ['admin', 'root', 'test'];
+    const failEmails = ['fail@example.com']; // Trigger server error on submit
+
+    // Show error helper
+    function showError(inputId, message) {
+      const errorEl = document.getElementById(`${inputId}-error`);
+      const inputEl = document.getElementById(inputId);
+      errorEl.textContent = message;
+      errorEl.style.display = 'block';
+      errorEl.setAttribute('role', 'alert');
+      inputEl.classList.add('error');
+      inputEl.classList.remove('valid');
+    }
+
+    // Clear error helper
+    function clearError(inputId) {
+      const errorEl = document.getElementById(`${inputId}-error`);
+      const inputEl = document.getElementById(inputId);
+      errorEl.style.display = 'none';
+      errorEl.removeAttribute('role');
+      inputEl.classList.remove('error');
+    }
+
+    // Mark valid helper
+    function markValid(inputId) {
+      const inputEl = document.getElementById(inputId);
+      inputEl.classList.add('valid');
+      inputEl.classList.remove('error');
+    }
+
+    // Email blur validation (simulates async API check)
+    emailInput.addEventListener('blur', async () => {
+      const email = emailInput.value.trim();
+      clearError('email');
+
+      if (!email) {
+        showError('email', 'Email is required');
+        return;
+      }
+
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        showError('email', 'Please enter a valid email address');
+        return;
+      }
+
+      // Simulate async validation
+      await new Promise(r => setTimeout(r, 300));
+
+      if (takenEmails.includes(email)) {
+        showError('email', 'This email is already taken');
+        return;
+      }
+
+      markValid('email');
+    });
+
+    // Username blur validation
+    usernameInput.addEventListener('blur', async () => {
+      const username = usernameInput.value.trim();
+      clearError('username');
+
+      if (!username) {
+        showError('username', 'Username is required');
+        return;
+      }
+
+      if (username.length < 3) {
+        showError('username', 'Username must be at least 3 characters');
+        return;
+      }
+
+      // Simulate async validation
+      await new Promise(r => setTimeout(r, 300));
+
+      if (takenUsernames.includes(username.toLowerCase())) {
+        showError('username', 'This username is already taken');
+        return;
+      }
+
+      markValid('username');
+    });
+
+    // Password blur validation
+    passwordInput.addEventListener('blur', () => {
+      const password = passwordInput.value;
+      clearError('password');
+
+      if (!password) {
+        showError('password', 'Password is required');
+        return;
+      }
+
+      if (password.length < 8) {
+        showError('password', 'Password must be at least 8 characters');
+        return;
+      }
+
+      markValid('password');
+
+      // Re-validate confirm if already filled
+      if (confirmPasswordInput.value) {
+        confirmPasswordInput.dispatchEvent(new Event('blur'));
+      }
+    });
+
+    // Confirm password validation
+    confirmPasswordInput.addEventListener('blur', () => {
+      const password = passwordInput.value;
+      const confirmPassword = confirmPasswordInput.value;
+      clearError('confirm-password');
+
+      if (!confirmPassword) {
+        showError('confirm-password', 'Please confirm your password');
+        return;
+      }
+
+      if (password !== confirmPassword) {
+        showError('confirm-password', 'Passwords do not match');
+        return;
+      }
+
+      markValid('confirm-password');
+    });
+
+    // Form submit with server-side validation simulation
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+
+      const resultEl = document.getElementById('result');
+      const email = emailInput.value.trim();
+
+      // Simulate server processing
+      await new Promise(r => setTimeout(r, 500));
+
+      // Simulate server error for specific emails
+      if (failEmails.includes(email)) {
+        resultEl.style.display = 'block';
+        resultEl.className = 'server-error';
+        resultEl.innerHTML = '<strong>Server Error:</strong> Unable to create account. Please try again later.';
+        resultEl.setAttribute('role', 'alert');
+        return;
+      }
+
+      // Check for validation errors
+      const hasErrors = document.querySelectorAll('.error').length > 0;
+      if (hasErrors) {
+        resultEl.style.display = 'block';
+        resultEl.className = 'server-error';
+        resultEl.innerHTML = '<strong>Validation Error:</strong> Please fix the errors above.';
+        resultEl.setAttribute('role', 'alert');
+        return;
+      }
+
+      // Success
+      resultEl.style.display = 'block';
+      resultEl.className = 'success-message';
+      resultEl.innerHTML = '<strong>Success!</strong> Your account has been created.';
+      resultEl.setAttribute('role', 'status');
+    });
+  </script>
+</body>
+</html>

@@ -18,7 +18,9 @@ export type ActionType =
   | 'wait'
   | 'snapshot'
   | 'screenshot'
-  | 'evaluate';
+  | 'evaluate'
+  | 'switchFrame'
+  | 'switchToMain';
 
 export interface Step {
   /** Action type */
@@ -69,6 +71,12 @@ export interface Step {
   /** Scroll coordinates */
   x?: number;
   y?: number;
+
+  /** Scroll direction for page-level scroll */
+  direction?: 'up' | 'down' | 'left' | 'right';
+
+  /** Scroll amount in pixels */
+  amount?: number;
 
   /** Screenshot options */
   format?: 'png' | 'jpeg' | 'webp';

@@ -1,20 +1,25 @@
 #!/usr/bin/env bun
 /**
- * browser-pilot CLI
+ * browser-pilot CLI - Browser automation for AI agents
  *
- * Usage:
- *   browser-pilot <command> [options]
+ * Key workflow:
+ *   1. bp snapshot --format text    → Get page with element refs [ref=e4]
+ *   2. bp exec '{"selector":"ref:e4",...}'  → Use refs for reliable targeting
  *
  * Commands:
  *   connect     Create browser session
- *   exec        Execute actions
- *   snapshot    Get page snapshot
+ *   exec        Execute actions (supports --dialog accept|dismiss)
+ *   snapshot    Get page snapshot with element refs
  *   text        Extract text content
  *   screenshot  Take screenshot
  *   close       Close session
  *   list        List sessions
+ *   actions     Complete action reference
+ *
+ * Run 'bp actions' for full action DSL documentation.
  */
 
+import { actionsCommand } from './commands/actions.ts';
 import { closeCommand } from './commands/close.ts';
 import { connectCommand } from './commands/connect.ts';
 import { execCommand } from './commands/exec.ts';
@@ -24,7 +29,7 @@ import { snapshotCommand } from './commands/snapshot.ts';
 import { textCommand } from './commands/text.ts';
 
 const HELP = `
-bp - browser-pilot CLI
+bp - Browser automation CLI for AI agents
 
 Usage:
   bp <command> [options]
@@ -32,11 +37,12 @@ Usage:
 Commands:
   connect     Create or resume browser session
   exec        Execute actions on current session
-  snapshot    Get page accessibility snapshot
+  snapshot    Get page accessibility snapshot (includes element refs)
   text        Extract text content from page
   screenshot  Take screenshot
   close       Close session
   list        List all sessions
+  actions     Show all available actions with examples
 
 Global Options:
   -s, --session <id>    Session ID to use
@@ -44,19 +50,40 @@ Global Options:
   --trace               Enable execution tracing
   -h, --help            Show this help message
 
+Exec Options:
+  --dialog <mode>       Auto-handle dialogs: accept | dismiss
+
+Ref Selectors (Recommended for AI Agents):
+  1. Take snapshot:     bp snapshot --format text
+     Output shows:      button "Submit" [ref=e4], textbox "Email" [ref=e5]
+  2. Use ref directly:  bp exec '{"action":"click","selector":"ref:e4"}'
+
+  Refs are stable until navigation. Combine with CSS fallbacks:
+    {"selector": ["ref:e4", "#submit", "button[type=submit]"]}
+
 Examples:
-  # Connect to a local browser
-  bp connect --provider generic --url ws://localhost:9222/devtools/browser/xxx
+  # Connect to browser
+  bp connect --provider generic --name dev
 
-  # Execute actions
+  # Navigate and get snapshot with refs
   bp exec '{"action":"goto","url":"https://example.com"}'
-  bp exec '[{"action":"fill","selector":"#email","value":"test@example.com"}]'
-
-  # Get snapshot
   bp snapshot --format text
 
-  # Take screenshot
-  bp screenshot --output screenshot.png
+  # Use ref from snapshot (most reliable)
+  bp exec '{"action":"click","selector":"ref:e4"}'
+  bp exec '{"action":"fill","selector":"ref:e5","value":"test@example.com"}'
+
+  # Handle native dialogs (alert/confirm/prompt)
+  bp exec --dialog accept '{"action":"click","selector":"#delete-btn"}'
+
+  # Batch multiple actions
+  bp exec '[
+    {"action":"fill","selector":"ref:e5","value":"user@example.com"},
+    {"action":"click","selector":"ref:e4"},
+    {"action":"snapshot"}
+  ]'
+
+Run 'bp actions' for complete action reference.
 `;
 
 interface GlobalOptions {
@@ -165,6 +192,10 @@ async function main(): Promise<void> {
 
       case 'list':
         await listCommand(remaining, options);
+        break;
+
+      case 'actions':
+        await actionsCommand();
         break;
 
       case 'help':

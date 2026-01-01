@@ -152,6 +152,26 @@ console.log(snapshot.text);
 //   - textbox [ref=e4] placeholder="Email"
 ```
 
+### Ref-Based Selectors
+
+After taking a snapshot, use element refs directly as selectors:
+
+```typescript
+const snapshot = await page.snapshot();
+// Output shows: button "Submit" [ref=e4]
+
+// Click using the ref - no fragile CSS needed
+await page.click('ref:e4');
+
+// Fill input by ref
+await page.fill('ref:e23', 'hello@example.com');
+
+// Combine ref with CSS fallbacks
+await page.click(['ref:e4', '#submit', 'button[type=submit]']);
+```
+
+Refs are stable until page navigation. Always take a fresh snapshot after navigating.
+
 ## Page API
 
 ### Navigation
@@ -272,6 +292,27 @@ const { result, messages } = await page.collectConsole(async () => {
 });
 ```
 
+**Important:** Native browser dialogs (`alert()`, `confirm()`, `prompt()`) block all CDP commands until handled. Always set up a dialog handler before triggering actions that may show dialogs.
+
+### Iframes
+
+Switch context to interact with iframe content:
+
+```typescript
+// Switch to iframe
+await page.switchToFrame('iframe#payment');
+
+// Now actions target the iframe
+await page.fill('#card-number', '4242424242424242');
+await page.fill('#expiry', '12/25');
+
+// Switch back to main document
+await page.switchToMain();
+await page.click('#submit-order');
+```
+
+Note: Cross-origin iframes cannot be accessed due to browser security.
+
 ### Options
 
 ```typescript
@@ -297,30 +338,51 @@ bp exec -s my-session '[
   {"action":"submit","selector":"#search-form"}
 ]'
 
-# Get page state
+# Get page state (note the refs in output)
 bp snapshot -s my-session --format text
-bp snapshot -s my-session --format interactive
+# Output: button "Submit" [ref=e4], textbox "Email" [ref=e5], ...
+
+# Use refs from snapshot for reliable targeting
+bp exec -s my-session '{"action":"click","selector":"ref:e4"}'
+bp exec -s my-session '{"action":"fill","selector":"ref:e5","value":"test@example.com"}'
+
+# Handle native dialogs (alert/confirm/prompt)
+bp exec --dialog accept '{"action":"click","selector":"#delete-btn"}'
+
+# Other commands
 bp text -s my-session --selector ".main-content"
 bp screenshot -s my-session --output page.png
-
-# Session management
 bp list                    # list all sessions
 bp close -s my-session     # close session
+bp actions                 # show complete action reference
 ```
 
 ### CLI for AI Agents
 
-The CLI is designed for AI agent tool calls:
+The CLI is designed for AI agent tool calls. The recommended workflow:
+
+1. **Take snapshot** to see the page structure with refs
+2. **Use refs** (`ref:e4`) for reliable element targeting
+3. **Batch actions** to reduce round trips
 
 ```bash
-# Single tool call to execute a sequence
-bp exec -s session '[
-  {"action":"goto","url":"https://shop.example.com"},
-  {"action":"click","selector":["#search","[aria-label=Search]"]},
-  {"action":"fill","selector":"input[type=search]","value":"laptop"},
-  {"action":"submit","selector":"form"},
+# Step 1: Get page state with refs
+bp snapshot --format text
+# Output shows: button "Add to Cart" [ref=e12], textbox "Search" [ref=e5]
+
+# Step 2: Use refs to interact (stable, no CSS guessing)
+bp exec '[
+  {"action":"fill","selector":"ref:e5","value":"laptop"},
+  {"action":"click","selector":"ref:e12"},
   {"action":"snapshot"}
 ]' --output json
+```
+
+Multi-selector fallbacks for robustness:
+```bash
+bp exec '[
+  {"action":"click","selector":["ref:e4","#submit","button[type=submit]"]}
+]'
 ```
 
 Output:
@@ -328,15 +390,15 @@ Output:
 {
   "success": true,
   "steps": [
-    {"action": "goto", "success": true, "durationMs": 1200},
-    {"action": "click", "success": true, "durationMs": 50, "selectorUsed": "#search"},
     {"action": "fill", "success": true, "durationMs": 30},
-    {"action": "submit", "success": true, "durationMs": 800},
+    {"action": "click", "success": true, "durationMs": 50, "selectorUsed": "ref:e12"},
     {"action": "snapshot", "success": true, "durationMs": 100, "result": "..."}
   ],
-  "totalDurationMs": 2180
+  "totalDurationMs": 180
 }
 ```
+
+Run `bp actions` for complete action reference.
 
 ## Examples
 

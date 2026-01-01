@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Native Dialogs Test Page</title>
+  <style>
+    body { font-family: system-ui, sans-serif; padding: 20px; }
+    .section { margin-bottom: 20px; padding: 15px; border: 1px solid #ddd; border-radius: 4px; }
+    button { padding: 10px 20px; margin: 5px; border: none; border-radius: 4px; cursor: pointer; color: white; }
+    .alert-btn { background: #f44336; }
+    .confirm-btn { background: #ff9800; }
+    .prompt-btn { background: #2196f3; }
+    .result { margin-top: 10px; padding: 10px; background: #e8f5e9; border-radius: 4px; }
+    h1 { color: #333; }
+    h2 { color: #666; margin-top: 0; }
+  </style>
+</head>
+<body>
+  <h1>Native Dialogs Test Page</h1>
+  <p>This page tests native browser dialogs: alert(), confirm(), prompt()</p>
+
+  <!-- Alert Dialog -->
+  <div class="section">
+    <h2>Alert Dialog</h2>
+    <button id="trigger-alert" data-testid="trigger-alert" class="alert-btn">
+      Trigger Alert
+    </button>
+    <div id="alert-result" class="result" style="display: none;"></div>
+  </div>
+
+  <!-- Confirm Dialog -->
+  <div class="section">
+    <h2>Confirm Dialog</h2>
+    <button id="trigger-confirm" data-testid="trigger-confirm" class="confirm-btn">
+      Trigger Confirm
+    </button>
+    <div id="confirm-result" class="result" style="display: none;"></div>
+  </div>
+
+  <!-- Prompt Dialog -->
+  <div class="section">
+    <h2>Prompt Dialog</h2>
+    <button id="trigger-prompt" data-testid="trigger-prompt" class="prompt-btn">
+      Trigger Prompt
+    </button>
+    <div id="prompt-result" class="result" style="display: none;"></div>
+  </div>
+
+  <!-- Delete with Confirm -->
+  <div class="section">
+    <h2>Delete Action (with confirmation)</h2>
+    <div id="item-to-delete" style="padding: 10px; background: #ffebee; border-radius: 4px; margin-bottom: 10px;">
+      Item to be deleted
+    </div>
+    <button id="delete-btn" data-testid="delete-btn" class="alert-btn">
+      Delete Item
+    </button>
+    <div id="delete-result" class="result" style="display: none;"></div>
+  </div>
+
+  <!-- Chained Dialogs -->
+  <div class="section">
+    <h2>Chained Dialogs</h2>
+    <button id="trigger-chain" data-testid="trigger-chain" class="confirm-btn">
+      Start Dialog Chain
+    </button>
+    <div id="chain-result" class="result" style="display: none;"></div>
+  </div>
+
+  <script>
+    // Alert dialog
+    document.getElementById('trigger-alert').addEventListener('click', () => {
+      alert('This is an alert message!');
+      document.getElementById('alert-result').style.display = 'block';
+      document.getElementById('alert-result').textContent = 'Alert was dismissed';
+    });
+
+    // Confirm dialog
+    document.getElementById('trigger-confirm').addEventListener('click', () => {
+      const confirmed = confirm('Do you want to proceed?');
+      document.getElementById('confirm-result').style.display = 'block';
+      document.getElementById('confirm-result').textContent = confirmed
+        ? 'User clicked OK (confirmed)'
+        : 'User clicked Cancel (dismissed)';
+    });
+
+    // Prompt dialog
+    document.getElementById('trigger-prompt').addEventListener('click', () => {
+      const result = prompt('Enter your name:', 'Default Name');
+      document.getElementById('prompt-result').style.display = 'block';
+      if (result === null) {
+        document.getElementById('prompt-result').textContent = 'Prompt was cancelled';
+      } else {
+        document.getElementById('prompt-result').textContent = `User entered: "${result}"`;
+      }
+    });
+
+    // Delete with confirm
+    document.getElementById('delete-btn').addEventListener('click', () => {
+      const confirmed = confirm('Are you sure you want to delete this item?');
+      if (confirmed) {
+        document.getElementById('item-to-delete').style.display = 'none';
+        document.getElementById('delete-result').style.display = 'block';
+        document.getElementById('delete-result').textContent = 'Item deleted successfully';
+      } else {
+        document.getElementById('delete-result').style.display = 'block';
+        document.getElementById('delete-result').textContent = 'Deletion cancelled';
+      }
+    });
+
+    // Chained dialogs
+    document.getElementById('trigger-chain').addEventListener('click', () => {
+      const step1 = confirm('Step 1: Do you want to continue?');
+      if (!step1) {
+        document.getElementById('chain-result').style.display = 'block';
+        document.getElementById('chain-result').textContent = 'Chain cancelled at step 1';
+        return;
+      }
+
+      const step2 = prompt('Step 2: Enter a value:', '');
+      if (step2 === null) {
+        document.getElementById('chain-result').style.display = 'block';
+        document.getElementById('chain-result').textContent = 'Chain cancelled at step 2';
+        return;
+      }
+
+      alert('Step 3: Process complete!');
+      document.getElementById('chain-result').style.display = 'block';
+      document.getElementById('chain-result').textContent = `Chain completed with value: "${step2}"`;
+    });
+  </script>
+</body>
+</html>

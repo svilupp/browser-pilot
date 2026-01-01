@@ -6,6 +6,7 @@ import { BatchExecutor, type BatchOptions, type BatchResult, type Step } from '.
 import type { CDPClient } from '../cdp/client.ts';
 import type { BoxModel, RemoteObject } from '../cdp/protocol.ts';
 import {
+  DEEP_QUERY_SCRIPT,
   waitForAnyElement,
   waitForNetworkIdle as waitForIdle,
   waitForNavigation as waitForNav,
@@ -65,6 +66,12 @@ export class Page {
   private errorHandlers = new Set<ErrorHandler>();
   private dialogHandler: DialogHandler | null = null;
   private consoleEnabled = false;
+  /** Map of ref (e.g., "e4") to backendNodeId for ref-based selectors */
+  private refMap: Map<string, number> = new Map();
+  /** Current frame context (null = main frame) */
+  private currentFrame: string | null = null;
+  /** Stored frame document node IDs for context switching */
+  private frameContexts: Map<string, number> = new Map();
 
   constructor(cdp: CDPClient) {
     this.cdp = cdp;
@@ -101,8 +108,9 @@ export class Page {
       throw new TimeoutError(`Navigation to ${url} timed out after ${timeout}ms`);
     }
 
-    // Refresh root node after navigation
+    // Refresh root node and clear ref map after navigation
     this.rootNodeId = null;
+    this.refMap.clear();
   }
 
   /**
@@ -138,6 +146,7 @@ export class Page {
     await navPromise;
 
     this.rootNodeId = null;
+    this.refMap.clear();
   }
 
   /**
@@ -166,6 +175,7 @@ export class Page {
 
     await navPromise;
     this.rootNodeId = null;
+    this.refMap.clear();
   }
 
   /**
@@ -194,6 +204,7 @@ export class Page {
 
     await navPromise;
     this.rootNodeId = null;
+    this.refMap.clear();
   }
 
   // ============ Core Actions ============
@@ -205,45 +216,47 @@ export class Page {
    * uses dispatchEvent to reliably trigger form submission in headless Chrome.
    */
   async click(selector: string | string[], options: ActionOptions = {}): Promise<boolean> {
-    const element = await this.findElement(selector, options);
-    if (!element) {
-      if (options.optional) return false;
-      throw new ElementNotFoundError(selector);
-    }
-
-    await this.scrollIntoView(element.nodeId);
-
-    // Check if this is a form submit button and handle accordingly
-    const submitResult = await this.cdp.send<{ result: { value?: { isSubmit?: boolean } } }>(
-      'Runtime.evaluate',
-      {
-        expression: `(() => {
-        const el = document.querySelector(${JSON.stringify(element.selector)});
-        if (!el) return { isSubmit: false };
-
-        // Check if this is a form submit button
-        const isSubmitButton = (el instanceof HTMLButtonElement && (el.type === 'submit' || (el.form && el.type !== 'button'))) ||
-                               (el instanceof HTMLInputElement && el.type === 'submit');
-
-        if (isSubmitButton && el.form) {
-          // Dispatch submit event directly - works reliably in headless Chrome
-          el.form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
-          return { isSubmit: true };
-        }
-        return { isSubmit: false };
-      })()`,
-        returnByValue: true,
+    return this.withStaleNodeRetry(async () => {
+      const element = await this.findElement(selector, options);
+      if (!element) {
+        if (options.optional) return false;
+        throw new ElementNotFoundError(selector);
       }
-    );
 
-    const isSubmit = submitResult.result.value?.isSubmit;
-    if (!isSubmit) {
-      // For non-submit elements, use CDP click only
-      // (JS click would cause double-clicking issues with toggle handlers)
-      await this.clickElement(element.nodeId);
-    }
+      await this.scrollIntoView(element.nodeId);
 
-    return true;
+      // Check if this is a form submit button and handle accordingly
+      const submitResult = await this.cdp.send<{ result: { value?: { isSubmit?: boolean } } }>(
+        'Runtime.evaluate',
+        {
+          expression: `(() => {
+          const el = document.querySelector(${JSON.stringify(element.selector)});
+          if (!el) return { isSubmit: false };
+
+          // Check if this is a form submit button
+          const isSubmitButton = (el instanceof HTMLButtonElement && (el.type === 'submit' || (el.form && el.type !== 'button'))) ||
+                                 (el instanceof HTMLInputElement && el.type === 'submit');
+
+          if (isSubmitButton && el.form) {
+            // Dispatch submit event directly - works reliably in headless Chrome
+            el.form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+            return { isSubmit: true };
+          }
+          return { isSubmit: false };
+        })()`,
+          returnByValue: true,
+        }
+      );
+
+      const isSubmit = submitResult.result.value?.isSubmit;
+      if (!isSubmit) {
+        // For non-submit elements, use CDP click only
+        // (JS click would cause double-clicking issues with toggle handlers)
+        await this.clickElement(element.nodeId);
+      }
+
+      return true;
+    });
   }
 
   /**
@@ -255,44 +268,47 @@ export class Page {
     options: FillOptions = {}
   ): Promise<boolean> {
     const { clear = true } = options;
-    const element = await this.findElement(selector, options);
 
-    if (!element) {
-      if (options.optional) return false;
-      throw new ElementNotFoundError(selector);
-    }
+    return this.withStaleNodeRetry(async () => {
+      const element = await this.findElement(selector, options);
 
-    // Focus the element
-    await this.cdp.send('DOM.focus', { nodeId: element.nodeId });
+      if (!element) {
+        if (options.optional) return false;
+        throw new ElementNotFoundError(selector);
+      }
 
-    // Clear existing content if requested
-    if (clear) {
+      // Focus the element
+      await this.cdp.send('DOM.focus', { nodeId: element.nodeId });
+
+      // Clear existing content if requested
+      if (clear) {
+        await this.cdp.send('Runtime.evaluate', {
+          expression: `(() => {
+            const el = document.querySelector(${JSON.stringify(element.selector)});
+            if (el) {
+              el.value = '';
+              el.dispatchEvent(new Event('input', { bubbles: true }));
+            }
+          })()`,
+        });
+      }
+
+      // Insert the text
+      await this.cdp.send('Input.insertText', { text: value });
+
+      // Dispatch input event
       await this.cdp.send('Runtime.evaluate', {
         expression: `(() => {
           const el = document.querySelector(${JSON.stringify(element.selector)});
           if (el) {
-            el.value = '';
             el.dispatchEvent(new Event('input', { bubbles: true }));
+            el.dispatchEvent(new Event('change', { bubbles: true }));
           }
         })()`,
       });
-    }
 
-    // Insert the text
-    await this.cdp.send('Input.insertText', { text: value });
-
-    // Dispatch input event
-    await this.cdp.send('Runtime.evaluate', {
-      expression: `(() => {
-        const el = document.querySelector(${JSON.stringify(element.selector)});
-        if (el) {
-          el.dispatchEvent(new Event('input', { bubbles: true }));
-          el.dispatchEvent(new Event('change', { bubbles: true }));
-        }
-      })()`,
+      return true;
     });
-
-    return true;
   }
 
   /**
@@ -601,29 +617,31 @@ export class Page {
    * Hover over an element
    */
   async hover(selector: string | string[], options: ActionOptions = {}): Promise<boolean> {
-    const element = await this.findElement(selector, options);
-    if (!element) {
-      if (options.optional) return false;
-      throw new ElementNotFoundError(selector);
-    }
+    return this.withStaleNodeRetry(async () => {
+      const element = await this.findElement(selector, options);
+      if (!element) {
+        if (options.optional) return false;
+        throw new ElementNotFoundError(selector);
+      }
 
-    await this.scrollIntoView(element.nodeId);
-    const box = await this.getBoxModel(element.nodeId);
-    if (!box) {
-      if (options.optional) return false;
-      throw new Error('Could not get element box model');
-    }
+      await this.scrollIntoView(element.nodeId);
+      const box = await this.getBoxModel(element.nodeId);
+      if (!box) {
+        if (options.optional) return false;
+        throw new Error('Could not get element box model');
+      }
 
-    const x = box.content[0]! + box.width / 2;
-    const y = box.content[1]! + box.height / 2;
+      const x = box.content[0]! + box.width / 2;
+      const y = box.content[1]! + box.height / 2;
 
-    await this.cdp.send('Input.dispatchMouseEvent', {
-      type: 'mouseMoved',
-      x,
-      y,
+      await this.cdp.send('Input.dispatchMouseEvent', {
+        type: 'mouseMoved',
+        x,
+        y,
+      });
+
+      return true;
     });
-
-    return true;
   }
 
   /**
@@ -652,6 +670,69 @@ export class Page {
 
     await this.scrollIntoView(element.nodeId);
     return true;
+  }
+
+  // ============ Frame Navigation ============
+
+  /**
+   * Switch context to an iframe for subsequent actions
+   * @param selector - Selector for the iframe element
+   * @param options - Optional timeout and optional flags
+   * @returns true if switch succeeded
+   */
+  async switchToFrame(selector: string | string[], options: ActionOptions = {}): Promise<boolean> {
+    const element = await this.findElement(selector, options);
+    if (!element) {
+      if (options.optional) return false;
+      throw new ElementNotFoundError(selector);
+    }
+
+    // Get the iframe's content document
+    const descResult = await this.cdp.send<{
+      node: {
+        contentDocument?: { nodeId: number; backendNodeId: number };
+        frameId?: string;
+      };
+    }>('DOM.describeNode', {
+      nodeId: element.nodeId,
+      depth: 1,
+    });
+
+    if (!descResult.node.contentDocument) {
+      if (options.optional) return false;
+      throw new Error(
+        'Cannot access iframe content. This may be a cross-origin iframe which requires different handling.'
+      );
+    }
+
+    // Store the frame context
+    const frameKey = Array.isArray(selector) ? selector[0]! : selector;
+    this.frameContexts.set(frameKey, descResult.node.contentDocument.nodeId);
+    this.currentFrame = frameKey;
+
+    // Update root node to the iframe's document
+    this.rootNodeId = descResult.node.contentDocument.nodeId;
+
+    // Clear ref map since we're in a new context
+    this.refMap.clear();
+
+    return true;
+  }
+
+  /**
+   * Switch back to the main document from an iframe
+   */
+  async switchToMain(): Promise<void> {
+    this.currentFrame = null;
+    this.rootNodeId = null; // Will be re-fetched on next query
+    this.refMap.clear();
+  }
+
+  /**
+   * Get the current frame context (null = main frame)
+   */
+  getCurrentFrame(): string | null {
+    return this.currentFrame;
   }
 
   // ============ Waiting ============
@@ -684,6 +765,7 @@ export class Page {
     }
 
     this.rootNodeId = null;
+    this.refMap.clear();
     return result.success;
   }
 
@@ -949,10 +1031,19 @@ export class Page {
     let refCounter = 0;
     const nodeRefs = new Map<string, string>();
 
+    // Clear and repopulate the ref map for ref-based selectors
+    this.refMap.clear();
+
     // Assign refs to nodes
     for (const node of nodes) {
-      nodeRefs.set(node.nodeId, `e${++refCounter}`);
+      const ref = `e${++refCounter}`;
+      nodeRefs.set(node.nodeId, ref);
+      // Store mapping from ref to backendNodeId for ref-based selectors
+      if (node.backendDOMNodeId !== undefined) {
+        this.refMap.set(ref, node.backendDOMNodeId);
+      }
     }
+
 
     // Build tree structure
     const buildNode = (nodeId: string): SnapshotNode | null => {
@@ -1643,6 +1734,7 @@ export class Page {
   async reset(): Promise<void> {
     // Reset internal state first
     this.rootNodeId = null;
+    this.refMap.clear();
 
     // Stop any pending loading
     try {
@@ -1676,7 +1768,44 @@ export class Page {
   // ============ Private Helpers ============
 
   /**
+   * Retry wrapper for operations that may encounter stale nodes
+   * Catches "Could not find node with given id" errors and retries
+   */
+  private async withStaleNodeRetry<T>(
+    fn: () => Promise<T>,
+    options: { retries?: number; delay?: number } = {}
+  ): Promise<T> {
+    const { retries = 2, delay = 50 } = options;
+    let lastError: Error | undefined;
+
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      try {
+        return await fn();
+      } catch (e) {
+        if (
+          e instanceof Error &&
+          (e.message.includes('Could not find node with given id') ||
+            e.message.includes('Node with given id does not belong to the document') ||
+            e.message.includes('No node with given id found'))
+        ) {
+          lastError = e;
+          if (attempt < retries) {
+            // Reset root node and wait before retrying
+            this.rootNodeId = null;
+            await sleep(delay);
+            continue;
+          }
+        }
+        throw e;
+      }
+    }
+
+    throw lastError ?? new Error('Stale node retry exhausted');
+  }
+
+  /**
    * Find an element using single or multiple selectors
+   * Supports ref: prefix for ref-based selectors (e.g., "ref:e4")
    */
   private async findElement(
     selectors: string | string[],
@@ -1685,7 +1814,44 @@ export class Page {
     const { timeout = DEFAULT_TIMEOUT } = options;
     const selectorList = Array.isArray(selectors) ? selectors : [selectors];
 
-    const result = await waitForAnyElement(this.cdp, selectorList, {
+    // Check for ref: prefix in selectors first (instant lookup, no waiting)
+    for (const selector of selectorList) {
+      if (selector.startsWith('ref:')) {
+        const ref = selector.slice(4); // Extract "e4" from "ref:e4"
+        const backendNodeId = this.refMap.get(ref);
+        if (!backendNodeId) {
+          continue; // Try next selector in list
+        }
+
+        // Resolve backendNodeId to nodeId by pushing to frontend
+        try {
+          await this.ensureRootNode();
+          const pushResult = await this.cdp.send<{ nodeIds: number[] }>('DOM.pushNodesByBackendIdsToFrontend', {
+            backendNodeIds: [backendNodeId],
+          });
+
+          if (pushResult.nodeIds?.[0]) {
+            return {
+              nodeId: pushResult.nodeIds[0],
+              backendNodeId,
+              selector,
+              waitedMs: 0,
+            };
+          }
+        } catch {
+          // Node may be stale, continue to next selector
+          continue;
+        }
+      }
+    }
+
+    // Filter out ref: selectors for CSS-based waiting
+    const cssSelectors = selectorList.filter((s) => !s.startsWith('ref:'));
+    if (cssSelectors.length === 0) {
+      return null; // All were ref selectors and none worked
+    }
+
+    const result = await waitForAnyElement(this.cdp, cssSelectors, {
       state: 'visible',
       timeout,
     });
@@ -1694,26 +1860,60 @@ export class Page {
       return null;
     }
 
-    // Get the node ID
+    // Get the node using deep query (pierces shadow DOM)
     await this.ensureRootNode();
 
+    // First try standard querySelector (faster for non-shadow DOM)
     const queryResult = await this.cdp.send<{ nodeId: number }>('DOM.querySelector', {
       nodeId: this.rootNodeId!,
       selector: result.selector,
     });
 
-    if (!queryResult.nodeId) {
+    if (queryResult.nodeId) {
+      // Get backend node ID
+      const describeResult = await this.cdp.send<{ node: { backendNodeId: number } }>(
+        'DOM.describeNode',
+        { nodeId: queryResult.nodeId }
+      );
+
+      return {
+        nodeId: queryResult.nodeId,
+        backendNodeId: describeResult.node.backendNodeId,
+        selector: result.selector,
+        waitedMs: result.waitedMs,
+      };
+    }
+
+    // Fall back to deep query for shadow DOM elements
+    const deepQueryResult = await this.cdp.send<{ result: RemoteObject }>('Runtime.evaluate', {
+      expression: `(() => {
+        ${DEEP_QUERY_SCRIPT}
+        return deepQuery(${JSON.stringify(result.selector)});
+      })()`,
+      returnByValue: false,
+    });
+
+    if (!deepQueryResult.result.objectId) {
+      return null;
+    }
+
+    // Request the node from the RemoteObject
+    const nodeResult = await this.cdp.send<{ nodeId: number }>('DOM.requestNode', {
+      objectId: deepQueryResult.result.objectId,
+    });
+
+    if (!nodeResult.nodeId) {
       return null;
     }
 
     // Get backend node ID
     const describeResult = await this.cdp.send<{ node: { backendNodeId: number } }>(
       'DOM.describeNode',
-      { nodeId: queryResult.nodeId }
+      { nodeId: nodeResult.nodeId }
     );
 
     return {
-      nodeId: queryResult.nodeId,
+      nodeId: nodeResult.nodeId,
       backendNodeId: describeResult.node.backendNodeId,
       selector: result.selector,
       waitedMs: result.waitedMs,
