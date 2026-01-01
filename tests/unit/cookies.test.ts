@@ -3,16 +3,20 @@
  */
 
 import { describe, expect, test } from 'bun:test';
+import type { CDPClient } from '../../src/cdp/client.ts';
 
 // Create a mock CDP client for testing
+type CDPCall = { method: string; params?: Record<string, unknown> };
+type EventHandler = (params: Record<string, unknown>) => void;
+
 function createMockCDPClient() {
   const responses = new Map<string, unknown>();
-  const eventHandlers = new Map<string, Set<(params: unknown) => void>>();
+  const eventHandlers = new Map<string, Set<EventHandler>>();
 
   return {
-    sent: [] as Array<{ method: string; params?: unknown }>,
+    sent: [] as CDPCall[],
 
-    async send(method: string, params?: unknown) {
+    async send(method: string, params?: Record<string, unknown>) {
       this.sent.push({ method, params });
 
       if (responses.has(method)) {
@@ -33,14 +37,14 @@ function createMockCDPClient() {
       return {};
     },
 
-    on(event: string, handler: (params: unknown) => void) {
+    on(event: string, handler: EventHandler) {
       if (!eventHandlers.has(event)) {
         eventHandlers.set(event, new Set());
       }
       eventHandlers.get(event)!.add(handler);
     },
 
-    off(event: string, handler: (params: unknown) => void) {
+    off(event: string, handler: EventHandler) {
       eventHandlers.get(event)?.delete(handler);
     },
 
@@ -48,11 +52,11 @@ function createMockCDPClient() {
       responses.set(method, response);
     },
 
-    findCall(method: string) {
+    findCall(method: string): CDPCall | undefined {
       return this.sent.find((c) => c.method === method);
     },
 
-    findAllCalls(method: string) {
+    findAllCalls(method: string): CDPCall[] {
       return this.sent.filter((c) => c.method === method);
     },
 
@@ -65,7 +69,7 @@ function createMockCDPClient() {
 // Create test page helper
 async function createTestPage(cdp: ReturnType<typeof createMockCDPClient>) {
   const { Page } = await import('../../src/browser/page.ts');
-  return new Page(cdp as any);
+  return new Page(cdp as unknown as CDPClient);
 }
 
 describe('Cookie Management', () => {
@@ -153,7 +157,7 @@ describe('Cookie Management', () => {
       });
 
       const call = cdp.findCall('Network.setCookie');
-      expect((call?.params as any)?.expires).toBe(Math.floor(expiryDate.getTime() / 1000));
+      expect(call?.params?.['expires']).toBe(Math.floor(expiryDate.getTime() / 1000));
     });
 
     test('should handle numeric expiration', async () => {
@@ -170,7 +174,7 @@ describe('Cookie Management', () => {
       });
 
       const call = cdp.findCall('Network.setCookie');
-      expect((call?.params as any)?.expires).toBe(1735689600);
+      expect(call?.params?.['expires']).toBe(1735689600);
     });
 
     test('should set cookie with all options', async () => {
@@ -313,8 +317,8 @@ describe('LocalStorage', () => {
 
       expect(value).toBe('stored-value');
       const call = cdp.findCall('Runtime.evaluate');
-      expect((call?.params as any)?.expression).toContain('localStorage.getItem');
-      expect((call?.params as any)?.expression).toContain('myKey');
+      expect(call?.params?.['expression']).toContain('localStorage.getItem');
+      expect(call?.params?.['expression']).toContain('myKey');
     });
 
     test('should return null for non-existent key', async () => {
@@ -336,9 +340,9 @@ describe('LocalStorage', () => {
       await page.setLocalStorage('myKey', 'myValue');
 
       const call = cdp.findCall('Runtime.evaluate');
-      expect((call?.params as any)?.expression).toContain('localStorage.setItem');
-      expect((call?.params as any)?.expression).toContain('myKey');
-      expect((call?.params as any)?.expression).toContain('myValue');
+      expect(call?.params?.['expression']).toContain('localStorage.setItem');
+      expect(call?.params?.['expression']).toContain('myKey');
+      expect(call?.params?.['expression']).toContain('myValue');
     });
   });
 
@@ -350,8 +354,8 @@ describe('LocalStorage', () => {
       await page.removeLocalStorage('myKey');
 
       const call = cdp.findCall('Runtime.evaluate');
-      expect((call?.params as any)?.expression).toContain('localStorage.removeItem');
-      expect((call?.params as any)?.expression).toContain('myKey');
+      expect(call?.params?.['expression']).toContain('localStorage.removeItem');
+      expect(call?.params?.['expression']).toContain('myKey');
     });
   });
 
@@ -363,7 +367,7 @@ describe('LocalStorage', () => {
       await page.clearLocalStorage();
 
       const call = cdp.findCall('Runtime.evaluate');
-      expect((call?.params as any)?.expression).toBe('localStorage.clear()');
+      expect(call?.params?.['expression']).toBe('localStorage.clear()');
     });
   });
 });
@@ -379,7 +383,7 @@ describe('SessionStorage', () => {
 
       expect(value).toBe('session-data');
       const call = cdp.findCall('Runtime.evaluate');
-      expect((call?.params as any)?.expression).toContain('sessionStorage.getItem');
+      expect(call?.params?.['expression']).toContain('sessionStorage.getItem');
     });
   });
 
@@ -391,7 +395,7 @@ describe('SessionStorage', () => {
       await page.setSessionStorage('sessionKey', 'sessionValue');
 
       const call = cdp.findCall('Runtime.evaluate');
-      expect((call?.params as any)?.expression).toContain('sessionStorage.setItem');
+      expect(call?.params?.['expression']).toContain('sessionStorage.setItem');
     });
   });
 
@@ -403,7 +407,7 @@ describe('SessionStorage', () => {
       await page.removeSessionStorage('sessionKey');
 
       const call = cdp.findCall('Runtime.evaluate');
-      expect((call?.params as any)?.expression).toContain('sessionStorage.removeItem');
+      expect(call?.params?.['expression']).toContain('sessionStorage.removeItem');
     });
   });
 
@@ -415,7 +419,7 @@ describe('SessionStorage', () => {
       await page.clearSessionStorage();
 
       const call = cdp.findCall('Runtime.evaluate');
-      expect((call?.params as any)?.expression).toBe('sessionStorage.clear()');
+      expect(call?.params?.['expression']).toBe('sessionStorage.clear()');
     });
   });
 });

@@ -3,17 +3,21 @@
  */
 
 import { describe, expect, test } from 'bun:test';
+import type { CDPClient } from '../../src/cdp/client.ts';
 import { devices } from '../../src/emulation/index.ts';
 
 // Create a mock CDP client for testing
+type CDPCall = { method: string; params?: Record<string, unknown> };
+type EventHandler = (params: Record<string, unknown>) => void;
+
 function createMockCDPClient() {
   const responses = new Map<string, unknown>();
-  const eventHandlers = new Map<string, Set<(params: unknown) => void>>();
+  const eventHandlers = new Map<string, Set<EventHandler>>();
 
   return {
-    sent: [] as Array<{ method: string; params?: unknown }>,
+    sent: [] as CDPCall[],
 
-    async send(method: string, params?: unknown) {
+    async send(method: string, params?: Record<string, unknown>) {
       this.sent.push({ method, params });
 
       if (responses.has(method)) {
@@ -23,18 +27,18 @@ function createMockCDPClient() {
       return {};
     },
 
-    on(event: string, handler: (params: unknown) => void) {
+    on(event: string, handler: EventHandler) {
       if (!eventHandlers.has(event)) {
         eventHandlers.set(event, new Set());
       }
       eventHandlers.get(event)!.add(handler);
     },
 
-    off(event: string, handler: (params: unknown) => void) {
+    off(event: string, handler: EventHandler) {
       eventHandlers.get(event)?.delete(handler);
     },
 
-    emit(event: string, params: unknown) {
+    emit(event: string, params: Record<string, unknown>) {
       eventHandlers.get(event)?.forEach((h) => {
         h(params);
       });
@@ -44,11 +48,11 @@ function createMockCDPClient() {
       responses.set(method, response);
     },
 
-    findCall(method: string) {
+    findCall(method: string): CDPCall | undefined {
       return this.sent.find((c) => c.method === method);
     },
 
-    findAllCalls(method: string) {
+    findAllCalls(method: string): CDPCall[] {
       return this.sent.filter((c) => c.method === method);
     },
   };
@@ -58,7 +62,7 @@ function createMockCDPClient() {
 async function createTestPage(cdp: ReturnType<typeof createMockCDPClient>) {
   // Dynamically import to avoid circular dependency issues
   const { Page } = await import('../../src/browser/page.ts');
-  return new Page(cdp as any);
+  return new Page(cdp as unknown as CDPClient);
 }
 
 describe('Device Presets', () => {
@@ -384,7 +388,7 @@ describe('Page.emulate', () => {
     // Check user agent was set
     const uaCall = cdp.findCall('Emulation.setUserAgentOverride');
     expect(uaCall).toBeDefined();
-    expect((uaCall?.params as any)?.userAgent).toContain('iPhone');
+    expect(uaCall?.params?.['userAgent']).toContain('iPhone');
   });
 
   test('should enable touch for mobile devices', async () => {
