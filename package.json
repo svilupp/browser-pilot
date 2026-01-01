@@ -2,21 +2,53 @@
   "name": "browser-pilot",
   "version": "0.0.1",
   "description": "Lightweight CDP-based browser automation for Node.js, Bun, and Cloudflare Workers",
-  "module": "index.ts",
   "type": "module",
-  "bin": {
-    "bp": "./bin/browser-pilot.js",
-    "browser-pilot": "./bin/browser-pilot.js"
-  },
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
   "exports": {
-    ".": "./index.ts",
-    "./cdp": "./src/cdp/index.ts",
-    "./providers": "./src/providers/index.ts",
-    "./browser": "./src/browser/index.ts",
-    "./actions": "./src/actions/index.ts",
-    "./cli": "./src/cli/index.ts"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.cjs"
+    },
+    "./cdp": {
+      "types": "./dist/cdp.d.ts",
+      "import": "./dist/cdp.mjs",
+      "require": "./dist/cdp.cjs"
+    },
+    "./providers": {
+      "types": "./dist/providers.d.ts",
+      "import": "./dist/providers.mjs",
+      "require": "./dist/providers.cjs"
+    },
+    "./browser": {
+      "types": "./dist/browser.d.ts",
+      "import": "./dist/browser.mjs",
+      "require": "./dist/browser.cjs"
+    },
+    "./actions": {
+      "types": "./dist/actions.d.ts",
+      "import": "./dist/actions.mjs",
+      "require": "./dist/actions.cjs"
+    },
+    "./cli": {
+      "types": "./dist/cli.d.ts",
+      "import": "./dist/cli.mjs",
+      "require": "./dist/cli.cjs"
+    }
   },
+  "bin": {
+    "bp": "./dist/cli.mjs",
+    "browser-pilot": "./dist/cli.mjs"
+  },
+  "files": [
+    "dist"
+  ],
+  "sideEffects": false,
   "scripts": {
+    "clean": "rm -rf dist",
+    "build": "tsup",
     "test": "bun test",
     "test:unit": "bun test tests/unit",
     "test:integration": "bun test tests/integration --timeout 30000",
@@ -28,6 +60,7 @@
     "lint:fix": "biome check --write .",
     "format": "biome format --write .",
     "check": "bun run typecheck && bun run lint",
+    "prepublishOnly": "bun run build",
     "bp": "bun ./src/cli/index.ts",
     "browser-pilot": "bun ./src/cli/index.ts",
     "fixtures:serve": "bun tests/fixtures/server.ts"
@@ -35,10 +68,14 @@
   "devDependencies": {
     "@biomejs/biome": "^2.3.10",
     "@types/bun": "latest",
-    "chrome-launcher": "^1.2.1"
+    "chrome-launcher": "^1.2.1",
+    "tsup": "^8.0.0"
   },
   "peerDependencies": {
     "typescript": "^5"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "keywords": [
     "browser",
