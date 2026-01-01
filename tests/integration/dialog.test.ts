@@ -163,4 +163,100 @@ describe('Native Dialog Handling', () => {
       expect(capturedMessage).toContain('proceed');
     });
   }, 30000);
+
+  // === Default Auto-Dismiss (No Handler) ===
+
+  test('should auto-dismiss dialog without explicit handler', async () => {
+    const { page, baseUrl } = ctx.get();
+
+    await withRetry(async () => {
+      await page.goto(`${baseUrl}/dialogs.html`);
+
+      // NO dialog handler set - should auto-dismiss by default
+      // This previously would hang indefinitely
+
+      // Trigger confirm - will be auto-dismissed (cancelled)
+      await page.click('[data-testid="trigger-confirm"]', { timeout: 5000 });
+
+      // Wait for result - should show dismissed since auto-dismiss calls dismiss()
+      await page.waitFor('#confirm-result', { state: 'visible', timeout: 5000 });
+
+      const text = await page.text('#confirm-result');
+      expect(text).toContain('dismissed');
+    });
+  }, 30000);
+
+  test('should auto-dismiss alert without handler', async () => {
+    const { page, baseUrl } = ctx.get();
+
+    await withRetry(async () => {
+      await page.goto(`${baseUrl}/dialogs.html`);
+
+      // NO handler - alert should auto-dismiss
+      await page.click('[data-testid="trigger-alert"]', { timeout: 5000 });
+
+      // Should complete without hanging
+      await page.waitFor('#alert-result', { state: 'visible', timeout: 5000 });
+
+      const text = await page.text('#alert-result');
+      expect(text).toContain('Alert was dismissed');
+    });
+  }, 30000);
+
+  // === Chained Dialogs ===
+
+  test('should handle chained dialogs with accept handler', async () => {
+    const { page, baseUrl } = ctx.get();
+
+    await withRetry(async () => {
+      await page.goto(`${baseUrl}/dialogs.html`);
+
+      const dialogSequence: string[] = [];
+
+      // Handler accepts all dialogs, provides text for prompt
+      await page.onDialog(async (dialog) => {
+        dialogSequence.push(dialog.type);
+        if (dialog.type === 'prompt') {
+          await dialog.accept('ChainValue');
+        } else {
+          await dialog.accept();
+        }
+      });
+
+      // Trigger chain: confirm → prompt → alert
+      await page.click('[data-testid="trigger-chain"]', { timeout: 5000 });
+
+      // Wait for final result
+      await page.waitFor('#chain-result', { state: 'visible', timeout: 10000 });
+
+      const text = await page.text('#chain-result');
+      expect(text).toContain('Chain completed');
+      expect(text).toContain('ChainValue');
+
+      // Verify all three dialogs were handled
+      expect(dialogSequence).toEqual(['confirm', 'prompt', 'alert']);
+    });
+  }, 30000);
+
+  test('should handle chained dialogs cancellation at first step', async () => {
+    const { page, baseUrl } = ctx.get();
+
+    await withRetry(async () => {
+      await page.goto(`${baseUrl}/dialogs.html`);
+
+      // Handler dismisses first dialog
+      await page.onDialog(async (dialog) => {
+        await dialog.dismiss();
+      });
+
+      // Trigger chain
+      await page.click('[data-testid="trigger-chain"]', { timeout: 5000 });
+
+      // Should stop at step 1
+      await page.waitFor('#chain-result', { state: 'visible', timeout: 5000 });
+
+      const text = await page.text('#chain-result');
+      expect(text).toContain('cancelled at step 1');
+    });
+  }, 30000);
 });

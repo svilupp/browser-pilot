@@ -1,1 +1,1 @@
-export { devices, type DeviceDescriptor, type DeviceName } from './devices.ts';
+export { type DeviceDescriptor, type DeviceName, devices } from './devices.ts';

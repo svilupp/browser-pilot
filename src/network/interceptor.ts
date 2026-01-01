@@ -106,19 +106,16 @@ export class RequestInterceptor {
       frameId: params['frameId'] as string,
       isNavigationRequest: params['isNavigationRequest'] as boolean,
       responseStatusCode,
-      responseHeaders: responseHeaders?.reduce(
-        (acc, h) => ({ ...acc, [h.name]: h.value }),
-        {} as Record<string, string>
-      ),
+      responseHeaders: responseHeaders
+        ? Object.fromEntries(responseHeaders.map((h) => [h.name, h.value]))
+        : undefined,
     };
 
     // Track pending request
     this.pendingRequests.set(requestId, { request: intercepted, handled: false });
 
     // Find matching handler
-    const matchingHandler = this.handlers.find((h) =>
-      this.matchesPattern(intercepted, h.pattern)
-    );
+    const matchingHandler = this.handlers.find((h) => this.matchesPattern(intercepted, h.pattern));
 
     if (matchingHandler) {
       const actions = this.createActions(requestId);
@@ -228,10 +225,7 @@ export class RequestInterceptor {
   /**
    * Fulfill a request with custom response
    */
-  private async fulfillRequest(
-    requestId: string,
-    options: FulfillRequestOptions
-  ): Promise<void> {
+  private async fulfillRequest(requestId: string, options: FulfillRequestOptions): Promise<void> {
     const headers = Object.entries(options.headers ?? {}).map(([name, value]) => ({
       name,
       value,
@@ -241,11 +235,7 @@ export class RequestInterceptor {
       requestId,
       responseCode: options.status,
       responseHeaders: headers,
-      body: options.isBase64Encoded
-        ? options.body
-        : options.body
-          ? btoa(options.body)
-          : undefined,
+      body: options.isBase64Encoded ? options.body : options.body ? btoa(options.body) : undefined,
     });
   }
 

@@ -19,6 +19,7 @@ export type ActionType =
   | 'snapshot'
   | 'screenshot'
   | 'evaluate'
+  | 'text'
   | 'switchFrame'
   | 'switchToMain';
 
@@ -119,6 +120,9 @@ export interface StepResult {
 
   /** Result value (for snapshot, screenshot, evaluate) */
   result?: unknown;
+
+  /** Text content (for text action) */
+  text?: string;
 }
 
 export interface BatchResult {

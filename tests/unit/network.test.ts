@@ -2,7 +2,7 @@
  * Unit tests for Network Interception features
  */
 
-import { describe, expect, test, beforeEach } from 'bun:test';
+import { beforeEach, describe, expect, test } from 'bun:test';
 import { RequestInterceptor } from '../../src/network/interceptor.ts';
 
 // Create a mock CDP client for testing

@@ -13,7 +13,7 @@ import type { Page } from '../../src/browser/page.ts';
 function createMockPage() {
   const calls: Array<{ method: string; args: unknown[] }> = [];
   const refMap = new Map<string, number>();
-  let evaluateResult: unknown = undefined;
+  let evaluateResult: unknown;
 
   const page = {
     calls,
@@ -143,9 +143,7 @@ describe('Simple Timeout Wait', () => {
     const executor = new BatchExecutor(page as unknown as Page);
 
     const startTime = Date.now();
-    const result = await executor.execute([
-      { action: 'wait', timeout: 100 },
-    ]);
+    const result = await executor.execute([{ action: 'wait', timeout: 100 }]);
     const elapsed = Date.now() - startTime;
 
     expect(result.success).toBe(true);
@@ -178,9 +176,7 @@ describe('Simple Timeout Wait', () => {
     const page = createMockPage();
     const executor = new BatchExecutor(page as unknown as Page);
 
-    const result = await executor.execute([
-      { action: 'wait', waitFor: 'navigation' },
-    ]);
+    const result = await executor.execute([{ action: 'wait', waitFor: 'navigation' }]);
 
     expect(result.success).toBe(true);
     expect(page.calls).toHaveLength(1);
@@ -191,9 +187,7 @@ describe('Simple Timeout Wait', () => {
     const page = createMockPage();
     const executor = new BatchExecutor(page as unknown as Page);
 
-    const result = await executor.execute([
-      { action: 'wait', waitFor: 'networkIdle' },
-    ]);
+    const result = await executor.execute([{ action: 'wait', waitFor: 'networkIdle' }]);
 
     expect(result.success).toBe(true);
     expect(page.calls).toHaveLength(1);
@@ -220,9 +214,7 @@ describe('Page-Level Scroll', () => {
     const page = createMockPage();
     const executor = new BatchExecutor(page as unknown as Page);
 
-    const result = await executor.execute([
-      { action: 'scroll', direction: 'down', amount: 500 },
-    ]);
+    const result = await executor.execute([{ action: 'scroll', direction: 'down', amount: 500 }]);
 
     expect(result.success).toBe(true);
     expect(result.steps).toHaveLength(1);
@@ -235,9 +227,7 @@ describe('Page-Level Scroll', () => {
     const page = createMockPage();
     const executor = new BatchExecutor(page as unknown as Page);
 
-    await executor.execute([
-      { action: 'scroll', direction: 'up', amount: 300 },
-    ]);
+    await executor.execute([{ action: 'scroll', direction: 'up', amount: 300 }]);
 
     expect(page.calls[0]?.args[0]).toBe('window.scrollBy(0, -300)');
   });
@@ -246,9 +236,7 @@ describe('Page-Level Scroll', () => {
     const page = createMockPage();
     const executor = new BatchExecutor(page as unknown as Page);
 
-    await executor.execute([
-      { action: 'scroll', direction: 'left', amount: 200 },
-    ]);
+    await executor.execute([{ action: 'scroll', direction: 'left', amount: 200 }]);
 
     expect(page.calls[0]?.args[0]).toBe('window.scrollBy(-200, 0)');
   });
@@ -257,9 +245,7 @@ describe('Page-Level Scroll', () => {
     const page = createMockPage();
     const executor = new BatchExecutor(page as unknown as Page);
 
-    await executor.execute([
-      { action: 'scroll', direction: 'right', amount: 200 },
-    ]);
+    await executor.execute([{ action: 'scroll', direction: 'right', amount: 200 }]);
 
     expect(page.calls[0]?.args[0]).toBe('window.scrollBy(200, 0)');
   });
@@ -268,9 +254,7 @@ describe('Page-Level Scroll', () => {
     const page = createMockPage();
     const executor = new BatchExecutor(page as unknown as Page);
 
-    await executor.execute([
-      { action: 'scroll', direction: 'down' },
-    ]);
+    await executor.execute([{ action: 'scroll', direction: 'down' }]);
 
     expect(page.calls[0]?.args[0]).toBe('window.scrollBy(0, 500)');
   });
@@ -279,9 +263,7 @@ describe('Page-Level Scroll', () => {
     const page = createMockPage();
     const executor = new BatchExecutor(page as unknown as Page);
 
-    await executor.execute([
-      { action: 'scroll', amount: 1000 },
-    ]);
+    await executor.execute([{ action: 'scroll', amount: 1000 }]);
 
     expect(page.calls[0]?.args[0]).toBe('window.scrollBy(0, 1000)');
   });
@@ -290,9 +272,7 @@ describe('Page-Level Scroll', () => {
     const page = createMockPage();
     const executor = new BatchExecutor(page as unknown as Page);
 
-    await executor.execute([
-      { action: 'scroll', selector: '#footer' },
-    ]);
+    await executor.execute([{ action: 'scroll', selector: '#footer' }]);
 
     expect(page.calls[0]?.method).toBe('scroll');
     expect(page.calls[0]?.args[0]).toBe('#footer');
@@ -302,12 +282,13 @@ describe('Page-Level Scroll', () => {
     const page = createMockPage();
     const executor = new BatchExecutor(page as unknown as Page);
 
-    await executor.execute([
-      { action: 'scroll', x: 0, y: 1000 },
-    ]);
+    await executor.execute([{ action: 'scroll', x: 0, y: 1000 }]);
 
     expect(page.calls[0]?.method).toBe('scroll');
-    expect(page.calls[0]?.args).toEqual(['body', { x: 0, y: 1000, timeout: 30000, optional: false }]);
+    expect(page.calls[0]?.args).toEqual([
+      'body',
+      { x: 0, y: 1000, timeout: 30000, optional: false },
+    ]);
   });
 });
 
@@ -316,9 +297,7 @@ describe('Iframe Actions', () => {
     const page = createMockPage();
     const executor = new BatchExecutor(page as unknown as Page);
 
-    const result = await executor.execute([
-      { action: 'switchFrame', selector: 'iframe#checkout' },
-    ]);
+    const result = await executor.execute([{ action: 'switchFrame', selector: 'iframe#checkout' }]);
 
     expect(result.success).toBe(true);
     expect(page.calls).toHaveLength(1);
@@ -330,9 +309,7 @@ describe('Iframe Actions', () => {
     const page = createMockPage();
     const executor = new BatchExecutor(page as unknown as Page);
 
-    const result = await executor.execute([
-      { action: 'switchToMain' },
-    ]);
+    const result = await executor.execute([{ action: 'switchToMain' }]);
 
     expect(result.success).toBe(true);
     expect(page.calls).toHaveLength(1);
@@ -376,9 +353,7 @@ describe('Error Messages', () => {
     const page = createMockPage();
     const executor = new BatchExecutor(page as unknown as Page);
 
-    const result = await executor.execute([
-      { action: 'unknownAction' } as any,
-    ]);
+    const result = await executor.execute([{ action: 'unknownAction' } as any]);
 
     expect(result.success).toBe(false);
     expect(result.steps[0]?.error).toContain('bp actions');

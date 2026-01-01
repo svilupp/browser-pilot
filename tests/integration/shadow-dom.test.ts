@@ -137,11 +137,10 @@ describe('Shadow DOM', () => {
       await page.goto(`${baseUrl}/shadow-dom.html`);
 
       // Use multi-selector - first one is in shadow DOM
-      await page.click([
-        '[data-testid="shadow-button"]',
-        '[data-testid="nested-button"]',
-        '#main-btn',
-      ], { timeout: 5000 });
+      await page.click(
+        ['[data-testid="shadow-button"]', '[data-testid="nested-button"]', '#main-btn'],
+        { timeout: 5000 }
+      );
 
       // Should have clicked the first one (shadow-button)
       await page.waitFor('#simple-result', { state: 'visible', timeout: 3000 });

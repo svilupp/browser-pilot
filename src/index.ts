@@ -52,32 +52,6 @@ export {
   type ViewportOptions,
   type WaitForOptions,
 } from './browser/index.ts';
-
-// Emulation
-export { devices, type DeviceDescriptor, type DeviceName } from './emulation/index.ts';
-
-// Network Interception
-export {
-  RequestInterceptor,
-  type ContinueRequestOptions,
-  type FailRequestOptions,
-  type FulfillRequestOptions,
-  type InterceptedRequest,
-  type RequestActions,
-  type RequestHandler,
-  type RequestPattern,
-  type ResourceType,
-  type RouteOptions,
-} from './network/index.ts';
-
-// Storage (Cookies)
-export type {
-  ClearCookiesOptions,
-  Cookie,
-  DeleteCookieOptions,
-  SetCookieOptions,
-} from './storage/index.ts';
-
 // CDP Client (for advanced usage)
 export {
   type CDPClient,
@@ -85,7 +59,21 @@ export {
   CDPError,
   createCDPClient,
 } from './cdp/index.ts';
-
+// Emulation
+export { type DeviceDescriptor, type DeviceName, devices } from './emulation/index.ts';
+// Network Interception
+export {
+  type ContinueRequestOptions,
+  type FailRequestOptions,
+  type FulfillRequestOptions,
+  type InterceptedRequest,
+  type RequestActions,
+  type RequestHandler,
+  RequestInterceptor,
+  type RequestPattern,
+  type ResourceType,
+  type RouteOptions,
+} from './network/index.ts';
 // Providers
 export {
   BrowserBaseProvider,
@@ -99,6 +87,13 @@ export {
   type Provider,
   type ProviderSession,
 } from './providers/index.ts';
+// Storage (Cookies)
+export type {
+  ClearCookiesOptions,
+  Cookie,
+  DeleteCookieOptions,
+  SetCookieOptions,
+} from './storage/index.ts';
 // Tracing
 export {
   disableTracing,

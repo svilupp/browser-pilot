@@ -37,6 +37,7 @@ export class BatchExecutor {
           success: true,
           durationMs: Date.now() - stepStart,
           result: result.value,
+          text: result.text,
         });
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
@@ -77,7 +78,7 @@ export class BatchExecutor {
   private async executeStep(
     step: Step,
     defaultTimeout: number
-  ): Promise<{ selectorUsed?: string; value?: unknown }> {
+  ): Promise<{ selectorUsed?: string; value?: unknown; text?: string }> {
     const timeout = step.timeout ?? defaultTimeout;
     const optional = step.optional ?? false;
 
@@ -223,7 +224,9 @@ export class BatchExecutor {
           return {};
         }
         if (!step.selector)
-          throw new Error('wait requires selector (or waitFor: navigation/networkIdle, or timeout for simple delay)');
+          throw new Error(
+            'wait requires selector (or waitFor: navigation/networkIdle, or timeout for simple delay)'
+          );
         await this.page.waitFor(step.selector, {
           timeout,
           optional,
@@ -253,6 +256,13 @@ export class BatchExecutor {
         return { value: result };
       }
 
+      case 'text': {
+        // text() only accepts a single selector string, use first if array provided
+        const selector = Array.isArray(step.selector) ? step.selector[0] : step.selector;
+        const text = await this.page.text(selector);
+        return { text, selectorUsed: selector };
+      }
+
       case 'switchFrame': {
         if (!step.selector) throw new Error('switchFrame requires selector');
         await this.page.switchToFrame(step.selector, { timeout, optional });
@@ -265,7 +275,9 @@ export class BatchExecutor {
       }
 
       default:
-        throw new Error(`Unknown action: ${(step as Step).action}. Run 'bp actions' for available actions.`);
+        throw new Error(
+          `Unknown action: ${(step as Step).action}. Run 'bp actions' for available actions.`
+        );
     }
   }
 

@@ -3,7 +3,7 @@
  */
 
 import { describe, expect, test } from 'bun:test';
-import type { ConsoleMessage, PageError, Dialog } from '../../src/browser/types.ts';
+import type { ConsoleMessage, Dialog, PageError } from '../../src/browser/types.ts';
 
 // Create a mock CDP client for testing
 function createMockCDPClient() {
@@ -73,7 +73,9 @@ function createMockCDPClient() {
 // Create test page helper
 async function createTestPage(cdp: ReturnType<typeof createMockCDPClient>) {
   const { Page } = await import('../../src/browser/page.ts');
-  return new Page(cdp as any);
+  const page = new Page(cdp as any);
+  await page.init(); // Initialize event listeners including dialog handler
+  return page;
 }
 
 describe('Console Message Handling', () => {
@@ -128,10 +130,7 @@ describe('Console Message Handling', () => {
 
       cdp.emit('Runtime.consoleAPICalled', {
         type: 'log',
-        args: [
-          { description: 'Object { foo: "bar" }' },
-          { description: 'Array(3)' },
-        ],
+        args: [{ description: 'Object { foo: "bar" }' }, { description: 'Array(3)' }],
         timestamp: Date.now(),
       });
 
@@ -425,10 +424,10 @@ describe('Dialog Handling', () => {
 
     test('should auto-dismiss when no handler set', async () => {
       const cdp = createMockCDPClient();
-      const page = await createTestPage(cdp);
+      await createTestPage(cdp); // init() sets up dialog listener
 
-      // Enable console handling but don't set dialog handler
-      await page.onConsole(() => {});
+      // No dialog handler set - should auto-dismiss by default
+      // (dialog listener is now set up in init(), not enableConsole())
 
       await cdp.emitAsync('Page.javascriptDialogOpening', {
         type: 'alert',

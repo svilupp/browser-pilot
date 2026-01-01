@@ -5,16 +5,10 @@
 import { BatchExecutor, type BatchOptions, type BatchResult, type Step } from '../actions/index.ts';
 import type { CDPClient } from '../cdp/client.ts';
 import type { BoxModel, RemoteObject } from '../cdp/protocol.ts';
-import {
-  DEEP_QUERY_SCRIPT,
-  waitForAnyElement,
-  waitForNetworkIdle as waitForIdle,
-  waitForNavigation as waitForNav,
-} from '../wait/index.ts';
 import type { DeviceDescriptor } from '../emulation/index.ts';
 import {
-  RequestInterceptor,
   type RequestHandler,
+  RequestInterceptor,
   type RequestPattern,
   type ResourceType,
   type RouteOptions,
@@ -25,6 +19,12 @@ import type {
   DeleteCookieOptions,
   SetCookieOptions,
 } from '../storage/types.ts';
+import {
+  DEEP_QUERY_SCRIPT,
+  waitForAnyElement,
+  waitForNetworkIdle as waitForIdle,
+  waitForNavigation as waitForNav,
+} from '../wait/index.ts';
 import {
   type ActionOptions,
   type ConsoleHandler,
@@ -107,6 +107,9 @@ export class Page {
         }
       }
     });
+
+    // Always listen for dialogs to prevent blocking - auto-dismiss by default
+    this.cdp.on('Page.javascriptDialogOpening', this.handleDialogOpening.bind(this));
 
     await Promise.all([
       this.cdp.send('Page.enable'),
@@ -252,7 +255,9 @@ export class Page {
       await this.scrollIntoView(element.nodeId);
 
       // Check if this is a form submit button and handle accordingly
-      const submitResult = await this.evaluateInFrame<{ result: { value?: { isSubmit?: boolean } } }>(
+      const submitResult = await this.evaluateInFrame<{
+        result: { value?: { isSubmit?: boolean } };
+      }>(
         `(() => {
           const el = document.querySelector(${JSON.stringify(element.selector)});
           if (!el) return { isSubmit: false };
@@ -1092,7 +1097,6 @@ export class Page {
       }
     }
 
-
     // Build tree structure
     const buildNode = (nodeId: string): SnapshotNode | null => {
       const node = nodeMap.get(nodeId);
@@ -1279,8 +1283,7 @@ export class Page {
    * Set the user agent string and optional metadata
    */
   async setUserAgent(options: string | UserAgentOptions): Promise<void> {
-    const opts: UserAgentOptions =
-      typeof options === 'string' ? { userAgent: options } : options;
+    const opts: UserAgentOptions = typeof options === 'string' ? { userAgent: options } : options;
 
     await this.cdp.send('Emulation.setUserAgentOverride', {
       userAgent: opts.userAgent,
@@ -1359,10 +1362,7 @@ export class Page {
    * @param handler Handler function for matched requests
    * @returns Unsubscribe function
    */
-  async intercept(
-    pattern: string | RequestPattern,
-    handler: RequestHandler
-  ): Promise<() => void> {
+  async intercept(pattern: string | RequestPattern, handler: RequestHandler): Promise<() => void> {
     // Lazy initialize interceptor
     if (!this.interceptor) {
       this.interceptor = new RequestInterceptor(this.cdp);
@@ -1442,8 +1442,7 @@ export class Page {
    * Set a cookie
    */
   async setCookie(options: SetCookieOptions): Promise<boolean> {
-    const { name, value, domain, path = '/', expires, httpOnly, secure, sameSite, url } =
-      options;
+    const { name, value, domain, path = '/', expires, httpOnly, secure, sameSite, url } = options;
 
     let expireTime: number | undefined;
     if (expires instanceof Date) {
@@ -1603,10 +1602,9 @@ export class Page {
   private async enableConsole(): Promise<void> {
     if (this.consoleEnabled) return;
 
-    // Subscribe to console events
+    // Subscribe to console events (dialog listener is bound in constructor)
     this.cdp.on('Runtime.consoleAPICalled', this.handleConsoleMessage.bind(this));
     this.cdp.on('Runtime.exceptionThrown', this.handleException.bind(this));
-    this.cdp.on('Page.javascriptDialogOpening', this.handleDialogOpening.bind(this));
 
     this.consoleEnabled = true;
   }
@@ -1616,9 +1614,11 @@ export class Page {
    */
   private handleConsoleMessage(params: Record<string, unknown>): void {
     const args = params['args'] as Array<{ value?: unknown; description?: string }> | undefined;
-    const stackTrace = params['stackTrace'] as {
-      callFrames?: Array<{ url: string; lineNumber: number }>;
-    } | undefined;
+    const stackTrace = params['stackTrace'] as
+      | {
+          callFrames?: Array<{ url: string; lineNumber: number }>;
+        }
+      | undefined;
 
     const message: ConsoleMessage = {
       type: params['type'] as ConsoleMessageType,
@@ -1643,9 +1643,11 @@ export class Page {
   private handleException(params: Record<string, unknown>): void {
     const details = params['exceptionDetails'] as Record<string, unknown>;
     const exception = details['exception'] as { description?: string } | undefined;
-    const stackTrace = details['stackTrace'] as {
-      callFrames?: Array<{ url: string; lineNumber: number }>;
-    } | undefined;
+    const stackTrace = details['stackTrace'] as
+      | {
+          callFrames?: Array<{ url: string; lineNumber: number }>;
+        }
+      | undefined;
 
     const error: PageError = {
       message: exception?.description ?? (details['text'] as string),
@@ -1703,9 +1705,7 @@ export class Page {
   /**
    * Format console arguments to string
    */
-  private formatConsoleArgs(
-    args: Array<{ value?: unknown; description?: string }>
-  ): string {
+  private formatConsoleArgs(args: Array<{ value?: unknown; description?: string }>): string {
     return args
       .map((arg) => {
         if (arg.value !== undefined) return String(arg.value);
@@ -1744,7 +1744,9 @@ export class Page {
   /**
    * Collect console messages during an action
    */
-  async collectConsole<T>(fn: () => Promise<T>): Promise<{ result: T; messages: ConsoleMessage[] }> {
+  async collectConsole<T>(
+    fn: () => Promise<T>
+  ): Promise<{ result: T; messages: ConsoleMessage[] }> {
     const messages: ConsoleMessage[] = [];
     const unsubscribe = await this.onConsole((msg) => messages.push(msg));
 
@@ -1786,6 +1788,7 @@ export class Page {
     this.currentFrame = null;
     this.currentFrameContextId = null;
     this.frameContexts.clear();
+    this.dialogHandler = null;
 
     // Stop any pending loading
     try {
@@ -1877,9 +1880,12 @@ export class Page {
         // Resolve backendNodeId to nodeId by pushing to frontend
         try {
           await this.ensureRootNode();
-          const pushResult = await this.cdp.send<{ nodeIds: number[] }>('DOM.pushNodesByBackendIdsToFrontend', {
-            backendNodeIds: [backendNodeId],
-          });
+          const pushResult = await this.cdp.send<{ nodeIds: number[] }>(
+            'DOM.pushNodesByBackendIdsToFrontend',
+            {
+              backendNodeIds: [backendNodeId],
+            }
+          );
 
           if (pushResult.nodeIds?.[0]) {
             return {
@@ -1889,10 +1895,7 @@ export class Page {
               waitedMs: 0,
             };
           }
-        } catch {
-          // Node may be stale, continue to next selector
-          continue;
-        }
+        } catch {}
       }
     }
 

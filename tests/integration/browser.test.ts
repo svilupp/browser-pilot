@@ -161,24 +161,20 @@ describe('Browser Integration', () => {
   });
 
   // Navigation test last since it changes page state
-  test(
-    'should click elements and navigate',
-    async () => {
-      const { page, baseUrl } = ctx.get();
+  test('should click elements and navigate', async () => {
+    const { page, baseUrl } = ctx.get();
 
-      await withRetry(async () => {
-        await page.goto(`${baseUrl}/basic.html`);
+    await withRetry(async () => {
+      await page.goto(`${baseUrl}/basic.html`);
 
-        // Click the form navigation link
-        const clicked = await page.click('#nav-form', { optional: true, timeout: 5000 });
+      // Click the form navigation link
+      const clicked = await page.click('#nav-form', { optional: true, timeout: 5000 });
 
-        if (clicked) {
-          await page.waitForNavigation({ timeout: 10000, optional: true });
-          const url = await page.url();
-          expect(url).toContain('form.html');
-        }
-      });
-    },
-    15000
-  );
+      if (clicked) {
+        await page.waitForNavigation({ timeout: 10000, optional: true });
+        const url = await page.url();
+        expect(url).toContain('form.html');
+      }
+    });
+  }, 15000);
 });

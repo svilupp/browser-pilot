@@ -74,9 +74,7 @@ describe('Cookie Management', () => {
       const cdp = createMockCDPClient();
       cdp.mockResponse('Runtime.evaluate', { result: { value: 'https://example.com' } });
       cdp.mockResponse('Network.getCookies', {
-        cookies: [
-          { name: 'session', value: 'abc123', domain: '.example.com', path: '/' },
-        ],
+        cookies: [{ name: 'session', value: 'abc123', domain: '.example.com', path: '/' }],
       });
 
       const page = await createTestPage(cdp);

@@ -54,14 +54,18 @@ export async function execCommand(
 
   // Parse actions from arguments
   if (!actionsJson) {
-    throw new Error('No actions provided. Usage: bp exec \'{"action":"goto","url":"..."}\'\n\nRun \'bp actions\' for complete action reference.');
+    throw new Error(
+      'No actions provided. Usage: bp exec \'{"action":"goto","url":"..."}\'\n\nRun \'bp actions\' for complete action reference.'
+    );
   }
 
   let actions: Step | Step[];
   try {
     actions = JSON.parse(actionsJson);
   } catch {
-    throw new Error('Invalid JSON. Actions must be valid JSON.\n\nRun \'bp actions\' for complete action reference.');
+    throw new Error(
+      "Invalid JSON. Actions must be valid JSON.\n\nRun 'bp actions' for complete action reference."
+    );
   }
 
   // Connect to browser
@@ -104,6 +108,8 @@ export async function execCommand(
           durationMs: s.durationMs,
           selectorUsed: s.selectorUsed,
           error: s.error,
+          text: s.text,
+          result: s.result,
         })),
         totalDurationMs: result.totalDurationMs,
         currentUrl,
