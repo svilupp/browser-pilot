@@ -3,17 +3,21 @@
  */
 
 import { beforeEach, describe, expect, test } from 'bun:test';
+import type { CDPClient } from '../../src/cdp/client.ts';
 import { RequestInterceptor } from '../../src/network/interceptor.ts';
 
 // Create a mock CDP client for testing
+type CDPCall = { method: string; params?: Record<string, unknown> };
+type EventHandler = (params: Record<string, unknown>) => void | Promise<void>;
+
 function createMockCDPClient() {
   const responses = new Map<string, unknown>();
-  const eventHandlers = new Map<string, Set<(params: unknown) => void>>();
+  const eventHandlers = new Map<string, Set<EventHandler>>();
 
   return {
-    sent: [] as Array<{ method: string; params?: unknown }>,
+    sent: [] as CDPCall[],
 
-    async send(method: string, params?: unknown) {
+    async send(method: string, params?: Record<string, unknown>) {
       this.sent.push({ method, params });
 
       if (responses.has(method)) {
@@ -23,18 +27,18 @@ function createMockCDPClient() {
       return {};
     },
 
-    on(event: string, handler: (params: unknown) => void) {
+    on(event: string, handler: EventHandler) {
       if (!eventHandlers.has(event)) {
         eventHandlers.set(event, new Set());
       }
       eventHandlers.get(event)!.add(handler);
     },
 
-    off(event: string, handler: (params: unknown) => void) {
+    off(event: string, handler: EventHandler) {
       eventHandlers.get(event)?.delete(handler);
     },
 
-    emit(event: string, params: unknown) {
+    emit(event: string, params: Record<string, unknown>) {
       const handlers = eventHandlers.get(event);
       if (handlers) {
         for (const h of handlers) {
@@ -43,11 +47,11 @@ function createMockCDPClient() {
       }
     },
 
-    async emitAsync(event: string, params: unknown) {
+    async emitAsync(event: string, params: Record<string, unknown>) {
       const handlers = eventHandlers.get(event);
       if (handlers) {
         for (const h of handlers) {
-          await (h as any)(params);
+          await h(params);
         }
       }
     },
@@ -56,11 +60,11 @@ function createMockCDPClient() {
       responses.set(method, response);
     },
 
-    findCall(method: string) {
+    findCall(method: string): CDPCall | undefined {
       return this.sent.find((c) => c.method === method);
     },
 
-    findAllCalls(method: string) {
+    findAllCalls(method: string): CDPCall[] {
       return this.sent.filter((c) => c.method === method);
     },
 
@@ -76,7 +80,7 @@ describe('RequestInterceptor', () => {
 
   beforeEach(() => {
     mockCdp = createMockCDPClient();
-    interceptor = new RequestInterceptor(mockCdp as any);
+    interceptor = new RequestInterceptor(mockCdp as unknown as CDPClient);
   });
 
   describe('enable()', () => {
@@ -334,7 +338,7 @@ describe('RequestInterceptor', () => {
 
       const call = mockCdp.findCall('Fetch.fulfillRequest');
       // btoa('Hello World') = 'SGVsbG8gV29ybGQ='
-      expect((call?.params as any)?.body).toBe('SGVsbG8gV29ybGQ=');
+      expect(call?.params?.['body']).toBe('SGVsbG8gV29ybGQ=');
     });
   });
 
@@ -432,7 +436,7 @@ describe('Page network interception methods', () => {
   // Create test page helper
   async function createTestPage(cdp: ReturnType<typeof createMockCDPClient>) {
     const { Page } = await import('../../src/browser/page.ts');
-    return new Page(cdp as any);
+    return new Page(cdp as unknown as CDPClient);
   }
 
   describe('page.intercept()', () => {

@@ -7,6 +7,7 @@
 
 import { describe, expect, test } from 'bun:test';
 import { BatchExecutor } from '../../src/actions/executor.ts';
+import type { ActionType, Step } from '../../src/actions/types.ts';
 import type { Page } from '../../src/browser/page.ts';
 
 // Create a mock page for testing
@@ -339,9 +340,7 @@ describe('Iframe Actions', () => {
     const page = createMockPage();
     const executor = new BatchExecutor(page as unknown as Page);
 
-    const result = await executor.execute([
-      { action: 'switchFrame' } as any, // Missing selector
-    ]);
+    const result = await executor.execute([{ action: 'switchFrame' } satisfies Step]); // Missing selector
 
     expect(result.success).toBe(false);
     expect(result.steps[0]?.error).toContain('selector');
@@ -353,7 +352,7 @@ describe('Error Messages', () => {
     const page = createMockPage();
     const executor = new BatchExecutor(page as unknown as Page);
 
-    const result = await executor.execute([{ action: 'unknownAction' } as any]);
+    const result = await executor.execute([{ action: 'unknownAction' as ActionType }]);
 
     expect(result.success).toBe(false);
     expect(result.steps[0]?.error).toContain('bp actions');
