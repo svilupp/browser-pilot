@@ -54,6 +54,9 @@ export interface Step {
   /** Delay between keystrokes for type action */
   delay?: number;
 
+  /** Wait for navigation after click action completes */
+  waitForNavigation?: boolean;
+
   /** Custom select: trigger selector */
   trigger?: string | string[];
 

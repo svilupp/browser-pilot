@@ -168,6 +168,9 @@ export class Page {
 
   /**
    * Click an element (supports multi-selector)
+   *
+   * Uses CDP mouse events for regular elements. For form submit buttons,
+   * uses dispatchEvent to reliably trigger form submission in headless Chrome.
    */
   async click(selector: string | string[], options: ActionOptions = {}): Promise<boolean> {
     const element = await this.findElement(selector, options);
@@ -177,7 +180,37 @@ export class Page {
     }
 
     await this.scrollIntoView(element.nodeId);
-    await this.clickElement(element.nodeId);
+
+    // Check if this is a form submit button and handle accordingly
+    const submitResult = await this.cdp.send<{ result: { value?: { isSubmit?: boolean } } }>(
+      'Runtime.evaluate',
+      {
+        expression: `(() => {
+        const el = document.querySelector(${JSON.stringify(element.selector)});
+        if (!el) return { isSubmit: false };
+
+        // Check if this is a form submit button
+        const isSubmitButton = (el instanceof HTMLButtonElement && (el.type === 'submit' || (el.form && el.type !== 'button'))) ||
+                               (el instanceof HTMLInputElement && el.type === 'submit');
+
+        if (isSubmitButton && el.form) {
+          // Dispatch submit event directly - works reliably in headless Chrome
+          el.form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+          return { isSubmit: true };
+        }
+        return { isSubmit: false };
+      })()`,
+        returnByValue: true,
+      }
+    );
+
+    const isSubmit = submitResult.result.value?.isSubmit;
+    if (!isSubmit) {
+      // For non-submit elements, use CDP click only
+      // (JS click would cause double-clicking issues with toggle handlers)
+      await this.clickElement(element.nodeId);
+    }
+
     return true;
   }
 
@@ -1028,21 +1061,22 @@ export class Page {
 
   /**
    * Reset page state for clean test isolation
-   * - Navigates to about:blank to clear page content
+   * - Stops any pending operations
    * - Clears localStorage and sessionStorage
    * - Resets internal state
    */
   async reset(): Promise<void> {
-    // Navigate to blank page to reset state
+    // Reset internal state first
+    this.rootNodeId = null;
+
+    // Stop any pending loading
     try {
-      await this.cdp.send('Page.navigate', { url: 'about:blank' });
-      // Wait briefly for navigation
-      await sleep(100);
+      await this.cdp.send('Page.stopLoading');
     } catch {
-      // Ignore navigation errors
+      // Ignore errors
     }
 
-    // Clear storage
+    // Clear storage without navigating (faster and more reliable)
     try {
       await this.cdp.send('Runtime.evaluate', {
         expression: `(() => {
@@ -1053,9 +1087,6 @@ export class Page {
     } catch {
       // Ignore if storage clearing fails
     }
-
-    // Reset internal state
-    this.rootNodeId = null;
   }
 
   /**

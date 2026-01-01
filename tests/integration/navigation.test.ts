@@ -103,11 +103,14 @@ describe('Navigation', () => {
     await withRetry(async () => {
       await page.goto(`${baseUrl}/basic.html`);
 
+      // Set up navigation listener BEFORE clicking (correct pattern)
+      const navPromise = page.waitForNavigation({ timeout: 5000 });
+
       // Click navigation link
       await page.click('#nav-form');
 
-      // Should navigate to form page
-      await page.waitForNavigation({ timeout: 5000 });
+      // Wait for navigation to complete
+      await navPromise;
       await expectPageUrl(page, '/form.html');
     });
   });

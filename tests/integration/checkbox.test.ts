@@ -154,18 +154,11 @@ describe('Checkbox and Radio Interactions', () => {
 
     await withRetry(async () => {
       await page.goto(`${baseUrl}/checkboxes.html`);
-
-      // Check some preferences but not terms
       await page.check('#newsletter');
       await page.check('#contact-email');
 
-      // Submit
       await page.click('#save-preferences');
 
-      // Wait for result to be visible and have error class
-      await page.waitFor('#submit-result.error', { timeout: 2000 });
-
-      // Should show error
       await expectHasClass(page, '#submit-result', 'error', true);
       await expectTextContent(page, 'terms and conditions');
     });

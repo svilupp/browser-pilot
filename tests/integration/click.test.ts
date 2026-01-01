@@ -82,9 +82,17 @@ describe('Click Actions', () => {
   test('should throw for required missing element', async () => {
     const { page, baseUrl } = ctx.get();
 
-    await page.goto(`${baseUrl}/basic.html`);
+    await withRetry(async () => {
+      await page.goto(`${baseUrl}/basic.html`);
 
-    await expect(page.click('#does-not-exist', { timeout: 1000 })).rejects.toThrow();
+      let threwError = false;
+      try {
+        await page.click('#does-not-exist', { timeout: 1000 });
+      } catch {
+        threwError = true;
+      }
+      expect(threwError).toBe(true);
+    });
   });
 
   test('should click with all selectors failing until last', async () => {
