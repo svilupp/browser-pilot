@@ -84,6 +84,20 @@ export function getChromePort(): number {
 }
 
 /**
+ * Get WebSocket URL for the browser
+ * Fetches from Chrome's /json/version endpoint
+ */
+export async function getWebSocketUrl(): Promise<string> {
+  if (!fileHarness) {
+    throw new Error('CLI test harness not initialized. Call setup() in beforeAll.');
+  }
+  const port = fileHarness.chrome.port;
+  const response = await fetch(`http://localhost:${port}/json/version`);
+  const info = (await response.json()) as { webSocketDebuggerUrl: string };
+  return info.webSocketDebuggerUrl;
+}
+
+/**
  * Generate a unique session name for tests
  */
 export function generateSessionName(): string {

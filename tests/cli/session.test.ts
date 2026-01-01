@@ -1,13 +1,19 @@
 /**
  * CLI session persistence tests
  *
- * Note: These tests require the CLI commands to be fully implemented.
- * For now, we test basic CLI functionality.
+ * Tests CLI commands for session management: connect, exec, close.
  */
 
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { withRetry } from '../utils/retry';
-import { generateSessionName, getBaseUrl, getChromePort, runCLI, setup, teardown } from './setup';
+import {
+  generateSessionName,
+  getBaseUrl,
+  getWebSocketUrl,
+  runCLI,
+  setup,
+  teardown,
+} from './setup';
 
 describe('CLI Basic Functionality', () => {
   beforeAll(setup);
@@ -28,63 +34,72 @@ describe('CLI Basic Functionality', () => {
   });
 });
 
-// Note: Full CLI session tests require the CLI commands to be implemented
-// The tests below are placeholders that will work once the CLI is complete
-
-describe.skip('CLI Session Persistence', () => {
+describe('CLI Session Persistence', () => {
   beforeAll(setup);
   afterAll(teardown);
 
   const SESSION_NAME = generateSessionName();
 
-  test('should create a session', async () => {
-    await withRetry(async () => {
-      const port = getChromePort();
+  test(
+    'should create a session',
+    async () => {
+      await withRetry(async () => {
+        const wsUrl = await getWebSocketUrl();
 
-      const result = await runCLI([
-        'connect',
-        '--provider',
-        'generic',
-        '--url',
-        `http://localhost:${port}`,
-        '--name',
-        SESSION_NAME,
-        '-o',
-        'json',
-      ]);
+        const result = await runCLI([
+          'connect',
+          '--provider',
+          'generic',
+          '--url',
+          wsUrl,
+          '--name',
+          SESSION_NAME,
+          '-o',
+          'json',
+        ]);
 
-      expect(result.exitCode).toBe(0);
-      expect(result.json).toMatchObject({
-        success: true,
-        sessionId: SESSION_NAME,
+        expect(result.exitCode).toBe(0);
+        expect(result.json).toMatchObject({
+          success: true,
+          sessionId: SESSION_NAME,
+        });
       });
-    });
-  });
+    },
+    30000
+  );
 
-  test('should navigate using session', async () => {
-    await withRetry(async () => {
-      const baseUrl = getBaseUrl();
+  test(
+    'should navigate using session',
+    async () => {
+      await withRetry(async () => {
+        const baseUrl = getBaseUrl();
 
-      const result = await runCLI([
-        'exec',
-        '-s',
-        SESSION_NAME,
-        '-o',
-        'json',
-        JSON.stringify({ action: 'goto', url: `${baseUrl}/basic.html` }),
-      ]);
+        const result = await runCLI([
+          'exec',
+          '-s',
+          SESSION_NAME,
+          '-o',
+          'json',
+          JSON.stringify({ action: 'goto', url: `${baseUrl}/basic.html` }),
+        ]);
 
-      expect(result.exitCode).toBe(0);
-      expect(result.json).toMatchObject({ success: true });
-    });
-  });
+        expect(result.exitCode).toBe(0);
+        expect(result.json).toMatchObject({ success: true });
+      });
+    },
+    30000
+  );
 
-  test('should close session', async () => {
-    await withRetry(async () => {
-      const result = await runCLI(['close', '-s', SESSION_NAME, '-o', 'json']);
+  test(
+    'should close session',
+    async () => {
+      await withRetry(async () => {
+        const result = await runCLI(['close', '-s', SESSION_NAME, '-o', 'json']);
 
-      expect(result.exitCode).toBe(0);
-      expect(result.json).toMatchObject({ success: true });
-    });
-  });
+        expect(result.exitCode).toBe(0);
+        expect(result.json).toMatchObject({ success: true });
+      });
+    },
+    30000
+  );
 });
