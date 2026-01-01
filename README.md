@@ -1,1 +1,408 @@
 # browser-pilot
+
+Lightweight CDP-based browser automation for AI agents. Zero dependencies, works in Node.js, Bun, and Cloudflare Workers.
+
+```typescript
+import { connect } from 'browser-pilot';
+
+const browser = await connect({ provider: 'browserbase', apiKey: process.env.BROWSERBASE_API_KEY });
+const page = await browser.page();
+
+await page.goto('https://example.com/login');
+await page.fill(['#email', 'input[type=email]'], 'user@example.com');
+await page.fill(['#password', 'input[type=password]'], 'secret');
+await page.submit(['#login-btn', 'button[type=submit]']);
+
+const snapshot = await page.snapshot();
+console.log(snapshot.text); // Accessibility tree as text
+
+await browser.close();
+```
+
+## Why browser-pilot?
+
+| Problem with Playwright/Puppeteer | browser-pilot Solution |
+|-----------------------------------|------------------------|
+| Won't run in Cloudflare Workers | Pure Web Standard APIs, zero Node.js dependencies |
+| Bun CDP connection bugs | Custom CDP client that works everywhere |
+| Single-selector API (fragile) | Multi-selector by default: `['#primary', '.fallback']` |
+| No action batching (high latency) | Batch DSL: one call for entire sequences |
+| No AI-optimized snapshots | Built-in accessibility tree extraction |
+
+## Installation
+
+```bash
+bun add browser-pilot
+# or
+npm install browser-pilot
+```
+
+## Providers
+
+### BrowserBase (Recommended for production)
+
+```typescript
+const browser = await connect({
+  provider: 'browserbase',
+  apiKey: process.env.BROWSERBASE_API_KEY,
+  projectId: process.env.BROWSERBASE_PROJECT_ID, // optional
+});
+```
+
+### Browserless
+
+```typescript
+const browser = await connect({
+  provider: 'browserless',
+  apiKey: process.env.BROWSERLESS_API_KEY,
+});
+```
+
+### Generic (Local Chrome)
+
+```bash
+# Start Chrome with remote debugging
+chrome --remote-debugging-port=9222
+```
+
+```typescript
+const browser = await connect({
+  provider: 'generic',
+  wsUrl: 'ws://localhost:9222/devtools/browser/...', // optional, auto-discovers
+});
+```
+
+## Core Concepts
+
+### Multi-Selector (Robust Automation)
+
+Every action accepts `string | string[]`. When given an array, tries each selector in order until one works:
+
+```typescript
+// Tries #submit first, falls back to alternatives
+await page.click(['#submit', 'button[type=submit]', '.submit-btn']);
+
+// Cookie consent - try multiple common patterns
+await page.click([
+  '#accept-cookies',
+  '.cookie-accept',
+  'button:has-text("Accept")',
+  '[data-testid="cookie-accept"]'
+], { optional: true, timeout: 3000 });
+```
+
+### Built-in Waiting
+
+Every action automatically waits for the element to be visible before interacting:
+
+```typescript
+// No separate waitFor needed - this waits automatically
+await page.click('.dynamic-button', { timeout: 5000 });
+
+// Explicit waiting when needed
+await page.waitFor('.loading', { state: 'hidden' });
+await page.waitForNavigation();
+await page.waitForNetworkIdle();
+```
+
+### Batch Actions
+
+Execute multiple actions in a single call with full result tracking:
+
+```typescript
+const result = await page.batch([
+  { action: 'goto', url: 'https://example.com/login' },
+  { action: 'fill', selector: '#email', value: 'user@example.com' },
+  { action: 'fill', selector: '#password', value: 'secret' },
+  { action: 'submit', selector: '#login-btn' },
+  { action: 'wait', waitFor: 'navigation' },
+  { action: 'snapshot' },
+]);
+
+console.log(result.success); // true if all steps succeeded
+console.log(result.totalDurationMs); // total execution time
+console.log(result.steps[5].result); // snapshot from step 5
+```
+
+### AI-Optimized Snapshots
+
+Get the page state in a format perfect for LLMs:
+
+```typescript
+const snapshot = await page.snapshot();
+
+// Structured accessibility tree
+console.log(snapshot.accessibilityTree);
+
+// Interactive elements with refs
+console.log(snapshot.interactiveElements);
+// [{ ref: 'e1', role: 'button', name: 'Submit', selector: '...' }, ...]
+
+// Text representation for LLMs
+console.log(snapshot.text);
+// - main [ref=e1]
+//   - heading "Welcome" [ref=e2]
+//   - button "Get Started" [ref=e3]
+//   - textbox [ref=e4] placeholder="Email"
+```
+
+## Page API
+
+### Navigation
+
+```typescript
+await page.goto(url, options?)
+await page.reload(options?)
+await page.goBack(options?)
+await page.goForward(options?)
+
+const url = await page.url()
+const title = await page.title()
+```
+
+### Actions
+
+All actions accept `string | string[]` for selectors:
+
+```typescript
+await page.click(selector, options?)
+await page.fill(selector, value, options?)      // clears first by default
+await page.type(selector, text, options?)       // types character by character
+await page.select(selector, value, options?)    // native <select>
+await page.select({ trigger, option, value, match }, options?)  // custom dropdown
+await page.check(selector, options?)
+await page.uncheck(selector, options?)
+await page.submit(selector, options?)           // tries Enter, then click
+await page.press(key)
+await page.focus(selector, options?)
+await page.hover(selector, options?)
+await page.scroll(selector, options?)
+```
+
+### Waiting
+
+```typescript
+await page.waitFor(selector, { state: 'visible' | 'hidden' | 'attached' | 'detached' })
+await page.waitForNavigation(options?)
+await page.waitForNetworkIdle({ idleTime: 500 })
+```
+
+### Content
+
+```typescript
+const snapshot = await page.snapshot()
+const text = await page.text(selector?)
+const screenshot = await page.screenshot({ format: 'png', fullPage: true })
+const result = await page.evaluate(() => document.title)
+```
+
+### Files
+
+```typescript
+await page.setInputFiles(selector, [{ name: 'file.pdf', mimeType: 'application/pdf', buffer: data }])
+const download = await page.waitForDownload(() => page.click('#download-btn'))
+```
+
+### Options
+
+```typescript
+interface ActionOptions {
+  timeout?: number;   // default: 30000ms
+  optional?: boolean; // return false instead of throwing on failure
+}
+```
+
+## CLI
+
+The CLI provides session persistence for interactive workflows:
+
+```bash
+# Connect to a browser
+bp connect --provider browserbase --name my-session
+bp connect --provider generic  # auto-discovers local Chrome
+
+# Execute actions
+bp exec -s my-session '{"action":"goto","url":"https://example.com"}'
+bp exec -s my-session '[
+  {"action":"fill","selector":"#search","value":"browser automation"},
+  {"action":"submit","selector":"#search-form"}
+]'
+
+# Get page state
+bp snapshot -s my-session --format text
+bp snapshot -s my-session --format interactive
+bp text -s my-session --selector ".main-content"
+bp screenshot -s my-session --output page.png
+
+# Session management
+bp list                    # list all sessions
+bp close -s my-session     # close session
+```
+
+### CLI for AI Agents
+
+The CLI is designed for AI agent tool calls:
+
+```bash
+# Single tool call to execute a sequence
+bp exec -s session '[
+  {"action":"goto","url":"https://shop.example.com"},
+  {"action":"click","selector":["#search","[aria-label=Search]"]},
+  {"action":"fill","selector":"input[type=search]","value":"laptop"},
+  {"action":"submit","selector":"form"},
+  {"action":"snapshot"}
+]' --output json
+```
+
+Output:
+```json
+{
+  "success": true,
+  "steps": [
+    {"action": "goto", "success": true, "durationMs": 1200},
+    {"action": "click", "success": true, "durationMs": 50, "selectorUsed": "#search"},
+    {"action": "fill", "success": true, "durationMs": 30},
+    {"action": "submit", "success": true, "durationMs": 800},
+    {"action": "snapshot", "success": true, "durationMs": 100, "result": "..."}
+  ],
+  "totalDurationMs": 2180
+}
+```
+
+## Examples
+
+### Login Flow with Error Handling
+
+```typescript
+const result = await page.batch([
+  { action: 'goto', url: 'https://app.example.com/login' },
+  { action: 'fill', selector: ['#email', 'input[name=email]'], value: email },
+  { action: 'fill', selector: ['#password', 'input[name=password]'], value: password },
+  { action: 'click', selector: '.remember-me', optional: true },
+  { action: 'submit', selector: ['#login', 'button[type=submit]'] },
+], { onFail: 'stop' });
+
+if (!result.success) {
+  console.error(`Failed at step ${result.stoppedAtIndex}: ${result.steps[result.stoppedAtIndex!].error}`);
+}
+```
+
+### Custom Dropdown
+
+```typescript
+// Using the custom select config
+await page.select({
+  trigger: '.country-dropdown',
+  option: '.dropdown-option',
+  value: 'United States',
+  match: 'text',  // or 'contains' or 'value'
+});
+
+// Or compose from primitives
+await page.click('.country-dropdown');
+await page.fill('.dropdown-search', 'United');
+await page.click('.dropdown-option:has-text("United States")');
+```
+
+### Cloudflare Workers
+
+```typescript
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const browser = await connect({
+      provider: 'browserbase',
+      apiKey: env.BROWSERBASE_API_KEY,
+    });
+
+    const page = await browser.page();
+    await page.goto('https://example.com');
+    const snapshot = await page.snapshot();
+
+    await browser.close();
+
+    return Response.json({ title: snapshot.title, elements: snapshot.interactiveElements });
+  },
+};
+```
+
+### AI Agent Tool Definition
+
+```typescript
+const browserTool = {
+  name: 'browser_action',
+  description: 'Execute browser actions and get page state',
+  parameters: {
+    type: 'object',
+    properties: {
+      actions: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            action: { enum: ['goto', 'click', 'fill', 'submit', 'snapshot'] },
+            selector: { type: ['string', 'array'] },
+            value: { type: 'string' },
+            url: { type: 'string' },
+          },
+        },
+      },
+    },
+  },
+  execute: async ({ actions }) => {
+    const page = await getOrCreatePage();
+    return page.batch(actions);
+  },
+};
+```
+
+## Advanced
+
+### Direct CDP Access
+
+```typescript
+const browser = await connect({ provider: 'generic' });
+const cdp = browser.cdpClient;
+
+// Send any CDP command
+await cdp.send('Emulation.setDeviceMetricsOverride', {
+  width: 375,
+  height: 812,
+  deviceScaleFactor: 3,
+  mobile: true,
+});
+```
+
+### Tracing
+
+```typescript
+import { enableTracing } from 'browser-pilot';
+
+enableTracing({ output: 'console' });
+// [info] goto https://example.com ✓ (1200ms)
+// [info] click #submit ✓ (50ms)
+```
+
+## AI Agent Integration
+
+browser-pilot is designed for AI agents. Two resources for agent setup:
+
+- **[llms.txt](./docs/llms.txt)** - Abbreviated reference for LLM context windows
+- **[Claude Code Skill](./docs/skill/SKILL.md)** - Full skill for Claude Code agents
+
+To use with Claude Code, copy `docs/skill/` to your project or reference it in your agent's context.
+
+## Documentation
+
+See the [docs](./docs) folder for detailed documentation:
+
+- [Getting Started](./docs/getting-started.md)
+- [Providers](./docs/providers.md)
+- [Multi-Selector Guide](./docs/guides/multi-selector.md)
+- [Batch Actions](./docs/guides/batch-actions.md)
+- [Snapshots](./docs/guides/snapshots.md)
+- [CLI Reference](./docs/cli.md)
+- [API Reference](./docs/api/page.md)
+
+## License
+
+MIT

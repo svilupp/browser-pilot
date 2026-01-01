@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Step 3 - Confirm</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      padding: 20px;
+      max-width: 600px;
+      margin: 0 auto;
+    }
+
+    /* Steps indicator */
+    .steps {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 40px;
+      padding-bottom: 20px;
+      border-bottom: 1px solid #eee;
+    }
+    .step {
+      flex: 1;
+      padding: 12px 16px;
+      text-align: center;
+      background: #f5f5f5;
+      border-radius: 8px;
+      font-size: 14px;
+      color: #666;
+    }
+    .step.active {
+      background: #2196F3;
+      color: white;
+      font-weight: 500;
+    }
+    .step.completed {
+      background: #4CAF50;
+      color: white;
+    }
+
+    h1 { color: #333; margin-bottom: 30px; }
+
+    .summary {
+      background: #f8f9fa;
+      padding: 25px;
+      border-radius: 8px;
+      margin-bottom: 30px;
+    }
+    .summary-section {
+      margin-bottom: 20px;
+      padding-bottom: 20px;
+      border-bottom: 1px solid #e0e0e0;
+    }
+    .summary-section:last-child {
+      margin-bottom: 0;
+      padding-bottom: 0;
+      border-bottom: none;
+    }
+    .summary-section h3 {
+      color: #555;
+      font-size: 14px;
+      text-transform: uppercase;
+      margin: 0 0 10px 0;
+      letter-spacing: 0.5px;
+    }
+    .summary-row {
+      margin: 8px 0;
+      color: #333;
+      font-size: 15px;
+    }
+    .summary-row strong { color: #555; }
+
+    .buttons {
+      display: flex;
+      justify-content: space-between;
+    }
+    button {
+      padding: 12px 28px;
+      font-size: 16px;
+      cursor: pointer;
+      border: none;
+      border-radius: 6px;
+    }
+    #back-btn {
+      background: #e0e0e0;
+      color: #333;
+    }
+    #back-btn:hover { background: #bdbdbd; }
+    #confirm-btn {
+      background: #4CAF50;
+      color: white;
+    }
+    #confirm-btn:hover { background: #43A047; }
+
+    #success {
+      display: none;
+      margin-top: 30px;
+      padding: 30px;
+      background: #e8f5e9;
+      border-radius: 8px;
+      text-align: center;
+    }
+    #success.visible { display: block; }
+    #success h2 {
+      color: #2e7d32;
+      margin: 0 0 15px 0;
+    }
+    #success p { color: #555; margin: 10px 0; }
+    #confirmation-number {
+      font-size: 18px;
+      font-weight: 600;
+      color: #1565c0;
+      background: #e3f2fd;
+      padding: 10px 20px;
+      border-radius: 4px;
+      display: inline-block;
+      margin-top: 10px;
+    }
+
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <div class="steps">
+    <div class="step completed">1. Personal Info</div>
+    <div class="step completed">2. Address</div>
+    <div class="step active">3. Confirm</div>
+  </div>
+
+  <div id="form-section">
+    <h1>Step 3: Confirm Your Details</h1>
+
+    <div class="summary" id="summary">
+      <!-- Filled by JavaScript -->
+    </div>
+
+    <div class="buttons">
+      <button type="button" id="back-btn">Back</button>
+      <button type="button" id="confirm-btn">Confirm & Submit</button>
+    </div>
+  </div>
+
+  <div id="success">
+    <h2>Success!</h2>
+    <p>Your registration has been submitted successfully.</p>
+    <p>Please save your confirmation number:</p>
+    <div id="confirmation-number"></div>
+    <p style="margin-top: 20px; font-size: 14px; color: #777;">
+      You will receive an email confirmation shortly.
+    </p>
+  </div>
+
+  <script>
+    // Check if previous steps were completed
+    const data = JSON.parse(sessionStorage.getItem('wizard') || '{}');
+    if (!data.street) {
+      window.location.href = '/multi-page/page2.html';
+    }
+
+    // Country code to name mapping
+    const countryNames = {
+      'us': 'United States',
+      'uk': 'United Kingdom',
+      'ca': 'Canada',
+      'au': 'Australia',
+      'de': 'Germany',
+      'fr': 'France',
+      'jp': 'Japan'
+    };
+
+    // Display summary
+    const summary = document.getElementById('summary');
+    summary.innerHTML =
+      '<div class="summary-section">' +
+        '<h3>Personal Information</h3>' +
+        '<div class="summary-row"><strong>Name:</strong> ' + escapeHtml(data.firstName) + ' ' + escapeHtml(data.lastName) + '</div>' +
+        '<div class="summary-row"><strong>Email:</strong> ' + escapeHtml(data.email) + '</div>' +
+      '</div>' +
+      '<div class="summary-section">' +
+        '<h3>Address</h3>' +
+        '<div class="summary-row"><strong>Street:</strong> ' + escapeHtml(data.street) + (data.apt ? ` ${escapeHtml(data.apt)}` : '') + '</div>' +
+        '<div class="summary-row"><strong>City:</strong> ' + escapeHtml(data.city) + ', ' + escapeHtml(data.zip) + '</div>' +
+        '<div class="summary-row"><strong>Country:</strong> ' + (countryNames[data.country] || data.country) + '</div>' +
+      '</div>';
+
+    // Back button
+    document.getElementById('back-btn').addEventListener('click', () => {
+      window.location.href = '/multi-page/page2.html';
+    });
+
+    // Confirm button
+    document.getElementById('confirm-btn').addEventListener('click', () => {
+      // Generate confirmation number
+      var confirmNum = `CONF-${Math.random().toString(36).substring(2, 10).toUpperCase()}`;
+
+      // Show success
+      document.getElementById('form-section').classList.add('hidden');
+      document.getElementById('success').classList.add('visible');
+      document.getElementById('confirmation-number').textContent = confirmNum;
+
+      // Clear session storage
+      sessionStorage.removeItem('wizard');
+    });
+
+    function escapeHtml(text) {
+      if (!text) return '';
+      var div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+  </script>
+</body>
+</html>

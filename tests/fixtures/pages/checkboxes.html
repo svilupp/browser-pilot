@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Checkbox & Radio Test</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      padding: 20px;
+      max-width: 800px;
+      margin: 0 auto;
+    }
+    h1 { color: #333; }
+    h2 { color: #555; font-size: 18px; margin-bottom: 15px; }
+
+    .section {
+      margin: 30px 0;
+      padding: 25px;
+      border: 1px solid #e0e0e0;
+      border-radius: 8px;
+      background: #fafafa;
+    }
+
+    .checkbox-group, .radio-group {
+      margin: 12px 0;
+      display: flex;
+      align-items: center;
+    }
+    input[type="checkbox"], input[type="radio"] {
+      width: 18px;
+      height: 18px;
+      margin: 0;
+      cursor: pointer;
+    }
+    label {
+      cursor: pointer;
+      margin-left: 10px;
+      font-size: 15px;
+      color: #333;
+    }
+    .required { color: #e53935; font-size: 12px; margin-left: 5px; }
+
+    /* Disabled state */
+    .checkbox-group.disabled, .radio-group.disabled {
+      opacity: 0.5;
+    }
+    .checkbox-group.disabled label, .radio-group.disabled label {
+      cursor: not-allowed;
+    }
+
+    button {
+      padding: 12px 24px;
+      font-size: 16px;
+      cursor: pointer;
+      background: #4CAF50;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      margin-top: 15px;
+    }
+    button:hover { background: #43A047; }
+    button:disabled {
+      background: #ccc;
+      cursor: not-allowed;
+    }
+
+    #submit-result {
+      margin-top: 20px;
+      padding: 15px;
+      border-radius: 4px;
+      display: none;
+    }
+    #submit-result.success {
+      display: block;
+      background: #e8f5e9;
+      border: 1px solid #c8e6c9;
+      color: #2e7d32;
+    }
+    #submit-result.error {
+      display: block;
+      background: #ffebee;
+      border: 1px solid #ffcdd2;
+      color: #c62828;
+    }
+
+    #state-display {
+      margin-top: 30px;
+      padding: 20px;
+      background: #f5f5f5;
+      border-radius: 8px;
+    }
+    #state-display strong { color: #333; }
+    .state-row { margin: 8px 0; color: #555; }
+  </style>
+</head>
+<body>
+  <h1>Checkbox & Radio Button Test</h1>
+
+  <form id="preferences-form">
+    <!-- Checkboxes Section -->
+    <div class="section">
+      <h2>Preferences (Checkboxes)</h2>
+
+      <div class="checkbox-group">
+        <input type="checkbox" id="newsletter" name="preferences" value="newsletter">
+        <label for="newsletter">Subscribe to newsletter</label>
+      </div>
+
+      <div class="checkbox-group">
+        <input type="checkbox" id="notifications" name="preferences" value="notifications">
+        <label for="notifications">Enable push notifications</label>
+      </div>
+
+      <div class="checkbox-group">
+        <input type="checkbox" id="marketing" name="preferences" value="marketing">
+        <label for="marketing">Receive marketing emails</label>
+      </div>
+
+      <div class="checkbox-group">
+        <input type="checkbox" id="analytics" name="preferences" value="analytics">
+        <label for="analytics">Allow analytics tracking</label>
+      </div>
+
+      <div class="checkbox-group disabled">
+        <input type="checkbox" id="premium" name="preferences" value="premium" disabled>
+        <label for="premium">Premium features (requires upgrade)</label>
+      </div>
+
+      <div class="checkbox-group" style="margin-top: 20px; padding-top: 15px; border-top: 1px solid #ddd;">
+        <input type="checkbox" id="terms" name="terms" value="accepted" required>
+        <label for="terms">I accept the terms and conditions</label>
+        <span class="required">*</span>
+      </div>
+    </div>
+
+    <!-- Radio Buttons Section -->
+    <div class="section">
+      <h2>Preferred Contact Method (Radio)</h2>
+
+      <div class="radio-group">
+        <input type="radio" id="contact-email" name="contact" value="email">
+        <label for="contact-email">Email</label>
+      </div>
+
+      <div class="radio-group">
+        <input type="radio" id="contact-phone" name="contact" value="phone">
+        <label for="contact-phone">Phone</label>
+      </div>
+
+      <div class="radio-group">
+        <input type="radio" id="contact-sms" name="contact" value="sms">
+        <label for="contact-sms">SMS / Text Message</label>
+      </div>
+
+      <div class="radio-group">
+        <input type="radio" id="contact-mail" name="contact" value="mail">
+        <label for="contact-mail">Postal Mail</label>
+      </div>
+
+      <div class="radio-group disabled">
+        <input type="radio" id="contact-whatsapp" name="contact" value="whatsapp" disabled>
+        <label for="contact-whatsapp">WhatsApp (coming soon)</label>
+      </div>
+    </div>
+
+    <!-- Frequency Section -->
+    <div class="section">
+      <h2>Communication Frequency (Radio)</h2>
+
+      <div class="radio-group">
+        <input type="radio" id="freq-daily" name="frequency" value="daily">
+        <label for="freq-daily">Daily</label>
+      </div>
+
+      <div class="radio-group">
+        <input type="radio" id="freq-weekly" name="frequency" value="weekly">
+        <label for="freq-weekly">Weekly</label>
+      </div>
+
+      <div class="radio-group">
+        <input type="radio" id="freq-monthly" name="frequency" value="monthly">
+        <label for="freq-monthly">Monthly</label>
+      </div>
+
+      <div class="radio-group">
+        <input type="radio" id="freq-never" name="frequency" value="never">
+        <label for="freq-never">Never</label>
+      </div>
+    </div>
+
+    <button type="submit" id="save-preferences">Save Preferences</button>
+  </form>
+
+  <div id="submit-result"></div>
+
+  <div id="state-display">
+    <strong>Current State:</strong>
+    <div class="state-row">Checked boxes: <span id="checked-list">none</span></div>
+    <div class="state-row">Contact method: <span id="contact-method">none</span></div>
+    <div class="state-row">Frequency: <span id="frequency-value">none</span></div>
+    <div class="state-row">Terms accepted: <span id="terms-status">no</span></div>
+  </div>
+
+  <script>
+    const form = document.getElementById('preferences-form');
+    const checkedList = document.getElementById('checked-list');
+    const contactMethod = document.getElementById('contact-method');
+    const frequencyValue = document.getElementById('frequency-value');
+    const termsStatus = document.getElementById('terms-status');
+    const submitResult = document.getElementById('submit-result');
+
+    function updateState() {
+      // Update checked checkboxes
+      const checked = Array.from(document.querySelectorAll('input[name="preferences"]:checked'))
+        .map((el) => el.value);
+      checkedList.textContent = checked.length ? checked.join(', ') : 'none';
+
+      // Update contact method
+      const contact = document.querySelector('input[name="contact"]:checked');
+      contactMethod.textContent = contact ? contact.value : 'none';
+
+      // Update frequency
+      const frequency = document.querySelector('input[name="frequency"]:checked');
+      frequencyValue.textContent = frequency ? frequency.value : 'none';
+
+      // Update terms status
+      const terms = document.getElementById('terms');
+      termsStatus.textContent = terms.checked ? 'yes' : 'no';
+    }
+
+    // Listen for changes
+    form.addEventListener('change', updateState);
+
+    // Form submission
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+
+      const terms = document.getElementById('terms').checked;
+      if (!terms) {
+        submitResult.className = 'error';
+        submitResult.textContent = 'Please accept the terms and conditions to continue.';
+        return;
+      }
+
+      const preferences = Array.from(document.querySelectorAll('input[name="preferences"]:checked'))
+        .map((el) => el.value);
+      const contact = document.querySelector('input[name="contact"]:checked');
+      const frequency = document.querySelector('input[name="frequency"]:checked');
+
+      submitResult.className = 'success';
+      submitResult.innerHTML = '<strong>Preferences saved successfully!</strong><br><br>' +
+        'Preferences: ' + (preferences.length ? preferences.join(', ') : 'none') + '<br>' +
+        'Contact: ' + (contact ? contact.value : 'not selected') + '<br>' +
+        'Frequency: ' + (frequency ? frequency.value : 'not selected');
+    });
+
+    // Initial state
+    updateState();
+  </script>
+</body>
+</html>

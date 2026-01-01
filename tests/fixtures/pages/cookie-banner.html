@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cookie Banner Test</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      padding: 20px;
+      max-width: 800px;
+      margin: 0 auto;
+      padding-bottom: 120px;
+    }
+    h1 { color: #333; }
+    .main-content { margin: 20px 0; line-height: 1.6; }
+
+    /* Cookie Banner Styles */
+    #cookie-banner {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      background: #1a1a2e;
+      color: #fff;
+      padding: 20px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 20px;
+      z-index: 1000;
+      box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.15);
+    }
+    #cookie-banner.hidden { display: none; }
+    .cookie-text {
+      flex: 1;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+    .cookie-buttons {
+      display: flex;
+      gap: 10px;
+      flex-shrink: 0;
+    }
+    .cookie-buttons button {
+      padding: 10px 20px;
+      font-size: 14px;
+      cursor: pointer;
+      border: none;
+      border-radius: 4px;
+      font-weight: 500;
+    }
+    #accept-cookies {
+      background: #4CAF50;
+      color: white;
+    }
+    #accept-cookies:hover { background: #43A047; }
+    #reject-cookies {
+      background: transparent;
+      color: #fff;
+      border: 1px solid #fff;
+    }
+    #reject-cookies:hover { background: rgba(255, 255, 255, 0.1); }
+    #customize-cookies {
+      background: transparent;
+      color: #90caf9;
+    }
+    #customize-cookies:hover { text-decoration: underline; }
+
+    /* Status display */
+    #consent-status {
+      margin-top: 30px;
+      padding: 20px;
+      background: #f5f5f5;
+      border-radius: 8px;
+    }
+    #status {
+      font-weight: bold;
+      padding: 4px 12px;
+      border-radius: 4px;
+      display: inline-block;
+    }
+    #status.pending { background: #fff3e0; color: #e65100; }
+    #status.accepted { background: #e8f5e9; color: #2e7d32; }
+    #status.rejected { background: #ffebee; color: #c62828; }
+    #status.customizing { background: #e3f2fd; color: #1565c0; }
+
+    .reset-btn {
+      margin-top: 15px;
+      padding: 8px 16px;
+      background: #9e9e9e;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 14px;
+    }
+    .reset-btn:hover { background: #757575; }
+  </style>
+</head>
+<body>
+  <div id="main-content">
+    <h1>Cookie Banner Test</h1>
+    <div class="main-content">
+      <p>This page tests cookie consent banner interactions.</p>
+      <p>The cookie banner appears at the bottom of the page and can be accepted, rejected, or customized.</p>
+      <p>Your preference is saved to localStorage and persists across page reloads.</p>
+    </div>
+
+    <div id="consent-status">
+      <strong>Consent Status:</strong>
+      <span id="status" class="pending">pending</span>
+      <br><br>
+      <button class="reset-btn" id="reset-consent">Reset Consent</button>
+    </div>
+  </div>
+
+  <div id="cookie-banner">
+    <div class="cookie-text">
+      We use cookies to improve your experience. By continuing to use this site, you agree to our use of cookies.
+      <a href="#" style="color: #90caf9;">Learn more</a>
+    </div>
+    <div class="cookie-buttons">
+      <button id="customize-cookies">Customize</button>
+      <button id="reject-cookies">Reject All</button>
+      <button id="accept-cookies">Accept All</button>
+    </div>
+  </div>
+
+  <script>
+    const banner = document.getElementById('cookie-banner');
+    const status = document.getElementById('status');
+
+    function updateStatus(state) {
+      status.textContent = state;
+      status.className = state;
+    }
+
+    function hideBanner() {
+      banner.classList.add('hidden');
+    }
+
+    function showBanner() {
+      banner.classList.remove('hidden');
+    }
+
+    // Accept cookies
+    document.getElementById('accept-cookies').addEventListener('click', () => {
+      hideBanner();
+      updateStatus('accepted');
+      localStorage.setItem('cookieConsent', 'accepted');
+    });
+
+    // Reject cookies
+    document.getElementById('reject-cookies').addEventListener('click', () => {
+      hideBanner();
+      updateStatus('rejected');
+      localStorage.setItem('cookieConsent', 'rejected');
+    });
+
+    // Customize cookies (just updates status for testing)
+    document.getElementById('customize-cookies').addEventListener('click', () => {
+      updateStatus('customizing');
+      // In a real app, this would open a settings modal
+    });
+
+    // Reset consent
+    document.getElementById('reset-consent').addEventListener('click', () => {
+      localStorage.removeItem('cookieConsent');
+      updateStatus('pending');
+      showBanner();
+    });
+
+    // Check saved consent on load
+    const savedConsent = localStorage.getItem('cookieConsent');
+    if (savedConsent) {
+      hideBanner();
+      updateStatus(savedConsent);
+    }
+  </script>
+</body>
+</html>
