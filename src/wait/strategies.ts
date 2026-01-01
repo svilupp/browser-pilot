@@ -13,6 +13,8 @@ export interface WaitOptions {
   timeout?: number;
   /** Polling interval in milliseconds */
   pollInterval?: number;
+  /** Execution context ID for iframe evaluation */
+  contextId?: number;
 }
 
 export interface WaitResult {
@@ -61,8 +63,12 @@ function deepQuery(selector, root = document) {
  * Check if an element is visible in the viewport
  * Pierces shadow DOM boundaries automatically
  */
-async function isElementVisible(cdp: CDPClient, selector: string): Promise<boolean> {
-  const result = await cdp.send<{ result: { value: boolean } }>('Runtime.evaluate', {
+async function isElementVisible(
+  cdp: CDPClient,
+  selector: string,
+  contextId?: number
+): Promise<boolean> {
+  const params: Record<string, unknown> = {
     expression: `(() => {
       ${DEEP_QUERY_SCRIPT}
       const el = deepQuery(${JSON.stringify(selector)});
@@ -75,7 +81,13 @@ async function isElementVisible(cdp: CDPClient, selector: string): Promise<boole
       return rect.width > 0 && rect.height > 0;
     })()`,
     returnByValue: true,
-  });
+  };
+
+  if (contextId !== undefined) {
+    params['contextId'] = contextId;
+  }
+
+  const result = await cdp.send<{ result: { value: boolean } }>('Runtime.evaluate', params);
 
   return result.result.value === true;
 }
@@ -84,14 +96,24 @@ async function isElementVisible(cdp: CDPClient, selector: string): Promise<boole
  * Check if an element exists in the DOM
  * Pierces shadow DOM boundaries automatically
  */
-async function isElementAttached(cdp: CDPClient, selector: string): Promise<boolean> {
-  const result = await cdp.send<{ result: { value: boolean } }>('Runtime.evaluate', {
+async function isElementAttached(
+  cdp: CDPClient,
+  selector: string,
+  contextId?: number
+): Promise<boolean> {
+  const params: Record<string, unknown> = {
     expression: `(() => {
       ${DEEP_QUERY_SCRIPT}
       return deepQuery(${JSON.stringify(selector)}) !== null;
     })()`,
     returnByValue: true,
-  });
+  };
+
+  if (contextId !== undefined) {
+    params['contextId'] = contextId;
+  }
+
+  const result = await cdp.send<{ result: { value: boolean } }>('Runtime.evaluate', params);
 
   return result.result.value === true;
 }
@@ -111,7 +133,7 @@ export async function waitForElement(
   selector: string,
   options: WaitOptions = {}
 ): Promise<WaitResult> {
-  const { state = 'visible', timeout = 30000, pollInterval = 100 } = options;
+  const { state = 'visible', timeout = 30000, pollInterval = 100, contextId } = options;
 
   const startTime = Date.now();
   const deadline = startTime + timeout;
@@ -121,16 +143,16 @@ export async function waitForElement(
 
     switch (state) {
       case 'visible':
-        conditionMet = await isElementVisible(cdp, selector);
+        conditionMet = await isElementVisible(cdp, selector, contextId);
         break;
       case 'hidden':
-        conditionMet = !(await isElementVisible(cdp, selector));
+        conditionMet = !(await isElementVisible(cdp, selector, contextId));
         break;
       case 'attached':
-        conditionMet = await isElementAttached(cdp, selector);
+        conditionMet = await isElementAttached(cdp, selector, contextId);
         break;
       case 'detached':
-        conditionMet = !(await isElementAttached(cdp, selector));
+        conditionMet = !(await isElementAttached(cdp, selector, contextId));
         break;
     }
 
@@ -153,7 +175,7 @@ export async function waitForAnyElement(
   selectors: string[],
   options: WaitOptions = {}
 ): Promise<{ success: boolean; selector?: string; waitedMs: number }> {
-  const { state = 'visible', timeout = 30000, pollInterval = 100 } = options;
+  const { state = 'visible', timeout = 30000, pollInterval = 100, contextId } = options;
 
   const startTime = Date.now();
   const deadline = startTime + timeout;
@@ -164,16 +186,16 @@ export async function waitForAnyElement(
 
       switch (state) {
         case 'visible':
-          conditionMet = await isElementVisible(cdp, selector);
+          conditionMet = await isElementVisible(cdp, selector, contextId);
           break;
         case 'hidden':
-          conditionMet = !(await isElementVisible(cdp, selector));
+          conditionMet = !(await isElementVisible(cdp, selector, contextId));
           break;
         case 'attached':
-          conditionMet = await isElementAttached(cdp, selector);
+          conditionMet = await isElementAttached(cdp, selector, contextId);
           break;
         case 'detached':
-          conditionMet = !(await isElementAttached(cdp, selector));
+          conditionMet = !(await isElementAttached(cdp, selector, contextId));
           break;
       }
 

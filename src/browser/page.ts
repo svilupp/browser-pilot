@@ -72,6 +72,10 @@ export class Page {
   private currentFrame: string | null = null;
   /** Stored frame document node IDs for context switching */
   private frameContexts: Map<string, number> = new Map();
+  /** Map of frameId → executionContextId for JS evaluation in frames */
+  private frameExecutionContexts: Map<string, number> = new Map();
+  /** Current frame's execution context ID (null = main frame default) */
+  private currentFrameContextId: number | null = null;
 
   constructor(cdp: CDPClient) {
     this.cdp = cdp;
@@ -82,6 +86,28 @@ export class Page {
    * Initialize the page (enable required CDP domains)
    */
   async init(): Promise<void> {
+    // Listen for execution contexts to track iframe contexts
+    this.cdp.on('Runtime.executionContextCreated', (params) => {
+      const context = params['context'] as {
+        id: number;
+        auxData?: { frameId?: string; isDefault?: boolean };
+      };
+      if (context.auxData?.frameId && context.auxData?.isDefault) {
+        this.frameExecutionContexts.set(context.auxData.frameId, context.id);
+      }
+    });
+
+    // Clean up destroyed contexts
+    this.cdp.on('Runtime.executionContextDestroyed', (params) => {
+      const contextId = params['executionContextId'] as number;
+      for (const [frameId, ctxId] of this.frameExecutionContexts.entries()) {
+        if (ctxId === contextId) {
+          this.frameExecutionContexts.delete(frameId);
+          break;
+        }
+      }
+    });
+
     await Promise.all([
       this.cdp.send('Page.enable'),
       this.cdp.send('DOM.enable'),
@@ -226,10 +252,8 @@ export class Page {
       await this.scrollIntoView(element.nodeId);
 
       // Check if this is a form submit button and handle accordingly
-      const submitResult = await this.cdp.send<{ result: { value?: { isSubmit?: boolean } } }>(
-        'Runtime.evaluate',
-        {
-          expression: `(() => {
+      const submitResult = await this.evaluateInFrame<{ result: { value?: { isSubmit?: boolean } } }>(
+        `(() => {
           const el = document.querySelector(${JSON.stringify(element.selector)});
           if (!el) return { isSubmit: false };
 
@@ -243,9 +267,7 @@ export class Page {
             return { isSubmit: true };
           }
           return { isSubmit: false };
-        })()`,
-          returnByValue: true,
-        }
+        })()`
       );
 
       const isSubmit = submitResult.result.value?.isSubmit;
@@ -282,30 +304,30 @@ export class Page {
 
       // Clear existing content if requested
       if (clear) {
-        await this.cdp.send('Runtime.evaluate', {
-          expression: `(() => {
+        await this.evaluateInFrame(
+          `(() => {
             const el = document.querySelector(${JSON.stringify(element.selector)});
             if (el) {
               el.value = '';
               el.dispatchEvent(new Event('input', { bubbles: true }));
             }
-          })()`,
-        });
+          })()`
+        );
       }
 
       // Insert the text
       await this.cdp.send('Input.insertText', { text: value });
 
       // Dispatch input event
-      await this.cdp.send('Runtime.evaluate', {
-        expression: `(() => {
+      await this.evaluateInFrame(
+        `(() => {
           const el = document.querySelector(${JSON.stringify(element.selector)});
           if (el) {
             el.dispatchEvent(new Event('input', { bubbles: true }));
             el.dispatchEvent(new Event('change', { bubbles: true }));
           }
-        })()`,
-      });
+        })()`
+      );
 
       return true;
     });
@@ -687,7 +709,7 @@ export class Page {
       throw new ElementNotFoundError(selector);
     }
 
-    // Get the iframe's content document
+    // Get the iframe's content document and frameId
     const descResult = await this.cdp.send<{
       node: {
         contentDocument?: { nodeId: number; backendNodeId: number };
@@ -713,6 +735,23 @@ export class Page {
     // Update root node to the iframe's document
     this.rootNodeId = descResult.node.contentDocument.nodeId;
 
+    // Get the execution context for this frame
+    // The frameId from DOM.describeNode points to the iframe's content frame
+    if (descResult.node.frameId) {
+      let contextId = this.frameExecutionContexts.get(descResult.node.frameId);
+
+      // If context not found in map, wait briefly for it to be created
+      // (context creation events may arrive slightly after DOM is ready)
+      if (!contextId) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        contextId = this.frameExecutionContexts.get(descResult.node.frameId);
+      }
+
+      if (contextId) {
+        this.currentFrameContextId = contextId;
+      }
+    }
+
     // Clear ref map since we're in a new context
     this.refMap.clear();
 
@@ -725,6 +764,7 @@ export class Page {
   async switchToMain(): Promise<void> {
     this.currentFrame = null;
     this.rootNodeId = null; // Will be re-fetched on next query
+    this.currentFrameContextId = null;
     this.refMap.clear();
   }
 
@@ -744,7 +784,11 @@ export class Page {
     const { timeout = DEFAULT_TIMEOUT, state = 'visible' } = options;
     const selectors = Array.isArray(selector) ? selector : [selector];
 
-    const result = await waitForAnyElement(this.cdp, selectors, { state, timeout });
+    const result = await waitForAnyElement(this.cdp, selectors, {
+      state,
+      timeout,
+      contextId: this.currentFrameContextId ?? undefined,
+    });
 
     if (!result.success && !options.optional) {
       throw new TimeoutError(`Timeout waiting for ${selectors.join(' or ')} to be ${state}`);
@@ -786,7 +830,7 @@ export class Page {
   // ============ JavaScript Execution ============
 
   /**
-   * Evaluate JavaScript in the page context
+   * Evaluate JavaScript in the page context (or current frame context if in iframe)
    */
   async evaluate<T = unknown, Args extends unknown[] = unknown[]>(
     expression: string | ((...args: Args) => T),
@@ -801,14 +845,21 @@ export class Page {
       script = expression;
     }
 
-    const result = await this.cdp.send<{
-      result: RemoteObject;
-      exceptionDetails?: { text: string };
-    }>('Runtime.evaluate', {
+    const params: Record<string, unknown> = {
       expression: script,
       returnByValue: true,
       awaitPromise: true,
-    });
+    };
+
+    // Use iframe execution context if we're in a frame
+    if (this.currentFrameContextId !== null) {
+      params['contextId'] = this.currentFrameContextId;
+    }
+
+    const result = await this.cdp.send<{
+      result: RemoteObject;
+      exceptionDetails?: { text: string };
+    }>('Runtime.evaluate', params);
 
     if (result.exceptionDetails) {
       throw new Error(`Evaluation failed: ${result.exceptionDetails.text}`);
@@ -864,10 +915,7 @@ export class Page {
       ? `document.querySelector(${JSON.stringify(selector)})?.innerText ?? ''`
       : 'document.body.innerText';
 
-    const result = await this.cdp.send<{ result: RemoteObject }>('Runtime.evaluate', {
-      expression,
-      returnByValue: true,
-    });
+    const result = await this.evaluateInFrame<{ result: RemoteObject }>(expression);
 
     return (result.result.value as string) ?? '';
   }
@@ -1735,6 +1783,9 @@ export class Page {
     // Reset internal state first
     this.rootNodeId = null;
     this.refMap.clear();
+    this.currentFrame = null;
+    this.currentFrameContextId = null;
+    this.frameContexts.clear();
 
     // Stop any pending loading
     try {
@@ -1854,6 +1905,7 @@ export class Page {
     const result = await waitForAnyElement(this.cdp, cssSelectors, {
       state: 'visible',
       timeout,
+      contextId: this.currentFrameContextId ?? undefined,
     });
 
     if (!result.success || !result.selector) {
@@ -1885,13 +1937,13 @@ export class Page {
     }
 
     // Fall back to deep query for shadow DOM elements
-    const deepQueryResult = await this.cdp.send<{ result: RemoteObject }>('Runtime.evaluate', {
-      expression: `(() => {
+    const deepQueryResult = await this.evaluateInFrame<{ result: RemoteObject }>(
+      `(() => {
         ${DEEP_QUERY_SCRIPT}
         return deepQuery(${JSON.stringify(result.selector)});
       })()`,
-      returnByValue: false,
-    });
+      { returnByValue: false }
+    );
 
     if (!deepQueryResult.result.objectId) {
       return null;
@@ -1930,6 +1982,27 @@ export class Page {
       depth: 0,
     });
     this.rootNodeId = doc.root.nodeId;
+  }
+
+  /**
+   * Execute Runtime.evaluate in the current frame context
+   * Automatically injects contextId when in an iframe
+   */
+  private async evaluateInFrame<T>(
+    expression: string,
+    options: { returnByValue?: boolean; awaitPromise?: boolean } = {}
+  ): Promise<T> {
+    const params: Record<string, unknown> = {
+      expression,
+      returnByValue: options.returnByValue ?? true,
+      awaitPromise: options.awaitPromise ?? false,
+    };
+
+    if (this.currentFrameContextId !== null) {
+      params['contextId'] = this.currentFrameContextId;
+    }
+
+    return this.cdp.send<T>('Runtime.evaluate', params);
   }
 
   /**
