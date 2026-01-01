@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Step 1 - Personal Info</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      padding: 20px;
+      max-width: 600px;
+      margin: 0 auto;
+    }
+
+    /* Steps indicator */
+    .steps {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 40px;
+      padding-bottom: 20px;
+      border-bottom: 1px solid #eee;
+    }
+    .step {
+      flex: 1;
+      padding: 12px 16px;
+      text-align: center;
+      background: #f5f5f5;
+      border-radius: 8px;
+      font-size: 14px;
+      color: #666;
+    }
+    .step.active {
+      background: #2196F3;
+      color: white;
+      font-weight: 500;
+    }
+    .step.completed {
+      background: #4CAF50;
+      color: white;
+    }
+
+    h1 { color: #333; margin-bottom: 30px; }
+
+    .form-group {
+      margin-bottom: 20px;
+    }
+    label {
+      display: block;
+      margin-bottom: 8px;
+      font-weight: 500;
+      color: #555;
+    }
+    input {
+      width: 100%;
+      padding: 12px;
+      font-size: 16px;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      box-sizing: border-box;
+    }
+    input:focus {
+      outline: none;
+      border-color: #2196F3;
+      box-shadow: 0 0 0 3px rgba(33, 150, 243, 0.1);
+    }
+    .error-msg {
+      color: #e53935;
+      font-size: 14px;
+      margin-top: 5px;
+      display: none;
+    }
+    .error-msg.visible { display: block; }
+
+    .buttons {
+      margin-top: 30px;
+      display: flex;
+      justify-content: flex-end;
+    }
+    button {
+      padding: 12px 28px;
+      font-size: 16px;
+      cursor: pointer;
+      border: none;
+      border-radius: 6px;
+    }
+    #next-btn {
+      background: #2196F3;
+      color: white;
+    }
+    #next-btn:hover { background: #1976D2; }
+  </style>
+</head>
+<body>
+  <div class="steps">
+    <div class="step active">1. Personal Info</div>
+    <div class="step">2. Address</div>
+    <div class="step">3. Confirm</div>
+  </div>
+
+  <h1>Step 1: Personal Information</h1>
+
+  <form id="step1-form">
+    <div class="form-group">
+      <label for="first-name">First Name</label>
+      <input type="text" id="first-name" name="firstName" placeholder="Enter your first name" required>
+      <div class="error-msg" id="first-name-error">Please enter your first name</div>
+    </div>
+
+    <div class="form-group">
+      <label for="last-name">Last Name</label>
+      <input type="text" id="last-name" name="lastName" placeholder="Enter your last name" required>
+      <div class="error-msg" id="last-name-error">Please enter your last name</div>
+    </div>
+
+    <div class="form-group">
+      <label for="email">Email Address</label>
+      <input type="email" id="email" name="email" placeholder="Enter your email" required>
+      <div class="error-msg" id="email-error">Please enter a valid email address</div>
+    </div>
+
+    <div class="buttons">
+      <button type="submit" id="next-btn">Next Step</button>
+    </div>
+  </form>
+
+  <script>
+    const form = document.getElementById('step1-form');
+
+    // Pre-fill from session storage if returning
+    const saved = JSON.parse(sessionStorage.getItem('wizard') || '{}');
+    if (saved.firstName) {
+      document.getElementById('first-name').value = saved.firstName;
+    }
+    if (saved.lastName) {
+      document.getElementById('last-name').value = saved.lastName;
+    }
+    if (saved.email) {
+      document.getElementById('email').value = saved.email;
+    }
+
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+
+      // Clear errors
+      document.querySelectorAll('.error-msg').forEach((el) => {
+        el.classList.remove('visible');
+      });
+
+      const firstName = document.getElementById('first-name').value.trim();
+      const lastName = document.getElementById('last-name').value.trim();
+      const email = document.getElementById('email').value.trim();
+
+      let valid = true;
+
+      if (!firstName) {
+        document.getElementById('first-name-error').classList.add('visible');
+        valid = false;
+      }
+
+      if (!lastName) {
+        document.getElementById('last-name-error').classList.add('visible');
+        valid = false;
+      }
+
+      if (!email || !email.includes('@')) {
+        document.getElementById('email-error').classList.add('visible');
+        valid = false;
+      }
+
+      if (!valid) return;
+
+      // Store in sessionStorage for multi-page flow
+      const data = { firstName, lastName, email };
+      sessionStorage.setItem('wizard', JSON.stringify(data));
+
+      // Navigate to step 2
+      window.location.href = '/multi-page/page2.html';
+    });
+  </script>
+</body>
+</html>

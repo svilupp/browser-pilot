@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Infinite Scroll Test Page</title>
+  <style>
+    body { font-family: system-ui, sans-serif; padding: 20px; margin: 0; }
+    h1 { color: #333; }
+    .stats { padding: 10px; background: #e3f2fd; border-radius: 4px; margin-bottom: 20px; }
+    .item-list { list-style: none; padding: 0; }
+    .item {
+      padding: 15px;
+      margin-bottom: 10px;
+      background: #fff;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .item:nth-child(odd) { background: #f5f5f5; }
+    .item-id { font-weight: bold; color: #2196f3; }
+    .item-title { flex: 1; margin-left: 15px; }
+    .load-trigger {
+      padding: 20px;
+      text-align: center;
+      background: #fff3e0;
+      border: 2px dashed #ff9800;
+      border-radius: 4px;
+      margin-top: 20px;
+    }
+    .loading {
+      text-align: center;
+      padding: 20px;
+      color: #666;
+    }
+    .loading::after {
+      content: '';
+      animation: dots 1.5s infinite;
+    }
+    @keyframes dots {
+      0%, 20% { content: '.'; }
+      40% { content: '..'; }
+      60%, 100% { content: '...'; }
+    }
+    .end-message {
+      text-align: center;
+      padding: 20px;
+      background: #e8f5e9;
+      border-radius: 4px;
+      color: #2e7d32;
+    }
+  </style>
+</head>
+<body>
+  <h1>Infinite Scroll Test Page</h1>
+
+  <div class="stats">
+    <span>Total items loaded: <strong id="item-count">0</strong></span>
+    <span style="margin-left: 20px;">Page: <strong id="page-number">0</strong></span>
+  </div>
+
+  <ul id="item-list" class="item-list"></ul>
+
+  <div id="load-trigger" class="load-trigger" data-testid="load-more-trigger">
+    Scroll here to load more items
+  </div>
+
+  <div id="loading" class="loading" style="display: none;">
+    Loading more items
+  </div>
+
+  <div id="end-message" class="end-message" style="display: none;">
+    All items loaded!
+  </div>
+
+  <script>
+    const itemList = document.getElementById('item-list');
+    const loadTrigger = document.getElementById('load-trigger');
+    const loadingEl = document.getElementById('loading');
+    const endMessage = document.getElementById('end-message');
+    const itemCountEl = document.getElementById('item-count');
+    const pageNumberEl = document.getElementById('page-number');
+
+    const ITEMS_PER_PAGE = 10;
+    const MAX_PAGES = 5;
+    let currentPage = 0;
+    let isLoading = false;
+    let allLoaded = false;
+
+    // Generate fake items
+    function generateItems(page) {
+      const items = [];
+      const startId = page * ITEMS_PER_PAGE + 1;
+      for (let i = 0; i < ITEMS_PER_PAGE; i++) {
+        const id = startId + i;
+        items.push({
+          id,
+          title: `Item ${id}: ${getRandomTitle()}`,
+          date: new Date(Date.now() - Math.random() * 10000000000).toLocaleDateString()
+        });
+      }
+      return items;
+    }
+
+    function getRandomTitle() {
+      const titles = [
+        'Introduction to Web Development',
+        'Advanced CSS Techniques',
+        'JavaScript Best Practices',
+        'Understanding React Hooks',
+        'Node.js Performance Tips',
+        'Database Optimization Guide',
+        'API Design Patterns',
+        'Testing Strategies',
+        'DevOps Fundamentals',
+        'Cloud Architecture Basics'
+      ];
+      return titles[Math.floor(Math.random() * titles.length)];
+    }
+
+    // Render items to the list
+    function renderItems(items) {
+      items.forEach(item => {
+        const li = document.createElement('li');
+        li.className = 'item';
+        li.setAttribute('data-testid', `item-${item.id}`);
+        li.innerHTML = `
+          <span class="item-id">#${item.id}</span>
+          <span class="item-title">${item.title}</span>
+          <span class="item-date">${item.date}</span>
+        `;
+        itemList.appendChild(li);
+      });
+    }
+
+    // Load more items
+    async function loadMore() {
+      if (isLoading || allLoaded) return;
+
+      isLoading = true;
+      loadTrigger.style.display = 'none';
+      loadingEl.style.display = 'block';
+
+      // Simulate network delay
+      await new Promise(r => setTimeout(r, 500 + Math.random() * 500));
+
+      currentPage++;
+      const items = generateItems(currentPage);
+      renderItems(items);
+
+      // Update stats
+      itemCountEl.textContent = currentPage * ITEMS_PER_PAGE;
+      pageNumberEl.textContent = currentPage;
+
+      isLoading = false;
+      loadingEl.style.display = 'none';
+
+      if (currentPage >= MAX_PAGES) {
+        allLoaded = true;
+        endMessage.style.display = 'block';
+      } else {
+        loadTrigger.style.display = 'block';
+      }
+    }
+
+    // Intersection Observer for infinite scroll
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach(entry => {
+          if (entry.isIntersecting && !isLoading && !allLoaded) {
+            loadMore();
+          }
+        });
+      },
+      { rootMargin: '100px' }
+    );
+
+    observer.observe(loadTrigger);
+
+    // Load initial items
+    loadMore();
+  </script>
+</body>
+</html>

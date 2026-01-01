@@ -1,0 +1,90 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-and-type:
+    name: Lint & Type Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Type check
+        run: bun run typecheck
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        test-type: [unit, integration, cli]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Install Chrome
+        if: matrix.test-type != 'unit'
+        uses: browser-actions/setup-chrome@v1
+        with:
+          chrome-version: stable
+
+      - name: Run ${{ matrix.test-type }} tests
+        run: bun test:${{ matrix.test-type }}
+        env:
+          CI: true
+          TEST_TIMEOUT: 60000
+
+      - name: Upload failure screenshots
+        if: failure() && matrix.test-type != 'unit'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.test-type }}-failure-screenshots
+          path: tests/screenshots/
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # Build check to ensure package builds correctly
+  build:
+    name: Build Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Build check (type check + verify exports)
+        run: |
+          bun run typecheck
+          # Verify main entry point is valid
+          bun -e "import('./index.ts')"
+          echo "Build check passed!"

@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Form Test Page</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      padding: 20px;
+      max-width: 500px;
+      margin: 0 auto;
+    }
+    h1 { color: #333; margin-bottom: 30px; }
+    .form-group {
+      margin-bottom: 20px;
+    }
+    label {
+      display: block;
+      margin-bottom: 5px;
+      font-weight: 500;
+      color: #555;
+    }
+    input, textarea {
+      width: 100%;
+      padding: 10px;
+      font-size: 16px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      box-sizing: border-box;
+    }
+    input:focus, textarea:focus {
+      outline: none;
+      border-color: #2196F3;
+      box-shadow: 0 0 0 2px rgba(33, 150, 243, 0.1);
+    }
+    textarea { resize: vertical; min-height: 100px; }
+    button {
+      padding: 12px 24px;
+      font-size: 16px;
+      cursor: pointer;
+      background: #4CAF50;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      width: 100%;
+    }
+    button:hover { background: #43A047; }
+    #result {
+      margin-top: 20px;
+      padding: 15px;
+      border-radius: 4px;
+      display: none;
+    }
+    #result.success {
+      display: block;
+      background: #e8f5e9;
+      border: 1px solid #c8e6c9;
+      color: #2e7d32;
+    }
+    #result.error {
+      display: block;
+      background: #ffebee;
+      border: 1px solid #ffcdd2;
+      color: #c62828;
+    }
+    .required { color: #e53935; }
+  </style>
+</head>
+<body>
+  <h1>Contact Form</h1>
+
+  <form id="test-form">
+    <div class="form-group">
+      <label for="name">Name <span class="required">*</span></label>
+      <input type="text" id="name" name="name" placeholder="Enter your name" required>
+    </div>
+
+    <div class="form-group">
+      <label for="email">Email <span class="required">*</span></label>
+      <input type="email" id="email" name="email" placeholder="Enter your email" required>
+    </div>
+
+    <div class="form-group">
+      <label for="phone">Phone (optional)</label>
+      <input type="tel" id="phone" name="phone" placeholder="Enter your phone number">
+    </div>
+
+    <div class="form-group">
+      <label for="message">Message</label>
+      <textarea id="message" name="message" placeholder="Enter your message" rows="4"></textarea>
+    </div>
+
+    <button type="submit" id="submit-btn">Submit Form</button>
+  </form>
+
+  <div id="result"></div>
+
+  <script>
+    const form = document.getElementById('test-form');
+    const result = document.getElementById('result');
+
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+
+      const name = document.getElementById('name').value.trim();
+      const email = document.getElementById('email').value.trim();
+      const phone = document.getElementById('phone').value.trim();
+      const message = document.getElementById('message').value.trim();
+
+      // Validation
+      if (!name) {
+        showError('Please enter your name');
+        return;
+      }
+
+      if (!email) {
+        showError('Please enter your email');
+        return;
+      }
+
+      if (!email.includes('@')) {
+        showError('Please enter a valid email address');
+        return;
+      }
+
+      // Success
+      result.className = 'success';
+      result.innerHTML = '<strong>Form submitted successfully!</strong><br>' +
+        'Name: ' + escapeHtml(name) + '<br>' +
+        'Email: ' + escapeHtml(email) +
+        (phone ? `<br>Phone: ${escapeHtml(phone)}` : '') +
+        (message ? `<br>Message: ${escapeHtml(message)}` : '');
+
+      // Clear form
+      form.reset();
+    });
+
+    function showError(msg) {
+      result.className = 'error';
+      result.textContent = msg;
+    }
+
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+  </script>
+</body>
+</html>

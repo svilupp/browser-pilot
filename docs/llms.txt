@@ -1,0 +1,87 @@
+# browser-pilot
+
+> Lightweight CDP-based browser automation for AI agents. Zero dependencies. Works in Node.js, Bun, and Cloudflare Workers.
+
+## CLI Usage
+
+```bash
+# Install
+bun add browser-pilot  # or: npm install browser-pilot
+
+# Connect to browser
+bp connect --provider generic                    # Local Chrome (needs --remote-debugging-port=9222)
+bp connect --provider browserbase --api-key $KEY # Cloud browser
+
+# Execute actions (single or batch)
+bp exec '{"action":"goto","url":"https://example.com"}'
+bp exec '[{"action":"fill","selector":"#q","value":"test"},{"action":"submit","selector":"form"}]' -o json
+
+# Get page state
+bp snapshot --format text          # Accessibility tree
+bp snapshot --format interactive   # Clickable elements only
+
+# Session management
+bp list                            # List sessions
+bp close -s <session-id>           # Close session
+```
+
+## Action DSL
+
+Actions are JSON objects with `action` field. Selectors can be `string` or `string[]` (tries each until one works).
+
+| Action | Example |
+|--------|---------|
+| goto | `{"action":"goto","url":"https://example.com"}` |
+| click | `{"action":"click","selector":"#btn"}` |
+| fill | `{"action":"fill","selector":"#email","value":"user@example.com"}` |
+| type | `{"action":"type","selector":"#search","value":"query","delay":50}` |
+| select | `{"action":"select","selector":"#country","value":"US"}` |
+| check | `{"action":"check","selector":"#agree"}` |
+| submit | `{"action":"submit","selector":"form"}` |
+| press | `{"action":"press","key":"Enter"}` |
+| wait | `{"action":"wait","waitFor":"networkIdle"}` |
+| snapshot | `{"action":"snapshot"}` |
+
+Options: `timeout` (ms), `optional` (boolean - skip if not found).
+
+## Multi-Selector Pattern
+
+```json
+{"action":"click","selector":["#submit","button[type=submit]",".submit-btn"]}
+```
+
+## Common Patterns
+
+Login:
+```json
+[
+  {"action":"goto","url":"https://app.example.com/login"},
+  {"action":"fill","selector":"#email","value":"user@example.com"},
+  {"action":"fill","selector":"#password","value":"password"},
+  {"action":"submit","selector":"form"},
+  {"action":"wait","waitFor":"navigation"},
+  {"action":"snapshot"}
+]
+```
+
+Cookie consent (optional):
+```json
+{"action":"click","selector":["#accept-cookies",".cookie-accept"],"optional":true,"timeout":3000}
+```
+
+## Output
+
+With `-o json`, returns:
+```json
+{
+  "success": true,
+  "steps": [{"action":"goto","success":true,"durationMs":500}],
+  "totalDurationMs": 500
+}
+```
+
+## Documentation
+
+- Full skill: docs/skill/SKILL.md
+- API reference: docs/api/page.md
+- CLI reference: docs/cli.md

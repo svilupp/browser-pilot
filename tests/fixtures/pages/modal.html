@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Modal Test</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      padding: 20px;
+      max-width: 800px;
+      margin: 0 auto;
+    }
+    h1 { color: #333; }
+    .intro { color: #666; margin-bottom: 30px; }
+
+    /* Trigger button */
+    #open-modal {
+      padding: 15px 30px;
+      font-size: 16px;
+      cursor: pointer;
+      background: #2196F3;
+      color: white;
+      border: none;
+      border-radius: 4px;
+    }
+    #open-modal:hover { background: #1976D2; }
+
+    /* Modal overlay */
+    .modal-overlay {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.5);
+      z-index: 1000;
+      justify-content: center;
+      align-items: center;
+    }
+    .modal-overlay.open {
+      display: flex;
+    }
+
+    /* Modal content */
+    .modal {
+      background: white;
+      padding: 30px;
+      border-radius: 12px;
+      min-width: 400px;
+      max-width: 90%;
+      box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+      animation: modalIn 0.2s ease-out;
+    }
+    @keyframes modalIn {
+      from {
+        opacity: 0;
+        transform: scale(0.95) translateY(-10px);
+      }
+      to {
+        opacity: 1;
+        transform: scale(1) translateY(0);
+      }
+    }
+    .modal h2 {
+      margin: 0 0 20px 0;
+      color: #333;
+    }
+    .modal .form-group {
+      margin-bottom: 20px;
+    }
+    .modal label {
+      display: block;
+      margin-bottom: 5px;
+      font-weight: 500;
+      color: #555;
+    }
+    .modal input {
+      width: 100%;
+      padding: 10px;
+      font-size: 16px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      box-sizing: border-box;
+    }
+    .modal input:focus {
+      outline: none;
+      border-color: #2196F3;
+    }
+    .modal-buttons {
+      display: flex;
+      gap: 10px;
+      margin-top: 25px;
+      justify-content: flex-end;
+    }
+    .modal-buttons button {
+      padding: 10px 20px;
+      font-size: 14px;
+      cursor: pointer;
+      border-radius: 4px;
+      border: none;
+    }
+    #modal-cancel {
+      background: #e0e0e0;
+      color: #333;
+    }
+    #modal-cancel:hover { background: #bdbdbd; }
+    #modal-submit {
+      background: #4CAF50;
+      color: white;
+    }
+    #modal-submit:hover { background: #43A047; }
+
+    /* Result display */
+    #result {
+      margin-top: 30px;
+      padding: 20px;
+      border-radius: 8px;
+      display: none;
+    }
+    #result.visible {
+      display: block;
+      background: #e8f5e9;
+      border: 1px solid #c8e6c9;
+    }
+    #result strong {
+      color: #2e7d32;
+    }
+  </style>
+</head>
+<body>
+  <h1>Modal Dialog Test</h1>
+  <p class="intro">Click the button below to open a modal dialog. Fill in the form and submit it.</p>
+
+  <button id="open-modal">Open Contact Modal</button>
+
+  <div id="result"></div>
+
+  <!-- Modal -->
+  <div class="modal-overlay" id="modal-overlay">
+    <div class="modal" role="dialog" aria-labelledby="modal-title">
+      <h2 id="modal-title">Contact Us</h2>
+      <form id="modal-form">
+        <div class="form-group">
+          <label for="modal-name">Your Name</label>
+          <input type="text" id="modal-name" name="name" placeholder="Enter your name" required>
+        </div>
+        <div class="form-group">
+          <label for="modal-email">Your Email</label>
+          <input type="email" id="modal-email" name="email" placeholder="Enter your email" required>
+        </div>
+        <div class="form-group">
+          <label for="modal-subject">Subject</label>
+          <input type="text" id="modal-subject" name="subject" placeholder="What is this about?">
+        </div>
+        <div class="modal-buttons">
+          <button type="button" id="modal-cancel">Cancel</button>
+          <button type="submit" id="modal-submit">Submit</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script>
+    const overlay = document.getElementById('modal-overlay');
+    const form = document.getElementById('modal-form');
+    const result = document.getElementById('result');
+
+    // Open modal
+    document.getElementById('open-modal').addEventListener('click', () => {
+      overlay.classList.add('open');
+      document.getElementById('modal-name').focus();
+    });
+
+    // Cancel button
+    document.getElementById('modal-cancel').addEventListener('click', () => {
+      closeModal();
+    });
+
+    // Click outside to close
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) {
+        closeModal();
+      }
+    });
+
+    // Escape key to close
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && overlay.classList.contains('open')) {
+        closeModal();
+      }
+    });
+
+    // Form submission
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+
+      const name = document.getElementById('modal-name').value.trim();
+      const email = document.getElementById('modal-email').value.trim();
+      const subject = document.getElementById('modal-subject').value.trim();
+
+      closeModal();
+
+      result.classList.add('visible');
+      result.innerHTML = '<strong>Modal submitted successfully!</strong><br><br>' +
+        'Name: ' + escapeHtml(name) + '<br>' +
+        'Email: ' + escapeHtml(email) +
+        (subject ? `<br>Subject: ${escapeHtml(subject)}` : '');
+    });
+
+    function closeModal() {
+      overlay.classList.remove('open');
+      form.reset();
+    }
+
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+  </script>
+</body>
+</html>
