@@ -214,4 +214,54 @@ describe('Iframe Navigation', () => {
       expect(success).toBe(false);
     });
   }, 30000);
+
+  // === Delayed Content Loading ===
+
+  test('should handle iframe with delayed content loading', async () => {
+    const { page, baseUrl } = ctx.get();
+
+    await withRetry(async () => {
+      await page.goto(`${baseUrl}/iframe-delayed-parent.html`);
+
+      // Wait for iframe element to be visible
+      await page.waitFor('[data-testid="delayed-frame"]', { state: 'visible', timeout: 5000 });
+
+      // Switch to the delayed iframe
+      const switched = await page.switchToFrame('[data-testid="delayed-frame"]');
+      expect(switched).toBe(true);
+
+      // Wait for the delayed content to load and fill input
+      // The content loads after 500ms delay, so we need to wait for the element
+      await page.fill('[data-testid="delayed-input"]', 'Delayed Test Value', { timeout: 5000 });
+
+      // Verify the input was filled
+      const value = await page.evaluate(
+        'document.querySelector("[data-testid=\\"delayed-input\\"]")?.value || ""'
+      );
+      expect(value).toBe('Delayed Test Value');
+    });
+  }, 30000);
+
+  test('should handle very delayed iframe content (1000ms)', async () => {
+    const { page, baseUrl } = ctx.get();
+
+    await withRetry(async () => {
+      await page.goto(`${baseUrl}/iframe-delayed-parent.html`);
+
+      // Wait for iframe element to be visible
+      await page.waitFor('[data-testid="very-delayed-frame"]', { state: 'visible', timeout: 5000 });
+
+      // Switch to the very delayed iframe
+      const switched = await page.switchToFrame('[data-testid="very-delayed-frame"]');
+      expect(switched).toBe(true);
+
+      // The content loads after 1000ms delay - actions should wait properly
+      await page.click('[data-testid="delayed-button"]', { timeout: 5000 });
+
+      // Verify the result appeared
+      await page.waitFor('#result', { state: 'visible', timeout: 3000 });
+      const text = await page.text('#result');
+      expect(text).toContain('Submitted');
+    });
+  }, 30000);
 });

@@ -743,18 +743,25 @@ export class Page {
     // Get the execution context for this frame
     // The frameId from DOM.describeNode points to the iframe's content frame
     if (descResult.node.frameId) {
-      let contextId = this.frameExecutionContexts.get(descResult.node.frameId);
+      const frameId = descResult.node.frameId;
+      const { timeout = DEFAULT_TIMEOUT } = options;
+      const pollInterval = 50;
+      const deadline = Date.now() + timeout;
 
-      // If context not found in map, wait briefly for it to be created
-      // (context creation events may arrive slightly after DOM is ready)
-      if (!contextId) {
-        await new Promise((resolve) => setTimeout(resolve, 50));
-        contextId = this.frameExecutionContexts.get(descResult.node.frameId);
+      // Poll for the execution context until it's available or timeout
+      // Context creation events may arrive after DOM is ready, especially for
+      // iframes with dynamically loaded content
+      let contextId = this.frameExecutionContexts.get(frameId);
+      while (!contextId && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, pollInterval));
+        contextId = this.frameExecutionContexts.get(frameId);
       }
 
       if (contextId) {
         this.currentFrameContextId = contextId;
       }
+      // Note: contextId may still be null for cross-origin iframes or other edge cases.
+      // Actions will still work via DOM methods, but evaluate() won't run in iframe context.
     }
 
     // Clear ref map since we're in a new context
@@ -1221,6 +1228,29 @@ export class Page {
       interactiveElements,
       text,
     };
+  }
+
+  /**
+   * Export the current ref map for cross-exec reuse (CLI).
+   */
+  exportRefMap(): Record<string, number> {
+    const map: Record<string, number> = {};
+    for (const [ref, backendNodeId] of this.refMap.entries()) {
+      map[ref] = backendNodeId;
+    }
+    return map;
+  }
+
+  /**
+   * Import a ref map previously captured from a snapshot.
+   */
+  importRefMap(refMap: Record<string, number>): void {
+    this.refMap.clear();
+    for (const [ref, backendNodeId] of Object.entries(refMap)) {
+      if (typeof backendNodeId === 'number') {
+        this.refMap.set(ref, backendNodeId);
+      }
+    }
   }
 
   // ============ Batch Execution ============

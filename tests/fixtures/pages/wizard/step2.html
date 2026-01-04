@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Wizard - Step 2</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      padding: 20px;
+      max-width: 500px;
+      margin: 0 auto;
+    }
+    .steps {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 30px;
+    }
+    .step {
+      flex: 1;
+      padding: 10px;
+      text-align: center;
+      background: #f0f0f0;
+      border-radius: 4px;
+      font-size: 14px;
+    }
+    .step.active { background: #2196F3; color: white; }
+    .step.completed { background: #4CAF50; color: white; }
+    h1 { color: #333; margin-bottom: 20px; }
+    .option-group { margin-bottom: 20px; }
+    .option-group h3 { margin-bottom: 10px; color: #555; font-size: 16px; }
+    .option {
+      display: flex;
+      align-items: center;
+      margin: 10px 0;
+    }
+    .option input { margin-right: 10px; }
+    .option label { cursor: pointer; }
+    .buttons {
+      margin-top: 20px;
+      display: flex;
+      gap: 10px;
+    }
+    button {
+      padding: 12px 24px;
+      font-size: 16px;
+      cursor: pointer;
+      border: none;
+      border-radius: 4px;
+    }
+    #back-btn { background: #e0e0e0; color: #333; }
+    #next-btn { background: #2196F3; color: white; }
+    #back-btn:hover { background: #bdbdbd; }
+    #next-btn:hover { background: #1976D2; }
+  </style>
+</head>
+<body>
+  <div class="steps">
+    <div class="step completed">1. Info</div>
+    <div class="step active">2. Options</div>
+    <div class="step">3. Review</div>
+  </div>
+
+  <h1>Step 2: Select Options</h1>
+
+  <form id="step2-form">
+    <div class="option-group">
+      <h3>Subscription Plan</h3>
+      <div class="option">
+        <input type="radio" id="plan-free" name="plan" value="free">
+        <label for="plan-free">Free Plan</label>
+      </div>
+      <div class="option">
+        <input type="radio" id="plan-basic" name="plan" value="basic">
+        <label for="plan-basic">Basic Plan ($9/mo)</label>
+      </div>
+      <div class="option">
+        <input type="radio" id="plan-pro" name="plan" value="pro">
+        <label for="plan-pro">Pro Plan ($29/mo)</label>
+      </div>
+    </div>
+
+    <div class="option-group">
+      <h3>Notifications</h3>
+      <div class="option">
+        <input type="checkbox" id="notify-email" name="notifications" value="email">
+        <label for="notify-email">Email notifications</label>
+      </div>
+      <div class="option">
+        <input type="checkbox" id="notify-sms" name="notifications" value="sms">
+        <label for="notify-sms">SMS notifications</label>
+      </div>
+    </div>
+
+    <div class="buttons">
+      <button type="button" id="back-btn">Back</button>
+      <button type="submit" id="next-btn">Next</button>
+    </div>
+  </form>
+
+  <script>
+    const saved = JSON.parse(sessionStorage.getItem('wizard-data') || '{}');
+
+    // Redirect if step 1 not completed
+    if (!saved.name) {
+      window.location.href = '/wizard/step1.html';
+    }
+
+    // Restore saved selections
+    if (saved.plan) {
+      const radio = document.querySelector(`input[name="plan"][value="${saved.plan}"]`);
+      if (radio) radio.checked = true;
+    }
+    if (saved.notifications) {
+      saved.notifications.forEach(n => {
+        const cb = document.querySelector(`input[name="notifications"][value="${n}"]`);
+        if (cb) cb.checked = true;
+      });
+    }
+
+    document.getElementById('back-btn').addEventListener('click', () => {
+      window.location.href = '/wizard/step1.html';
+    });
+
+    document.getElementById('step2-form').addEventListener('submit', (e) => {
+      e.preventDefault();
+
+      const plan = document.querySelector('input[name="plan"]:checked');
+      const notifications = Array.from(document.querySelectorAll('input[name="notifications"]:checked'))
+        .map(el => el.value);
+
+      const data = {
+        ...saved,
+        plan: plan ? plan.value : null,
+        notifications
+      };
+      sessionStorage.setItem('wizard-data', JSON.stringify(data));
+      window.location.href = '/wizard/review.html';
+    });
+  </script>
+</body>
+</html>

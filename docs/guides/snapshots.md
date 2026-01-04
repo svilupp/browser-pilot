@@ -262,7 +262,7 @@ const text = await page.text('.article');
 ## Tips for AI Integration
 
 1. **Include the URL and title** for context
-2. **Use refs for targeting** - they're stable within a page load
+2. **Use refs for targeting** - they're stable within a page load (CLI caches refs per session+URL after snapshot)
 3. **Filter to interactive elements** for action selection
 4. **Include disabled state** to avoid clicking disabled buttons
 5. **Use text format** for conversational AI, JSON for tool-based AI

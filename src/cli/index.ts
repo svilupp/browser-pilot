@@ -7,6 +7,7 @@
  *   2. bp exec '{"selector":"ref:e4",...}'  → Use refs for reliable targeting
  *
  * Commands:
+ *   quickstart  Getting started guide
  *   connect     Create browser session
  *   exec        Execute actions (supports --dialog accept|dismiss)
  *   snapshot    Get page snapshot with element refs
@@ -16,7 +17,7 @@
  *   list        List sessions
  *   actions     Complete action reference
  *
- * Run 'bp actions' for full action DSL documentation.
+ * Run 'bp quickstart' for getting started guide.
  */
 
 import { actionsCommand } from './commands/actions.ts';
@@ -24,6 +25,7 @@ import { closeCommand } from './commands/close.ts';
 import { connectCommand } from './commands/connect.ts';
 import { execCommand } from './commands/exec.ts';
 import { listCommand } from './commands/list.ts';
+import { quickstartCommand } from './commands/quickstart.ts';
 import { screenshotCommand } from './commands/screenshot.ts';
 import { snapshotCommand } from './commands/snapshot.ts';
 import { textCommand } from './commands/text.ts';
@@ -35,6 +37,7 @@ Usage:
   bp <command> [options]
 
 Commands:
+  quickstart  Show getting started guide
   connect     Create or resume browser session
   exec        Execute actions on current session
   snapshot    Get page accessibility snapshot (includes element refs)
@@ -54,11 +57,13 @@ Exec Options:
   --dialog <mode>       Auto-handle dialogs: accept | dismiss
 
 Ref Selectors (Recommended for AI Agents):
-  1. Take snapshot:     bp snapshot --format text
-     Output shows:      button "Submit" [ref=e4], textbox "Email" [ref=e5]
-  2. Use ref directly:  bp exec '{"action":"click","selector":"ref:e4"}'
+  1. Navigate + snapshot: bp exec '[{"action":"goto","url":"..."},{"action":"snapshot"}]'
+     Output shows:        button "Submit" [ref=e4], textbox "Email" [ref=e5]
+  2. Use refs (snapshot cached for same session+URL):
+     bp exec '[{"action":"click","selector":"ref:e4"}]'
 
-  Refs are stable until navigation. Combine with CSS fallbacks:
+  Refs are cached per session+URL after snapshot. Use new snapshot after navigation.
+  Combine with CSS fallbacks:
     {"selector": ["ref:e4", "#submit", "button[type=submit]"]}
 
 Examples:
@@ -66,18 +71,17 @@ Examples:
   bp connect --provider generic --name dev
 
   # Navigate and get snapshot with refs
-  bp exec '{"action":"goto","url":"https://example.com"}'
-  bp snapshot --format text
+  bp exec '[{"action":"goto","url":"https://example.com"},{"action":"snapshot"}]'
 
-  # Use ref from snapshot (most reliable)
-  bp exec '{"action":"click","selector":"ref:e4"}'
-  bp exec '{"action":"fill","selector":"ref:e5","value":"test@example.com"}'
+  # Use refs (snapshot cached for same session+URL)
+  bp exec '[{"action":"fill","selector":"ref:e5","value":"test@example.com"},{"action":"click","selector":"ref:e4"}]'
 
   # Handle native dialogs (alert/confirm/prompt)
   bp exec --dialog accept '{"action":"click","selector":"#delete-btn"}'
 
-  # Batch multiple actions
+  # Batch multiple actions (snapshot optional if already cached)
   bp exec '[
+    {"action":"snapshot"},
     {"action":"fill","selector":"ref:e5","value":"user@example.com"},
     {"action":"click","selector":"ref:e4"},
     {"action":"snapshot"}
@@ -166,6 +170,10 @@ async function main(): Promise<void> {
 
   try {
     switch (command) {
+      case 'quickstart':
+        await quickstartCommand();
+        break;
+
       case 'connect':
         await connectCommand(remaining, options);
         break;

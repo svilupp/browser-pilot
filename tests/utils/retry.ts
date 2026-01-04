@@ -26,7 +26,16 @@ export async function withRetry<T>(fn: () => Promise<T>, options: RetryOptions =
 
   for (let attempt = 0; attempt <= opts.retries; attempt++) {
     try {
-      return await fn();
+      const result = await fn();
+
+      // Log flakiness warning if test passed on retry
+      if (attempt > 0) {
+        console.warn(
+          `[FLAKY] Test passed on attempt ${attempt + 1}/${opts.retries + 1} after previous failure: ${lastError?.message}`
+        );
+      }
+
+      return result;
     } catch (error) {
       lastError = error as Error;
 

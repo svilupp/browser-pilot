@@ -24,7 +24,18 @@ export interface SessionData {
   /** Current page URL */
   currentUrl: string;
   /** Additional metadata */
-  metadata?: Record<string, unknown>;
+  metadata?: SessionMetadata;
+}
+
+export interface RefCache {
+  url: string;
+  savedAt: string;
+  refMap: Record<string, number>;
+}
+
+export interface SessionMetadata {
+  refCache?: RefCache;
+  [key: string]: unknown;
 }
 
 const SESSION_DIR = join(homedir(), '.browser-pilot', 'sessions');
@@ -70,12 +81,17 @@ export async function loadSession(id: string): Promise<SessionData> {
  */
 export async function updateSession(
   id: string,
-  updates: Partial<Pick<SessionData, 'currentUrl' | 'lastActivity'>>
+  updates: Partial<Pick<SessionData, 'currentUrl' | 'lastActivity' | 'metadata'>>
 ): Promise<SessionData> {
   const session = await loadSession(id);
+  const mergedMetadata =
+    updates.metadata !== undefined
+      ? { ...(session.metadata ?? {}), ...(updates.metadata ?? {}) }
+      : session.metadata;
   const updated = {
     ...session,
     ...updates,
+    metadata: mergedMetadata,
     lastActivity: new Date().toISOString(),
   };
   await saveSession(updated);
