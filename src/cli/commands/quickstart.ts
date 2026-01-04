@@ -1,69 +1,64 @@
 /**
- * Quickstart command - Display comprehensive getting started documentation
+ * Quickstart command - CLI workflow guide for AI agents
  */
 
 const QUICKSTART = `
-browser-pilot - CDP-based browser automation for AI agents
+browser-pilot CLI - Quick Start Guide
 
-Zero production dependencies. Works in Node.js, Bun, and Cloudflare Workers.
+STEP 1: CONNECT TO A BROWSER
+  bp connect --provider generic --name mysite
 
-RUNNING
-  npx browser-pilot ...     # Node.js projects
-  bunx browser-pilot ...    # Bun projects (faster)
+  This creates a session. The CLI remembers it for subsequent commands.
 
-CONNECTING
-  npx browser-pilot connect <wsUrl>     Connect to existing browser
-  npx browser-pilot connect --provider browserbase --api-key <key>
+STEP 2: NAVIGATE
+  bp exec '{"action":"goto","url":"https://example.com"}'
 
-BASIC USAGE (Code)
-  import { Browser } from 'browser-pilot';
+STEP 3: GET PAGE SNAPSHOT
+  bp snapshot --format text
 
-  const browser = await Browser.connect({ wsUrl: '...' });
-  const page = await browser.newPage();
-  await page.goto('https://example.com');
-  await page.click('#button');
-  await page.fill('#input', 'text');
-  await browser.close();
+  Output shows the page as an accessibility tree with element refs:
+    - heading "Welcome" [ref=e1]
+    - button "Sign In" [ref=e2]
+    - textbox "Email" [ref=e3]
 
-KEY PATTERNS
-  Multi-Selector    await page.click(['#primary', '.fallback', 'button']);
-  Smart Waiting     Every action waits for visibility automatically
-  Optional Actions  await page.click('#banner', { optional: true });
+STEP 4: INTERACT USING REFS
+  bp exec '{"action":"fill","selector":"ref:e3","value":"test@example.com"}'
+  bp exec '{"action":"click","selector":"ref:e2"}'
 
-BATCH EXECUTION
-  await page.batch([
-    { action: 'goto', url: 'https://example.com' },
-    { action: 'fill', selector: '#email', value: 'test@test.com' },
-    { action: 'submit', selector: 'form' },
-  ]);
+STEP 5: BATCH MULTIPLE ACTIONS
+  bp exec '[
+    {"action":"fill","selector":"ref:e3","value":"user@test.com"},
+    {"action":"click","selector":"ref:e2"},
+    {"action":"snapshot"}
+  ]'
 
-SNAPSHOTS (FOR AI AGENTS)
-  const snapshot = await page.snapshot();
-  // Returns accessibility tree with refs: e1, e2, e3...
-  await page.click({ ref: 'e5' });
+FOR AI AGENTS
+  Use -o json for machine-readable output:
+    bp snapshot --format text -o json
+    bp exec '{"action":"click","selector":"ref:e3"}' -o json
 
-PROVIDERS
-  BrowserBase     Browser.connect({ provider: 'browserbase', apiKey })
-  Browserless     Browser.connect({ provider: 'browserless', apiKey })
-  Generic         Browser.connect({ wsUrl: 'ws://...' })
+TIPS
+  • Refs (e1, e2...) are stable within a page - prefer them over CSS selectors
+  • After navigation, take a new snapshot to get updated refs
+  • Use multi-selectors for resilience: ["ref:e3", "#email", "input[type=email]"]
+  • Add "optional":true to skip elements that may not exist
+
+SELECTOR PRIORITY
+  1. ref:e5         From snapshot - most reliable
+  2. #id            CSS ID selector
+  3. [data-testid]  Test attributes
+  4. .class         CSS class (less stable)
 
 COMMON ACTIONS
-  page.goto(url)              Navigate to URL
-  page.click(selector)        Click element
-  page.fill(selector, value)  Fill input field
-  page.submit(selector)       Submit form
-  page.select(selector, val)  Select dropdown option
-  page.screenshot()           Capture screenshot
-  page.snapshot()             Get accessibility tree
+  goto        {"action":"goto","url":"https://..."}
+  click       {"action":"click","selector":"ref:e3"}
+  fill        {"action":"fill","selector":"ref:e3","value":"text"}
+  submit      {"action":"submit","selector":"form"}
+  select      {"action":"select","selector":"ref:e5","value":"option"}
+  snapshot    {"action":"snapshot"}
+  screenshot  {"action":"screenshot"}
 
-AGENT INTEGRATION
-  - Use snapshot() to get page state as accessibility tree
-  - Refs (e1, e2...) identify elements without fragile selectors
-  - Multi-selector arrays handle UI variations
-  - optional: true prevents failures on transient elements
-
-Ready to automate!
-Run: npx browser-pilot connect <wsUrl>
+Run 'bp actions' for the complete action reference.
 `;
 
 export async function quickstartCommand(): Promise<void> {
