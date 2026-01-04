@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>React-like Controlled Form</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      padding: 20px;
+      max-width: 600px;
+      margin: 0 auto;
+    }
+    h1 { color: #333; }
+    .form-group { margin-bottom: 20px; }
+    label { display: block; margin-bottom: 5px; font-weight: 500; }
+    input, select {
+      width: 100%;
+      padding: 10px;
+      font-size: 16px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      box-sizing: border-box;
+    }
+    .state-display {
+      margin-top: 30px;
+      padding: 15px;
+      background: #f5f5f5;
+      border-radius: 4px;
+      font-family: monospace;
+      white-space: pre-wrap;
+    }
+    .event-log {
+      margin-top: 20px;
+      max-height: 200px;
+      overflow-y: auto;
+      padding: 10px;
+      background: #1a1a2e;
+      color: #0f0;
+      font-family: monospace;
+      font-size: 12px;
+      border-radius: 4px;
+    }
+    .event-log div { margin: 2px 0; }
+    .synced { color: #4CAF50; }
+    .desynced { color: #f44336; }
+    button {
+      padding: 10px 20px;
+      margin: 5px;
+      cursor: pointer;
+      border: none;
+      border-radius: 4px;
+    }
+    #clear-log { background: #666; color: white; }
+    #submit-btn { background: #4CAF50; color: white; }
+    #check-sync { background: #2196F3; color: white; }
+  </style>
+</head>
+<body>
+  <h1>React-like Controlled Form</h1>
+  <p>This form simulates React controlled inputs that track state via event handlers.</p>
+
+  <form id="controlled-form">
+    <div class="form-group">
+      <label for="username">Username (controlled)</label>
+      <input type="text" id="username" name="username" placeholder="Enter username" autocomplete="off">
+    </div>
+
+    <div class="form-group">
+      <label for="email">Email (controlled)</label>
+      <input type="email" id="email" name="email" placeholder="Enter email" autocomplete="off">
+    </div>
+
+    <div class="form-group">
+      <label for="search">Search (with debounce)</label>
+      <input type="text" id="search" name="search" placeholder="Type to search..." autocomplete="off">
+    </div>
+
+    <div class="form-group">
+      <label for="country">Country (controlled select)</label>
+      <select id="country" name="country">
+        <option value="">Select a country</option>
+        <option value="us">United States</option>
+        <option value="uk">United Kingdom</option>
+        <option value="ca">Canada</option>
+      </select>
+    </div>
+
+    <div class="form-group">
+      <label>
+        <input type="checkbox" id="newsletter" name="newsletter">
+        Subscribe to newsletter
+      </label>
+    </div>
+
+    <button type="button" id="check-sync">Check State Sync</button>
+    <button type="submit" id="submit-btn">Submit</button>
+    <button type="button" id="clear-log">Clear Log</button>
+  </form>
+
+  <div class="state-display">
+    <strong>Internal State:</strong>
+    <pre id="state-output">{}</pre>
+  </div>
+
+  <div id="sync-status"></div>
+
+  <div class="event-log" id="event-log">
+    <div>Event log initialized...</div>
+  </div>
+
+  <script>
+    // Simulates React-like controlled state
+    const state = {
+      username: '',
+      email: '',
+      search: '',
+      country: '',
+      newsletter: false,
+      eventCount: 0,
+      lastEvent: null
+    };
+
+    const eventLog = document.getElementById('event-log');
+    const stateOutput = document.getElementById('state-output');
+    const syncStatus = document.getElementById('sync-status');
+
+    function log(message, type = 'info') {
+      const div = document.createElement('div');
+      div.textContent = `[${new Date().toISOString().substr(11, 12)}] ${message}`;
+      div.style.color = type === 'error' ? '#f44' : type === 'warn' ? '#ff0' : '#0f0';
+      eventLog.appendChild(div);
+      eventLog.scrollTop = eventLog.scrollHeight;
+    }
+
+    function updateStateDisplay() {
+      stateOutput.textContent = JSON.stringify(state, null, 2);
+    }
+
+    function checkSync() {
+      const domValues = {
+        username: document.getElementById('username').value,
+        email: document.getElementById('email').value,
+        search: document.getElementById('search').value,
+        country: document.getElementById('country').value,
+        newsletter: document.getElementById('newsletter').checked
+      };
+
+      const issues = [];
+      for (const [key, domVal] of Object.entries(domValues)) {
+        if (domVal !== state[key]) {
+          issues.push(`${key}: DOM="${domVal}" vs State="${state[key]}"`);
+        }
+      }
+
+      if (issues.length === 0) {
+        syncStatus.innerHTML = '<p class="synced">✓ DOM and State are synchronized</p>';
+        syncStatus.dataset.synced = 'true';
+        log('Sync check: PASS - DOM matches state');
+        return true;
+      } else {
+        syncStatus.innerHTML = `<p class="desynced">✗ State mismatch detected:<br>${issues.join('<br>')}</p>`;
+        syncStatus.dataset.synced = 'false';
+        log(`Sync check: FAIL - ${issues.join(', ')}`, 'error');
+        return false;
+      }
+    }
+
+    // Controlled input handler - simulates React onChange
+    function handleInputChange(e) {
+      const { name, value, type, checked } = e.target;
+      const newValue = type === 'checkbox' ? checked : value;
+
+      state[name] = newValue;
+      state.eventCount++;
+      state.lastEvent = e.type;
+
+      log(`${e.type} on ${name}: "${newValue}" (event #${state.eventCount})`);
+      updateStateDisplay();
+    }
+
+    // Attach event listeners (like React's onChange which fires on input for text, change for select)
+    ['username', 'email', 'search'].forEach(id => {
+      const el = document.getElementById(id);
+
+      // React's onChange is actually based on 'input' event for text inputs
+      el.addEventListener('input', handleInputChange);
+
+      // Also track other events for debugging
+      el.addEventListener('change', (_e) => {
+        log(`change event on ${id} (after blur typically)`, 'warn');
+      });
+
+      el.addEventListener('focus', () => log(`focus on ${id}`));
+      el.addEventListener('blur', () => log(`blur on ${id}`));
+    });
+
+    // Select elements use 'change' event (this is what React actually does)
+    const countryEl = document.getElementById('country');
+    countryEl.addEventListener('change', handleInputChange);
+    countryEl.addEventListener('focus', () => log(`focus on country`));
+
+    // Checkbox handler
+    document.getElementById('newsletter').addEventListener('change', handleInputChange);
+
+    // Submit handler
+    document.getElementById('controlled-form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      log(`Form submitted with state: ${JSON.stringify(state)}`);
+
+      // Verify sync before accepting submission
+      if (checkSync()) {
+        alert(`Form submitted successfully!\n\nState:\n${JSON.stringify(state, null, 2)}`);
+      } else {
+        alert('ERROR: DOM and state are out of sync!');
+      }
+    });
+
+    // Check sync button
+    document.getElementById('check-sync').addEventListener('click', checkSync);
+
+    // Clear log button
+    document.getElementById('clear-log').addEventListener('click', () => {
+      eventLog.innerHTML = '<div>Event log cleared...</div>';
+    });
+
+    // Initialize
+    updateStateDisplay();
+    log('Form initialized - state tracking active');
+  </script>
+</body>
+</html>
