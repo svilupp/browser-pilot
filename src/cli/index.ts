@@ -37,56 +37,30 @@ Usage:
   bp <command> [options]
 
 Commands:
-  quickstart  Show getting started guide
-  connect     Create or resume browser session
-  exec        Execute actions on current session
-  snapshot    Get page accessibility snapshot (includes element refs)
-  text        Extract text content from page
+  quickstart  Getting started guide (start here!)
+  connect     Create browser session
+  exec        Execute actions
+  snapshot    Get page with element refs
+  text        Extract text content
   screenshot  Take screenshot
   close       Close session
-  list        List all sessions
-  actions     Show all available actions with examples
+  list        List sessions
+  actions     Complete action reference
 
-Global Options:
-  -s, --session <id>    Session ID to use
-  -o, --output <fmt>    Output format: json | pretty (default: pretty)
-  --trace               Enable execution tracing
-  -h, --help            Show this help message
-
-Exec Options:
-  --dialog <mode>       Auto-handle dialogs: accept | dismiss
-
-Ref Selectors (Recommended for AI Agents):
-  1. Navigate + snapshot: bp exec '[{"action":"goto","url":"..."},{"action":"snapshot"}]'
-     Output shows:        button "Submit" [ref=e4], textbox "Email" [ref=e5]
-  2. Use refs (snapshot cached for same session+URL):
-     bp exec '[{"action":"click","selector":"ref:e4"}]'
-
-  Refs are cached per session+URL after snapshot. Use new snapshot after navigation.
-  Combine with CSS fallbacks:
-    {"selector": ["ref:e4", "#submit", "button[type=submit]"]}
+Options:
+  -s, --session <id>    Session ID
+  -o, --output <fmt>    json | pretty (default: pretty)
+  --trace               Enable debug tracing
+  --dialog <mode>       Handle dialogs: accept | dismiss
+  -h, --help            Show help
 
 Examples:
-  # Connect to browser
   bp connect --provider generic --name dev
+  bp exec '{"action":"goto","url":"https://example.com"}'
+  bp snapshot --format text
+  bp exec '{"action":"click","selector":"ref:e3"}'
 
-  # Navigate and get snapshot with refs
-  bp exec '[{"action":"goto","url":"https://example.com"},{"action":"snapshot"}]'
-
-  # Use refs (snapshot cached for same session+URL)
-  bp exec '[{"action":"fill","selector":"ref:e5","value":"test@example.com"},{"action":"click","selector":"ref:e4"}]'
-
-  # Handle native dialogs (alert/confirm/prompt)
-  bp exec --dialog accept '{"action":"click","selector":"#delete-btn"}'
-
-  # Batch multiple actions (snapshot optional if already cached)
-  bp exec '[
-    {"action":"snapshot"},
-    {"action":"fill","selector":"ref:e5","value":"user@example.com"},
-    {"action":"click","selector":"ref:e4"},
-    {"action":"snapshot"}
-  ]'
-
+Run 'bp quickstart' for CLI workflow guide.
 Run 'bp actions' for complete action reference.
 `;
 

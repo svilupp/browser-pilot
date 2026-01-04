@@ -41,18 +41,7 @@ export async function execCommand(
   // Parse exec-specific options
   const { actionsJson, options: execOptions } = parseExecArgs(args);
 
-  // Get session
-  let session: SessionData | null;
-  if (globalOptions.session) {
-    session = await loadSession(globalOptions.session);
-  } else {
-    session = await getDefaultSession();
-    if (!session) {
-      throw new Error('No session found. Run "bp connect" first.');
-    }
-  }
-
-  // Parse actions from arguments
+  // Validate actions first (doesn't require session - better error message)
   if (!actionsJson) {
     throw new Error(
       'No actions provided. Usage: bp exec \'{"action":"goto","url":"..."}\'\n\nRun \'bp actions\' for complete action reference.'
@@ -66,6 +55,17 @@ export async function execCommand(
     throw new Error(
       "Invalid JSON. Actions must be valid JSON.\n\nRun 'bp actions' for complete action reference."
     );
+  }
+
+  // Get session (only after actions are validated)
+  let session: SessionData | null;
+  if (globalOptions.session) {
+    session = await loadSession(globalOptions.session);
+  } else {
+    session = await getDefaultSession();
+    if (!session) {
+      throw new Error('No session found. Run "bp connect" first.');
+    }
   }
 
   // Connect to browser
