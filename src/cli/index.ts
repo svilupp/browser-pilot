@@ -15,12 +15,14 @@
  *   screenshot  Take screenshot
  *   close       Close session
  *   list        List sessions
+ *   clean       Clean up old sessions
  *   actions     Complete action reference
  *
  * Run 'bp quickstart' for getting started guide.
  */
 
 import { actionsCommand } from './commands/actions.ts';
+import { cleanCommand } from './commands/clean.ts';
 import { closeCommand } from './commands/close.ts';
 import { connectCommand } from './commands/connect.ts';
 import { execCommand } from './commands/exec.ts';
@@ -45,6 +47,7 @@ Commands:
   screenshot  Take screenshot
   close       Close session
   list        List sessions
+  clean       Clean up old sessions
   actions     Complete action reference
 
 Options:
@@ -104,26 +107,34 @@ export function output(data: unknown, format: 'json' | 'pretty' = 'pretty'): voi
       console.log(data);
     } else if (typeof data === 'object' && data !== null) {
       // Pretty print objects
-      prettyPrint(data as Record<string, unknown>);
+      const { truncated } = prettyPrint(data as Record<string, unknown>);
+      if (truncated) {
+        console.log('\n(Output truncated. Use -o json for full data)');
+      }
     } else {
       console.log(data);
     }
   }
 }
 
-function prettyPrint(obj: Record<string, unknown>, indent = 0): void {
+function prettyPrint(obj: Record<string, unknown>, indent = 0): { truncated: boolean } {
   const prefix = '  '.repeat(indent);
+  let truncated = false;
 
   for (const [key, value] of Object.entries(obj)) {
     if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
       console.log(`${prefix}${key}:`);
-      prettyPrint(value as Record<string, unknown>, indent + 1);
+      const result = prettyPrint(value as Record<string, unknown>, indent + 1);
+      if (result.truncated) truncated = true;
     } else if (Array.isArray(value)) {
       console.log(`${prefix}${key}: [${value.length} items]`);
+      truncated = true;
     } else {
       console.log(`${prefix}${key}: ${value}`);
     }
   }
+
+  return { truncated };
 }
 
 async function main(): Promise<void> {
@@ -174,6 +185,10 @@ async function main(): Promise<void> {
 
       case 'list':
         await listCommand(remaining, options);
+        break;
+
+      case 'clean':
+        await cleanCommand(remaining, options);
         break;
 
       case 'actions':

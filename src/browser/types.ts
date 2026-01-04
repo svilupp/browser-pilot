@@ -15,6 +15,8 @@ export interface ActionOptions {
 export interface FillOptions extends ActionOptions {
   /** Clear existing content before filling */
   clear?: boolean;
+  /** Trigger blur after filling (useful for React/Vue frameworks that update on blur) */
+  blur?: boolean;
 }
 
 export interface TypeOptions extends ActionOptions {

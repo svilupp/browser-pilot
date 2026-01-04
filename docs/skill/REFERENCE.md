@@ -25,7 +25,10 @@ Complete action reference, selector guide, patterns, and troubleshooting.
 ```json
 {"action": "fill", "selector": "#email", "value": "user@example.com"}
 {"action": "fill", "selector": "#input", "value": "append", "clear": false}
+{"action": "fill", "selector": "#input", "value": "test", "blur": true}
 ```
+
+Options: `clear` (default: true), `blur` (default: false - triggers blur for React/Vue state sync)
 
 ### Type (character by character, for autocomplete)
 
@@ -335,10 +338,17 @@ Probably a native dialog - use `--dialog` flag:
 bp exec --dialog accept '{"action":"click","selector":"#delete"}'
 ```
 
-### Form Validation Not Triggering
+### Form Validation Not Triggering (React/Vue)
 
-Trigger blur after fill:
+Use the `blur` option or trigger blur manually:
 ```bash
+# Option 1: Use blur option (recommended for React/Vue)
+bp exec '[
+  {"action":"fill","selector":"#email","value":"test@example.com","blur":true},
+  {"action":"wait","selector":"[role=\"alert\"]","waitFor":"visible","timeout":3000}
+]'
+
+# Option 2: Trigger blur manually with Tab
 bp exec '[
   {"action":"fill","selector":"#email","value":"test@example.com"},
   {"action":"press","key":"Tab"},

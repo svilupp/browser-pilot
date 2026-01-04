@@ -54,6 +54,9 @@ export interface Step {
   /** Clear input before filling */
   clear?: boolean;
 
+  /** Trigger blur after filling (for React/Vue frameworks) */
+  blur?: boolean;
+
   /** Delay between keystrokes for type action */
   delay?: number;
 
