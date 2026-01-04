@@ -7,8 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.0.5] - 2026-01-04
 
 ### Added
-- React-like controlled form test fixture for validating event handling
-- Integration tests for fill action with controlled inputs (state sync validation)
+- `bp clean` command to remove stale sessions
+- `blur` option for fill action (React/Vue state sync)
+- Session validation with auto-cleanup of stale sessions
+
+### Changed
+- Fill uses `InputEvent` for better React compatibility
+- Pretty output shows truncation hint for large results
 
 ## [0.0.4] - 2026-01-04
 
