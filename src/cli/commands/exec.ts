@@ -78,6 +78,13 @@ export async function execCommand(
   try {
     const page = addBatchToPage(await browser.page());
 
+    // Hydrate ref map from session cache if URL matches
+    const currentUrlForCache = await page.url();
+    const refCache = session.metadata?.refCache;
+    if (refCache && refCache.url === currentUrlForCache) {
+      page.importRefMap(refCache.refMap);
+    }
+
     // Set up dialog handling if --dialog flag is provided
     if (execOptions.dialog) {
       await page.onDialog(async (dialog) => {
@@ -95,7 +102,21 @@ export async function execCommand(
 
     // Update session with current URL
     const currentUrl = await page.url();
-    await updateSession(session.id, { currentUrl });
+    const hasSnapshot = steps.some((step) => step.action === 'snapshot');
+    if (hasSnapshot) {
+      await updateSession(session.id, {
+        currentUrl,
+        metadata: {
+          refCache: {
+            url: currentUrl,
+            savedAt: new Date().toISOString(),
+            refMap: page.exportRefMap(),
+          },
+        },
+      });
+    } else {
+      await updateSession(session.id, { currentUrl });
+    }
 
     // Output result
     output(

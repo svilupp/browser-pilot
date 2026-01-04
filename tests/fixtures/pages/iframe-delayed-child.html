@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Delayed Iframe Child</title>
+  <style>
+    body { font-family: system-ui, sans-serif; padding: 15px; background: #fff3e0; }
+    .loading { color: #666; font-style: italic; }
+    .content { display: none; }
+    input { padding: 8px; border: 1px solid #ccc; border-radius: 4px; width: 200px; }
+    button { padding: 10px; background: #ff9800; color: white; border: none; border-radius: 4px; cursor: pointer; margin-top: 10px; }
+    button:hover { background: #f57c00; }
+  </style>
+</head>
+<body>
+  <div id="loading" class="loading">Loading content...</div>
+
+  <div id="content" class="content">
+    <h2>Delayed Content Loaded</h2>
+    <form id="delayed-form">
+      <label for="delayed-input">Enter value:</label><br>
+      <input type="text" id="delayed-input" data-testid="delayed-input" placeholder="Type here">
+      <br>
+      <button type="button" id="delayed-button" data-testid="delayed-button">Submit</button>
+    </form>
+    <div id="result" style="margin-top: 10px; display: none; color: green;"></div>
+  </div>
+
+  <script>
+    // Simulate delayed content loading (e.g., API call, dynamic rendering)
+    const delay = parseInt(new URLSearchParams(window.location.search).get('delay'), 10) || 500;
+
+    setTimeout(() => {
+      document.getElementById('loading').style.display = 'none';
+      document.getElementById('content').style.display = 'block';
+
+      document.getElementById('delayed-button').addEventListener('click', () => {
+        const value = document.getElementById('delayed-input').value;
+        document.getElementById('result').style.display = 'block';
+        document.getElementById('result').textContent = `Submitted: ${value}`;
+      });
+    }, delay);
+  </script>
+</body>
+</html>

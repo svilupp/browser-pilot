@@ -116,6 +116,7 @@ REF SELECTORS (from snapshot)
     bp exec '{"action":"click","selector":"ref:e4"}'
 
   Refs are stable until navigation. Prefix with "ref:" to use.
+  CLI caches refs per session+URL after snapshot, so they can be reused across exec calls.
   Example: {"action":"fill","selector":"ref:e23","value":"hello"}
 
 MULTI-SELECTOR PATTERN

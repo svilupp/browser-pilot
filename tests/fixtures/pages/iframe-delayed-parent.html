@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Delayed Iframe Parent Test Page</title>
+  <style>
+    body { font-family: system-ui, sans-serif; padding: 20px; }
+    .section { margin-bottom: 20px; }
+    iframe { border: 2px solid #ff9800; border-radius: 4px; }
+    h1 { color: #333; }
+    p { color: #666; }
+  </style>
+</head>
+<body>
+  <h1>Delayed Iframe Test Page</h1>
+  <p>This page tests iframe switching with dynamically loaded content.</p>
+
+  <div class="section">
+    <h2>Delayed Content Iframe (500ms delay)</h2>
+    <iframe
+      id="delayed-frame"
+      data-testid="delayed-frame"
+      src="iframe-delayed-child.html?delay=500"
+      width="400"
+      height="250"
+      title="Delayed Frame">
+    </iframe>
+  </div>
+
+  <div class="section">
+    <h2>Very Delayed Content Iframe (1000ms delay)</h2>
+    <iframe
+      id="very-delayed-frame"
+      data-testid="very-delayed-frame"
+      src="iframe-delayed-child.html?delay=1000"
+      width="400"
+      height="250"
+      title="Very Delayed Frame">
+    </iframe>
+  </div>
+</body>
+</html>

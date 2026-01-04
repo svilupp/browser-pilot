@@ -140,3 +140,6 @@ vite.config.ts.timestamp-*
 
 # Test screenshots (captured on failure)
 tests/screenshots/
+
+# bv (beads viewer) local config and caches
+.bv/

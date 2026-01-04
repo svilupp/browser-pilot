@@ -1,6 +1,6 @@
 {
   "name": "browser-pilot",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "Lightweight CDP-based browser automation for Node.js, Bun, and Cloudflare Workers",
   "type": "module",
   "main": "./dist/index.cjs",

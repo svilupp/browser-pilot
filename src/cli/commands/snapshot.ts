@@ -53,7 +53,16 @@ export async function snapshotCommand(
     const snapshot = await page.snapshot();
 
     // Update session with current URL
-    await updateSession(session.id, { currentUrl: snapshot.url });
+    await updateSession(session.id, {
+      currentUrl: snapshot.url,
+      metadata: {
+        refCache: {
+          url: snapshot.url,
+          savedAt: new Date().toISOString(),
+          refMap: page.exportRefMap(),
+        },
+      },
+    });
 
     // Output based on format
     switch (options.format) {

@@ -2,16 +2,34 @@
 
 Lightweight CDP-based browser automation for AI agents. Zero production dependencies. Works in Node.js, Bun, and Cloudflare Workers.
 
+> **Use `bd` for task tracking.** Run `bd onboard` to get started, then `bd ready` to find work.
+
 ## Commands
 
 ```bash
+bun check                   # TypeScript + lint (run first)
 bun test                    # Run all tests
 bun test tests/unit         # Unit tests only (fast, mocked CDP)
 bun test tests/integration  # Integration tests (real browser)
-bun typecheck               # TypeScript check
 ```
 
-Before PR: run `bun test && bun typecheck`
+Before PR: run `bun check && bun test`
+
+## Agent Workflow
+
+```bash
+bd ready                            # Find available work
+bd show <id>                        # View issue details
+bd update <id> --status in_progress # Claim work
+bd close <id>                       # Complete work
+```
+
+**Session completion (mandatory):**
+1. File issues for remaining work
+2. Run quality gates: `bun check && bun test`
+3. Update/close issues
+4. Push changes: `git pull --rebase && bd sync && git push`
+5. Verify: `git status` shows "up to date with origin"
 
 ## Architecture
 

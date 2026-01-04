@@ -171,6 +171,8 @@ await page.click(['ref:e4', '#submit', 'button[type=submit]']);
 ```
 
 Refs are stable until page navigation. Always take a fresh snapshot after navigating.
+CLI note: refs are cached per session+URL after a snapshot, so you can reuse them across CLI calls
+until navigation changes the URL.
 
 ## Page API
 
@@ -343,6 +345,7 @@ bp snapshot -s my-session --format text
 # Output: button "Submit" [ref=e4], textbox "Email" [ref=e5], ...
 
 # Use refs from snapshot for reliable targeting
+# Refs are cached per session+URL after snapshot
 bp exec -s my-session '{"action":"click","selector":"ref:e4"}'
 bp exec -s my-session '{"action":"fill","selector":"ref:e5","value":"test@example.com"}'
 
