@@ -294,7 +294,7 @@ export class Page {
     value: string,
     options: FillOptions = {}
   ): Promise<boolean> {
-    const { clear = true } = options;
+    const { clear = true, blur = false } = options;
 
     return this.withStaleNodeRetry(async () => {
       const element = await this.findElement(selector, options);
@@ -314,7 +314,11 @@ export class Page {
             const el = document.querySelector(${JSON.stringify(element.selector)});
             if (el) {
               el.value = '';
-              el.dispatchEvent(new Event('input', { bubbles: true }));
+              el.dispatchEvent(new InputEvent('input', {
+                bubbles: true,
+                cancelable: true,
+                inputType: 'deleteContent'
+              }));
             }
           })()`
         );
@@ -323,16 +327,28 @@ export class Page {
       // Insert the text
       await this.cdp.send('Input.insertText', { text: value });
 
-      // Dispatch input event
+      // Dispatch InputEvent with proper properties for React compatibility
       await this.evaluateInFrame(
         `(() => {
           const el = document.querySelector(${JSON.stringify(element.selector)});
           if (el) {
-            el.dispatchEvent(new Event('input', { bubbles: true }));
+            el.dispatchEvent(new InputEvent('input', {
+              bubbles: true,
+              cancelable: true,
+              inputType: 'insertText',
+              data: ${JSON.stringify(value)}
+            }));
             el.dispatchEvent(new Event('change', { bubbles: true }));
           }
         })()`
       );
+
+      // Optionally trigger blur for frameworks that need it
+      if (blur) {
+        await this.evaluateInFrame(
+          `document.querySelector(${JSON.stringify(element.selector)})?.blur()`
+        );
+      }
 
       return true;
     });

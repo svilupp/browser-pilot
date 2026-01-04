@@ -4,7 +4,29 @@
 
 import { addBatchToPage, connect, type Step } from '../../index.ts';
 import { output } from '../index.ts';
-import { getDefaultSession, loadSession, type SessionData, updateSession } from '../session.ts';
+import {
+  deleteSession,
+  getDefaultSession,
+  loadSession,
+  type SessionData,
+  updateSession,
+} from '../session.ts';
+
+/**
+ * Validate that a session's browser is still alive
+ * Tries to reach the browser's /json/version endpoint
+ */
+async function validateSession(session: SessionData): Promise<boolean> {
+  try {
+    const wsUrl = new URL(session.wsUrl);
+    const protocol = wsUrl.protocol === 'wss:' ? 'https:' : 'http:';
+    const httpUrl = `${protocol}//${wsUrl.host}/json/version`;
+    const response = await fetch(httpUrl, { signal: AbortSignal.timeout(3000) });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
 
 interface ExecOptions {
   session?: string;
@@ -66,6 +88,17 @@ export async function execCommand(
     if (!session) {
       throw new Error('No session found. Run "bp connect" first.');
     }
+  }
+
+  // Validate session is still alive before connecting
+  const isValid = await validateSession(session);
+  if (!isValid) {
+    // Auto-cleanup stale session
+    await deleteSession(session.id);
+    throw new Error(
+      `Session "${session.id}" is no longer valid (browser may have closed).\n` +
+        `Session file has been cleaned up. Run "bp connect" to create a new session.`
+    );
   }
 
   // Connect to browser

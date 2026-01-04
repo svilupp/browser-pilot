@@ -111,12 +111,39 @@ Use `optional: true` to skip gracefully if element not found:
 {"action": "click", "selector": "#cookie-banner", "optional": true, "timeout": 3000}
 ```
 
+## React/Vue State Verification
+
+browser-pilot operates at the DOM level and cannot directly access framework state. Use these patterns:
+
+**Use `blur` option for controlled inputs:**
+```json
+{"action":"fill","selector":"#email","value":"user@example.com","blur":true}
+```
+
+**Check state via evaluate:**
+```bash
+bp exec '{"action":"evaluate","expression":"window.__REACT_STATE__ || window.__VUEX_STATE__"}'
+```
+
+**Trigger blur manually for validation:**
+```json
+[
+  {"action":"fill","selector":"#email","value":"test@example.com"},
+  {"action":"press","key":"Tab"}
+]
+```
+
+**Check dataLayer for analytics:**
+```bash
+bp exec '{"action":"evaluate","expression":"window.dataLayer"}'
+```
+
 ## Tips
 
 1. **Take a snapshot before using refs** - Populates the ref cache
 2. **Refs solve Shadow DOM** - If CSS selector fails, use ref from snapshot
 3. **Always use `--dialog`** when actions might trigger native dialogs
-4. **Trigger blur for validation** - `{"action":"press","key":"Tab"}` after fill
+4. **Use `blur: true` for React/Vue forms** - Ensures state sync on controlled inputs
 5. **Run `bp actions`** for complete action reference
 
 ---
