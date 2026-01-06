@@ -128,11 +128,15 @@ describe('Recording Integration', () => {
       // Selector should be an array (multiple candidates) or string
       const selector = clickStep?.selector;
       if (Array.isArray(selector)) {
-        // First selector should be stable-attr (data-testid)
+        // First selector should be role-name (highest priority)
+        // Order: role-name > text > aria-label > testid > stable-attr > id > css-path
         const firstSelector = selector[0];
-        expect(firstSelector).toContain('data-testid');
+        expect(firstSelector).toContain('role=button');
+        // data-testid should also be present in the array
+        const hasTestId = selector.some((s) => s.includes('data-testid'));
+        expect(hasTestId).toBe(true);
       } else if (typeof selector === 'string') {
-        // Single selector - could be stable-attr or id
+        // Single selector - could be role-name or stable-attr
         expect(selector).toBeTruthy();
       }
     });

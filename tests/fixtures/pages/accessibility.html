@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Accessibility Test Page</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      padding: 20px;
+      max-width: 600px;
+      margin: 0 auto;
+    }
+    h1 { color: #333; margin-bottom: 20px; }
+    .section { margin-bottom: 30px; padding: 15px; border: 1px solid #ddd; border-radius: 8px; }
+    .section h2 { margin-top: 0; color: #555; }
+    button, input, select {
+      padding: 10px 16px;
+      font-size: 14px;
+      margin: 5px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+    }
+    button {
+      cursor: pointer;
+      background: #2196F3;
+      color: white;
+      border: none;
+    }
+    button:hover { background: #1976D2; }
+    .icon-button { background: transparent; color: #333; border: 1px solid #ddd; }
+    label { display: block; margin-bottom: 5px; color: #555; }
+    .form-group { margin-bottom: 15px; }
+    nav { background: #f5f5f5; padding: 10px; border-radius: 4px; margin-bottom: 20px; }
+    nav a { margin: 0 10px; color: #2196F3; text-decoration: none; }
+    #result { margin-top: 20px; padding: 10px; background: #e3f2fd; border-radius: 4px; display: none; }
+  </style>
+</head>
+<body>
+  <h1>Accessibility Test</h1>
+
+  <nav role="navigation" aria-label="Main navigation">
+    <a href="#home">Home</a>
+    <a href="#about">About</a>
+    <a href="#contact">Contact</a>
+  </nav>
+
+  <main role="main">
+    <section class="section" aria-label="Buttons section">
+      <h2>Buttons</h2>
+
+      <!-- Button with aria-label -->
+      <button aria-label="More actions">...</button>
+
+      <!-- Button with visible text -->
+      <button>Submit</button>
+
+      <!-- Button with title -->
+      <button class="icon-button" title="Settings">&#9881;</button>
+
+      <!-- Custom role button -->
+      <div role="button" tabindex="0">Custom Button</div>
+    </section>
+
+    <section class="section" aria-label="Form section">
+      <h2>Form Elements</h2>
+
+      <form id="test-form">
+        <div class="form-group">
+          <!-- Input with label -->
+          <label for="email">Email Address</label>
+          <input type="email" id="email" name="email" placeholder="Enter email">
+        </div>
+
+        <div class="form-group">
+          <!-- Input with aria-label -->
+          <input type="text" aria-label="Search" placeholder="Search...">
+        </div>
+
+        <div class="form-group">
+          <!-- Input with aria-labelledby -->
+          <span id="phone-label">Phone Number</span>
+          <span id="phone-hint">(optional)</span>
+          <input type="tel" aria-labelledby="phone-label phone-hint">
+        </div>
+
+        <div class="form-group">
+          <label for="country">Country</label>
+          <select id="country" name="country">
+            <option value="">Select country</option>
+            <option value="us">United States</option>
+            <option value="uk">United Kingdom</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label>
+            <input type="checkbox" name="subscribe">
+            Subscribe to newsletter
+          </label>
+        </div>
+
+        <button type="submit">Save</button>
+      </form>
+    </section>
+
+    <section class="section" aria-label="Links section">
+      <h2>Links</h2>
+      <a href="/page1">View details</a>
+      <a href="/page2" aria-label="Download report">Download</a>
+    </section>
+  </main>
+
+  <div id="result"></div>
+
+  <script>
+    // Button click handler
+    document.querySelectorAll('button, [role="button"]').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        const result = document.getElementById('result');
+        result.style.display = 'block';
+        result.textContent = `Button clicked: ${btn.getAttribute('aria-label') || btn.textContent.trim() || 'unknown'}`;
+      });
+    });
+
+    // Form submit handler
+    document.getElementById('test-form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const result = document.getElementById('result');
+      result.style.display = 'block';
+      result.textContent = 'Form submitted!';
+    });
+  </script>
+</body>
+</html>

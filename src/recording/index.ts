@@ -6,7 +6,12 @@
  */
 
 // Export aggregator functions
-export { aggregateEvents, debounceInputEvents, selectBestSelectors } from './aggregator.ts';
+export {
+  aggregateEvents,
+  debounceInputEvents,
+  generateAnnotation,
+  selectBestSelectors,
+} from './aggregator.ts';
 
 // Export Recorder class
 export { Recorder } from './recorder.ts';
@@ -16,11 +21,21 @@ export { RECORDER_BINDING_NAME, RECORDER_SCRIPT } from './script.ts';
 
 // Export types
 export type {
+  ElementContext,
+  ElementInfo,
+  ElementPosition,
   ElementSummary,
+  PageState,
   RawRecordedEvent,
   RecordedEventKind,
   RecordingOutput,
+  RichRecordedEvent,
+  RichRecordingOutput,
+  RichSelectorCandidate,
+  RichStep,
   SelectorCandidate,
   SelectorQuality,
+  SelectorStrategy,
+  StateChange,
   Step,
 } from './types.ts';
