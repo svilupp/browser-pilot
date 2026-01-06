@@ -5,8 +5,7 @@
  * with page.batch() for replay.
  */
 
-import type { Step } from '../actions/types.ts';
-import type { RawRecordedEvent, SelectorCandidate } from './types.ts';
+import type { RawRecordedEvent, RichStep, SelectorCandidate } from './types.ts';
 
 /** Debounce window for input events in milliseconds */
 const INPUT_DEBOUNCE_MS = 300;
@@ -15,20 +14,26 @@ const INPUT_DEBOUNCE_MS = 300;
 const NAVIGATION_DEBOUNCE_MS = 500;
 
 /**
- * Order selectors by quality (stable-attr > id > css-path).
+ * Order selectors by quality.
+ * Priority: role-name > text > aria-label > testid > stable-attr > id > css-path
  * Returns an array of selector strings ready for multi-selector use.
  */
 export function selectBestSelectors(candidates: SelectorCandidate[]): string[] {
   const qualityOrder: Record<string, number> = {
-    'stable-attr': 0,
-    id: 1,
-    'css-path': 2,
+    'role-name': 0,
+    text: 1,
+    'aria-label': 2,
+    testid: 3,
+    'stable-attr': 4,
+    id: 5,
+    'name-attr': 6,
+    'css-path': 7,
   };
 
   // Sort by quality and extract selector strings
   const sorted = [...candidates].sort((a, b) => {
-    const aOrder = qualityOrder[a.quality] ?? 3;
-    const bOrder = qualityOrder[b.quality] ?? 3;
+    const aOrder = qualityOrder[a.quality] ?? 8;
+    const bOrder = qualityOrder[b.quality] ?? 8;
     return aOrder - bOrder;
   });
 
@@ -43,6 +48,79 @@ export function selectBestSelectors(candidates: SelectorCandidate[]): string[] {
   }
 
   return result;
+}
+
+/**
+ * Generate a human-readable annotation for a recorded event.
+ */
+export function generateAnnotation(event: RawRecordedEvent): string {
+  const { kind, element, url } = event;
+  const name = element?.accessibleName || element?.text || element?.ariaLabel;
+  const role = element?.computedRole || element?.role || element?.tag || '';
+
+  switch (kind) {
+    case 'click':
+      if (name && role) {
+        return `Clicked '${name}' ${role}`;
+      } else if (name) {
+        return `Clicked '${name}'`;
+      } else if (role) {
+        return `Clicked ${role}`;
+      }
+      return 'Clicked element';
+
+    case 'dblclick':
+      if (name && role) {
+        return `Double-clicked '${name}' ${role}`;
+      }
+      return 'Double-clicked element';
+
+    case 'input':
+      if (name) {
+        return `Filled '${name}' with value`;
+      }
+      return 'Filled input with value';
+
+    case 'change':
+      if (element?.type === 'checkbox' || element?.type === 'radio') {
+        const action = event.checked ? 'Checked' : 'Unchecked';
+        if (name) {
+          return `${action} '${name}' ${element.type}`;
+        }
+        return `${action} ${element.type}`;
+      }
+      if (element?.tag === 'select') {
+        if (name) {
+          return `Selected option in '${name}'`;
+        }
+        return 'Selected option';
+      }
+      if (name) {
+        return `Changed '${name}'`;
+      }
+      return 'Changed element';
+
+    case 'submit':
+      if (name) {
+        return `Submitted '${name}' form`;
+      }
+      return 'Submitted form';
+
+    case 'keydown':
+      if (event.key === 'Enter') {
+        return 'Pressed Enter';
+      }
+      return `Pressed ${event.key}`;
+
+    case 'navigation':
+      return `Navigated to ${url}`;
+
+    default:
+      if (name) {
+        return `${kind} on '${name}'`;
+      }
+      return `${kind} on element`;
+  }
 }
 
 /**
@@ -177,10 +255,28 @@ function insertNavigationSteps(events: RawRecordedEvent[], startUrl?: string): R
 }
 
 /**
- * Convert a raw event to a Step for replay.
+ * Build element metadata for RichStep.
  */
-function eventToStep(event: RawRecordedEvent): Step | null {
+function buildElementMeta(
+  event: RawRecordedEvent
+): { role?: string | null; name?: string | null; tag?: string } | undefined {
+  const el = event.element;
+  if (!el) return undefined;
+
+  return {
+    role: el.computedRole || el.role,
+    name: el.accessibleName || el.text || el.ariaLabel,
+    tag: el.tag,
+  };
+}
+
+/**
+ * Convert a raw event to a RichStep for replay with metadata.
+ */
+function eventToStep(event: RawRecordedEvent): RichStep | null {
   const selectors = selectBestSelectors(event.selectors);
+  const elementMeta = buildElementMeta(event);
+  const annotation = generateAnnotation(event);
 
   switch (event.kind) {
     case 'click':
@@ -190,6 +286,8 @@ function eventToStep(event: RawRecordedEvent): Step | null {
       return {
         action: 'click',
         selector: selectors.length === 1 ? selectors[0] : selectors,
+        element: elementMeta,
+        annotation,
       };
 
     case 'input':
@@ -198,6 +296,8 @@ function eventToStep(event: RawRecordedEvent): Step | null {
         action: 'fill',
         selector: selectors.length === 1 ? selectors[0] : selectors,
         value: event.value ?? '',
+        element: elementMeta,
+        annotation,
       };
 
     case 'change': {
@@ -212,6 +312,8 @@ function eventToStep(event: RawRecordedEvent): Step | null {
           action: 'select',
           selector: selectors.length === 1 ? selectors[0] : selectors,
           value: event.value ?? '',
+          element: elementMeta,
+          annotation,
         };
       }
 
@@ -220,6 +322,8 @@ function eventToStep(event: RawRecordedEvent): Step | null {
         return {
           action: event.checked ? 'check' : 'uncheck',
           selector: selectors.length === 1 ? selectors[0] : selectors,
+          element: elementMeta,
+          annotation,
         };
       }
 
@@ -228,6 +332,8 @@ function eventToStep(event: RawRecordedEvent): Step | null {
         action: 'fill',
         selector: selectors.length === 1 ? selectors[0] : selectors,
         value: event.value ?? '',
+        element: elementMeta,
+        annotation,
       };
     }
 
@@ -239,6 +345,8 @@ function eventToStep(event: RawRecordedEvent): Step | null {
           action: 'submit',
           selector: selectors.length === 1 ? selectors[0] : selectors,
           method: 'enter',
+          element: elementMeta,
+          annotation,
         };
       }
       return null;
@@ -248,12 +356,15 @@ function eventToStep(event: RawRecordedEvent): Step | null {
       return {
         action: 'submit',
         selector: selectors.length === 1 ? selectors[0] : selectors,
+        element: elementMeta,
+        annotation,
       };
 
     case 'navigation':
       return {
         action: 'goto',
         url: event.url,
+        annotation,
       };
 
     default:
@@ -264,8 +375,8 @@ function eventToStep(event: RawRecordedEvent): Step | null {
 /**
  * Remove redundant steps (e.g., submit after Enter key on same element).
  */
-function deduplicateSteps(steps: Step[]): Step[] {
-  const result: Step[] = [];
+function deduplicateSteps(steps: RichStep[]): RichStep[] {
+  const result: RichStep[] = [];
 
   for (let i = 0; i < steps.length; i++) {
     const step = steps[i]!;
@@ -287,13 +398,13 @@ function deduplicateSteps(steps: Step[]): Step[] {
 }
 
 /**
- * Aggregate raw recorded events into clean Step[] output.
+ * Aggregate raw recorded events into clean RichStep[] output.
  * This is the main entry point for event processing.
  *
  * @param events - Raw events captured from the browser
  * @param startUrl - Optional starting URL to detect initial navigation
  */
-export function aggregateEvents(events: RawRecordedEvent[], startUrl?: string): Step[] {
+export function aggregateEvents(events: RawRecordedEvent[], startUrl?: string): RichStep[] {
   if (events.length === 0) return [];
 
   // Step 1: Insert navigation steps for URL changes
@@ -306,7 +417,7 @@ export function aggregateEvents(events: RawRecordedEvent[], startUrl?: string): 
   processed = debounceInputEvents(processed);
 
   // Step 4: Convert to steps
-  const steps: Step[] = [];
+  const steps: RichStep[] = [];
   for (const event of processed) {
     const step = eventToStep(event);
     if (step) {

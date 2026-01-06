@@ -131,25 +131,178 @@ export const RECORDER_SCRIPT = `(function() {
   function getSelectorCandidates(el) {
     const candidates = [];
 
-    // 1. Stable attributes (highest quality)
+    // Get semantic info for role-based selectors
+    const role = getRole(el);
+    const name = getAccessibleName(el);
+
+    // 1. Role + name selector (highest priority for semantic elements)
+    if (role && name) {
+      const escapedName = name.replace(/'/g, "\\\\'");
+      candidates.push({
+        selector: "role=" + role + "[name='" + escapedName + "']",
+        quality: 'role-name'
+      });
+    }
+
+    // 2. Text-based selector (for buttons, links, menuitems)
+    if (name && ['button', 'link', 'menuitem'].includes(role)) {
+      candidates.push({
+        selector: "text=" + name,
+        quality: 'text'
+      });
+    }
+
+    // 3. aria-label attribute selector
+    const ariaLabel = el.getAttribute('aria-label');
+    if (ariaLabel) {
+      const escaped = ariaLabel.replace(/"/g, '\\\\"');
+      candidates.push({
+        selector: '[aria-label="' + escaped + '"]',
+        quality: 'aria-label'
+      });
+    }
+
+    // 4. Stable attributes (testid, name)
     const stableAttr = getStableAttrSelector(el);
     if (stableAttr) {
       candidates.push({ selector: stableAttr, quality: 'stable-attr' });
     }
 
-    // 2. ID selector
+    // 5. ID selector
     const idSel = getIdSelector(el);
     if (idSel) {
       candidates.push({ selector: idSel, quality: 'id' });
     }
 
-    // 3. CSS path (fallback)
+    // 6. CSS path (fallback)
     const cssPath = buildCssPath(el);
     if (cssPath) {
       candidates.push({ selector: cssPath, quality: 'css-path' });
     }
 
     return candidates;
+  }
+
+  // Compute accessible name per W3C AccName spec
+  // Priority: aria-labelledby > aria-label > label > title > content > alt > placeholder
+  function getAccessibleName(el) {
+    if (!el || el.nodeType !== 1) return null;
+
+    // 1. aria-labelledby
+    const labelledBy = el.getAttribute('aria-labelledby');
+    if (labelledBy) {
+      const labels = labelledBy.split(/\\s+/)
+        .map(function(id) {
+          const ref = document.getElementById(id);
+          return ref ? ref.textContent : null;
+        })
+        .filter(Boolean);
+      if (labels.length) return labels.join(' ').trim().slice(0, 100);
+    }
+
+    // 2. aria-label
+    const ariaLabel = el.getAttribute('aria-label');
+    if (ariaLabel) return ariaLabel.trim().slice(0, 100);
+
+    // 3. Native <label> for form elements
+    if (el.labels && el.labels.length) {
+      const labelTexts = Array.from(el.labels)
+        .map(function(l) { return l.textContent; })
+        .filter(Boolean);
+      if (labelTexts.length) return labelTexts.join(' ').trim().slice(0, 100);
+    }
+
+    // 4. title attribute
+    const title = el.getAttribute('title');
+    if (title) return title.trim().slice(0, 100);
+
+    // 5. Content for buttons, links, summary
+    const tag = el.tagName.toLowerCase();
+    const role = el.getAttribute('role');
+    if (['button', 'a', 'summary'].includes(tag) || role === 'button' || role === 'link' || role === 'menuitem') {
+      const text = (el.textContent || '').trim();
+      if (text) return text.slice(0, 100);
+    }
+
+    // 6. alt for images
+    if (tag === 'img') {
+      const alt = el.getAttribute('alt');
+      if (alt) return alt.trim().slice(0, 100);
+    }
+
+    // 7. placeholder for inputs
+    if (['input', 'textarea'].includes(tag)) {
+      const placeholder = el.getAttribute('placeholder');
+      if (placeholder) return placeholder.trim().slice(0, 100);
+    }
+
+    return null;
+  }
+
+  // Get explicit ARIA role or implicit role from HTML tag
+  function getRole(el) {
+    if (!el || el.nodeType !== 1) return null;
+
+    // 1. Explicit role attribute
+    const explicitRole = el.getAttribute('role');
+    if (explicitRole) return explicitRole;
+
+    // 2. Implicit role from tag/type
+    const tag = el.tagName.toLowerCase();
+    const type = (el.getAttribute('type') || '').toLowerCase();
+
+    // Input types to roles
+    if (tag === 'input') {
+      var inputRoles = {
+        'button': 'button',
+        'submit': 'button',
+        'reset': 'button',
+        'image': 'button',
+        'checkbox': 'checkbox',
+        'radio': 'radio',
+        'range': 'slider',
+        'search': 'searchbox'
+      };
+      if (inputRoles[type]) return inputRoles[type];
+      // text, email, tel, url, number, password all map to textbox
+      return 'textbox';
+    }
+
+    // Other tags with implicit roles
+    var tagRoles = {
+      'button': 'button',
+      'select': 'combobox',
+      'textarea': 'textbox',
+      'nav': 'navigation',
+      'main': 'main',
+      'header': 'banner',
+      'footer': 'contentinfo',
+      'aside': 'complementary',
+      'article': 'article',
+      'ul': 'list',
+      'ol': 'list',
+      'li': 'listitem',
+      'table': 'table',
+      'tr': 'row',
+      'td': 'cell',
+      'th': 'columnheader',
+      'form': 'form',
+      'img': 'img',
+      'dialog': 'dialog',
+      'menu': 'menu',
+      'summary': 'button'
+    };
+    if (tagRoles[tag]) return tagRoles[tag];
+
+    // Anchor with href is a link
+    if (tag === 'a' && el.hasAttribute('href')) return 'link';
+
+    // Section with aria-label or aria-labelledby is a region
+    if (tag === 'section' && (el.hasAttribute('aria-label') || el.hasAttribute('aria-labelledby'))) {
+      return 'region';
+    }
+
+    return null;
   }
 
   // Get element summary for debugging
@@ -164,7 +317,9 @@ export const RECORDER_SCRIPT = `(function() {
       role: el.getAttribute('role') || null,
       ariaLabel: el.getAttribute('aria-label') || null,
       testid: el.getAttribute('data-testid') || null,
-      text: text || null
+      text: text || null,
+      accessibleName: getAccessibleName(el),
+      computedRole: getRole(el)
     };
   }
 
