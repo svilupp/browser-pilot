@@ -166,6 +166,43 @@ bp list
 # dev         generic      2024-01-15 09:00:00  about:blank
 ```
 
+### record
+
+Record browser actions to JSON for replay. Captures human interactions and saves them as steps compatible with `page.batch()`. This is ideal for humans who want to create automations by demonstrating workflows rather than writing code.
+
+```bash
+bp record [options]
+```
+
+**Options:**
+- `-s, --session [id]` - Session to use:
+  - Omit `-s`: auto-connect to local browser
+  - `-s` alone: use most recent session
+  - `-s <id>`: use specific session
+- `-f, --file <path>` - Output file (default: `recording.json`)
+- `--timeout <ms>` - Auto-stop after timeout
+
+**Examples:**
+
+```bash
+# Auto-connect to local Chrome and record
+bp record
+
+# Use most recent session
+bp record -s
+
+# Use specific session with custom output
+bp record -s my-session -f login-flow.json
+
+# Replay a recording
+bp exec --file recording.json
+```
+
+**Notes:**
+- Password fields are automatically redacted as `[REDACTED]`
+- Selectors are multi-selector arrays ordered by reliability
+- Press Ctrl+C to stop recording and save
+
 ### close
 
 Close a session.

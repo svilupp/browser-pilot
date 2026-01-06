@@ -1,0 +1,232 @@
+/**
+ * Recording integration tests
+ *
+ * Tests the full recording flow with a real browser:
+ * - Script injection and event capture
+ * - Click action recording with selectors
+ * - Input recording with values
+ * - Password field redaction
+ * - Multi-selector array ordering
+ */
+
+import { afterAll, afterEach, beforeAll, describe, expect, test } from 'bun:test';
+import { Recorder } from '../../src/recording/recorder.ts';
+import { withRetry } from '../utils/retry';
+import { TestContext } from './setup';
+
+const ctx = new TestContext();
+
+describe('Recording Integration', () => {
+  beforeAll(() => ctx.setup());
+  afterAll(() => ctx.teardown());
+  afterEach(() => ctx.resetPage());
+
+  test('should record click action with selectors', async () => {
+    const { page, baseUrl } = ctx.get();
+
+    await withRetry(async () => {
+      await page.goto(`${baseUrl}/basic.html`);
+
+      // Start recording
+      const recorder = new Recorder(page.cdpClient);
+      await recorder.start();
+
+      // Simulate a click via CDP
+      await simulateClick(page, '#show-dynamic');
+
+      // Stop and get output
+      const output = await recorder.stop();
+
+      // Verify we got a click step
+      expect(output.steps.length).toBeGreaterThanOrEqual(1);
+
+      const clickStep = output.steps.find((s) => s.action === 'click');
+      expect(clickStep).toBeDefined();
+
+      // Should have selector (either string or array)
+      expect(clickStep?.selector).toBeDefined();
+    });
+  });
+
+  test('should record input with value', async () => {
+    const { page, baseUrl } = ctx.get();
+
+    await withRetry(async () => {
+      await page.goto(`${baseUrl}/form.html`);
+
+      // Start recording
+      const recorder = new Recorder(page.cdpClient);
+      await recorder.start();
+
+      // Type into name field
+      await page.fill('#name', 'Test User');
+
+      // Small delay to ensure events are captured
+      await sleep(100);
+
+      // Stop and get output
+      const output = await recorder.stop();
+
+      // Verify we got a fill step
+      const fillStep = output.steps.find((s) => s.action === 'fill');
+      expect(fillStep).toBeDefined();
+      expect(fillStep?.value).toBe('Test User');
+    });
+  });
+
+  test('should redact password field values', async () => {
+    const { page, baseUrl } = ctx.get();
+
+    await withRetry(async () => {
+      await page.goto(`${baseUrl}/login.html`);
+
+      // Start recording
+      const recorder = new Recorder(page.cdpClient);
+      await recorder.start();
+
+      // Type into password field
+      await page.fill('#password', 'supersecret123');
+
+      // Small delay to ensure events are captured
+      await sleep(100);
+
+      // Stop and get output
+      const output = await recorder.stop();
+
+      // Find fill step for password
+      const passwordStep = output.steps.find(
+        (s) => s.action === 'fill' && s.value === '[REDACTED]'
+      );
+      expect(passwordStep).toBeDefined();
+
+      // Verify the actual password is NOT in the output
+      const hasPlainPassword = output.steps.some((s) => s.value === 'supersecret123');
+      expect(hasPlainPassword).toBe(false);
+    });
+  });
+
+  test('should generate multi-selector arrays ordered by quality', async () => {
+    const { page, baseUrl } = ctx.get();
+
+    await withRetry(async () => {
+      await page.goto(`${baseUrl}/login.html`);
+
+      // Start recording
+      const recorder = new Recorder(page.cdpClient);
+      await recorder.start();
+
+      // Click on element with data-testid (stable attr)
+      await simulateClick(page, '[data-testid="submit"]');
+
+      // Stop and get output
+      const output = await recorder.stop();
+
+      // Find the click step
+      const clickStep = output.steps.find((s) => s.action === 'click');
+      expect(clickStep).toBeDefined();
+
+      // Selector should be an array (multiple candidates) or string
+      const selector = clickStep?.selector;
+      if (Array.isArray(selector)) {
+        // First selector should be stable-attr (data-testid)
+        const firstSelector = selector[0];
+        expect(firstSelector).toContain('data-testid');
+      } else if (typeof selector === 'string') {
+        // Single selector - could be stable-attr or id
+        expect(selector).toBeTruthy();
+      }
+    });
+  });
+
+  test('should record navigation via goto steps', async () => {
+    const { page, baseUrl } = ctx.get();
+
+    await withRetry(async () => {
+      await page.goto(`${baseUrl}/basic.html`);
+
+      // Start recording
+      const recorder = new Recorder(page.cdpClient);
+      await recorder.start();
+
+      // Navigate to form page
+      await page.goto(`${baseUrl}/form.html`);
+
+      // Click something on the new page
+      await simulateClick(page, '#name');
+
+      // Stop and get output
+      const output = await recorder.stop();
+
+      // Should have a goto step for the navigation
+      const gotoStep = output.steps.find((s) => s.action === 'goto');
+      expect(gotoStep).toBeDefined();
+      expect(gotoStep?.url).toContain('form.html');
+    });
+  });
+
+  test('should handle empty recording', async () => {
+    const { page, baseUrl } = ctx.get();
+
+    await withRetry(async () => {
+      await page.goto(`${baseUrl}/basic.html`);
+
+      // Start recording
+      const recorder = new Recorder(page.cdpClient);
+      await recorder.start();
+
+      // Don't do anything, just stop immediately
+      const output = await recorder.stop();
+
+      // Output should be valid with empty steps
+      expect(output.recordedAt).toBeDefined();
+      expect(output.startUrl).toContain('basic.html');
+      expect(output.duration).toBeGreaterThanOrEqual(0);
+      expect(output.steps).toEqual([]);
+    });
+  });
+});
+
+/**
+ * Simulate a real click via CDP Input events
+ */
+async function simulateClick(
+  page: { cdpClient: { send: (m: string, p?: Record<string, unknown>) => Promise<unknown> } },
+  selector: string
+): Promise<void> {
+  // Get element position via evaluate
+  const cdp = page.cdpClient;
+
+  const result = (await cdp.send('Runtime.evaluate', {
+    expression: `(() => {
+      const el = document.querySelector(${JSON.stringify(selector)});
+      if (!el) return null;
+      const rect = el.getBoundingClientRect();
+      return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+    })()`,
+    returnByValue: true,
+  })) as { result: { value: { x: number; y: number } | null } };
+
+  const pos = result.result.value;
+  if (!pos) throw new Error(`Element not found: ${selector}`);
+
+  // Dispatch mouse events
+  await cdp.send('Input.dispatchMouseEvent', {
+    type: 'mousePressed',
+    x: pos.x,
+    y: pos.y,
+    button: 'left',
+    clickCount: 1,
+  });
+
+  await cdp.send('Input.dispatchMouseEvent', {
+    type: 'mouseReleased',
+    x: pos.x,
+    y: pos.y,
+    button: 'left',
+    clickCount: 1,
+  });
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}

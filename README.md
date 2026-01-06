@@ -403,6 +403,45 @@ Output:
 
 Run `bp actions` for complete action reference.
 
+### Recording Browser Actions
+
+Record human interactions to create automation recipes:
+
+```bash
+# Auto-connect to local Chrome and record (creates new session)
+bp record
+
+# Use most recent session
+bp record -s
+
+# Use specific session with custom output file
+bp record -s my-session -f login-flow.json
+
+# Review and edit the recording
+cat recording.json
+
+# Replay the recording
+bp exec -s my-session --file recording.json
+```
+
+The output format is compatible with `page.batch()`:
+```json
+{
+  "recordedAt": "2026-01-06T10:00:00.000Z",
+  "startUrl": "https://example.com",
+  "duration": 15000,
+  "steps": [
+    { "action": "fill", "selector": ["[data-testid=\"email\"]", "#email"], "value": "user@example.com" },
+    { "action": "click", "selector": ["[data-testid=\"submit\"]", "#login-btn"] }
+  ]
+}
+```
+
+**Notes:**
+- Password fields are automatically redacted as `[REDACTED]`
+- Selectors are multi-selector arrays ordered by reliability (data attributes > IDs > CSS paths)
+- Edit the JSON to adjust selectors or add `optional: true` flags
+
 ## Examples
 
 ### Login Flow with Error Handling
