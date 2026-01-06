@@ -28,6 +28,7 @@ import { connectCommand } from './commands/connect.ts';
 import { execCommand } from './commands/exec.ts';
 import { listCommand } from './commands/list.ts';
 import { quickstartCommand } from './commands/quickstart.ts';
+import { recordCommand } from './commands/record.ts';
 import { screenshotCommand } from './commands/screenshot.ts';
 import { snapshotCommand } from './commands/snapshot.ts';
 import { textCommand } from './commands/text.ts';
@@ -42,6 +43,7 @@ Commands:
   quickstart  Getting started guide (start here!)
   connect     Create browser session
   exec        Execute actions
+  record      Record browser actions to JSON
   snapshot    Get page with element refs
   text        Extract text content
   screenshot  Take screenshot
@@ -62,6 +64,8 @@ Examples:
   bp exec '{"action":"goto","url":"https://example.com"}'
   bp snapshot --format text
   bp exec '{"action":"click","selector":"ref:e3"}'
+  bp record                        # Record from local browser
+  bp record -s -f login.json       # Record from latest session
 
 Run 'bp quickstart' for CLI workflow guide.
 Run 'bp actions' for complete action reference.
@@ -193,6 +197,10 @@ async function main(): Promise<void> {
 
       case 'actions':
         await actionsCommand();
+        break;
+
+      case 'record':
+        await recordCommand(remaining, options);
         break;
 
       case 'help':

@@ -83,6 +83,14 @@ export class Page {
   }
 
   /**
+   * Get the underlying CDP client for advanced operations.
+   * Use with caution - prefer high-level Page methods when possible.
+   */
+  get cdpClient(): CDPClient {
+    return this.cdp;
+  }
+
+  /**
    * Initialize the page (enable required CDP domains)
    */
   async init(): Promise<void> {

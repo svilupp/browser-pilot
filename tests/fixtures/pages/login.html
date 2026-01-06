@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Login Test Page</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      padding: 20px;
+      max-width: 400px;
+      margin: 0 auto;
+    }
+    h1 { color: #333; margin-bottom: 30px; }
+    .form-group {
+      margin-bottom: 20px;
+    }
+    label {
+      display: block;
+      margin-bottom: 5px;
+      font-weight: 500;
+      color: #555;
+    }
+    input {
+      width: 100%;
+      padding: 10px;
+      font-size: 16px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      box-sizing: border-box;
+    }
+    input:focus {
+      outline: none;
+      border-color: #2196F3;
+    }
+    button {
+      padding: 12px 24px;
+      font-size: 16px;
+      cursor: pointer;
+      background: #2196F3;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      width: 100%;
+    }
+    button:hover { background: #1976D2; }
+    #result {
+      margin-top: 20px;
+      padding: 15px;
+      border-radius: 4px;
+      display: none;
+    }
+    #result.success {
+      display: block;
+      background: #e8f5e9;
+      border: 1px solid #c8e6c9;
+      color: #2e7d32;
+    }
+  </style>
+</head>
+<body>
+  <h1>Login</h1>
+
+  <form id="login-form">
+    <div class="form-group">
+      <label for="username">Username</label>
+      <input type="text" id="username" name="username" data-testid="username" placeholder="Enter username">
+    </div>
+
+    <div class="form-group">
+      <label for="password">Password</label>
+      <input type="password" id="password" name="password" data-testid="password" placeholder="Enter password">
+    </div>
+
+    <button type="submit" id="login-btn" data-testid="submit">Login</button>
+  </form>
+
+  <div id="result"></div>
+
+  <script>
+    const form = document.getElementById('login-form');
+    const result = document.getElementById('result');
+
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const username = document.getElementById('username').value;
+      result.className = 'success';
+      result.textContent = `Welcome, ${username}!`;
+    });
+  </script>
+</body>
+</html>

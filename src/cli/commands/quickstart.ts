@@ -58,6 +58,15 @@ COMMON ACTIONS
   snapshot    {"action":"snapshot"}
   screenshot  {"action":"screenshot"}
 
+RECORDING (FOR HUMANS)
+  Want to create automations by demonstrating instead of coding?
+  Use 'bp record' to capture your browser interactions as replayable JSON:
+
+    bp record                 # Record from local Chrome
+    bp exec --file login.json # Replay the recording
+
+  Great for creating initial automation scripts that AI agents can refine.
+
 Run 'bp actions' for the complete action reference.
 `;
 
