@@ -2,6 +2,8 @@
  * Action/Step types for batch execution
  */
 
+import type { FailureHint } from '../browser/types.ts';
+
 export type ActionType =
   | 'goto'
   | 'click'
@@ -126,6 +128,9 @@ export interface StepResult {
 
   /** Text content (for text action) */
   text?: string;
+
+  /** Failure hints when element not found */
+  hints?: FailureHint[];
 }
 
 export interface BatchResult {

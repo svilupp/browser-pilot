@@ -11,6 +11,7 @@ import {
   type SessionData,
   updateSession,
 } from '../session.ts';
+import { getSessionLogger } from '../session-logger.ts';
 
 /**
  * Validate that a session's browser is still alive
@@ -101,6 +102,9 @@ export async function execCommand(
     );
   }
 
+  // Get logger for this session (with optional export path)
+  const logger = getSessionLogger(session.id, session.exportLog);
+
   // Connect to browser
   const browser = await connect({
     provider: session.provider,
@@ -109,7 +113,7 @@ export async function execCommand(
   });
 
   try {
-    const page = addBatchToPage(await browser.page());
+    const page = addBatchToPage(await browser.page(undefined, { targetId: session.targetId }));
 
     // Hydrate ref map from session cache if URL matches
     const currentUrlForCache = await page.url();
@@ -131,7 +135,34 @@ export async function execCommand(
 
     // Execute actions
     const steps = Array.isArray(actions) ? actions : [actions];
+    const urlBefore = await page.url();
     const result = await page.batch(steps);
+    const urlAfter = await page.url();
+
+    // Log each step result
+    for (const stepResult of result.steps) {
+      logger.logCommand(
+        stepResult.action,
+        { selector: stepResult.selectorUsed },
+        {
+          success: stepResult.success,
+          error: stepResult.error,
+          hints: stepResult.hints,
+        },
+        stepResult.durationMs
+      );
+    }
+
+    // Log overall execution
+    logger.log({
+      type: 'event',
+      cmd: 'batch',
+      args: { stepCount: steps.length },
+      status: result.success ? 'success' : 'failed',
+      durationMs: result.totalDurationMs,
+      urlBefore,
+      urlAfter,
+    });
 
     // Update session with current URL
     const currentUrl = await page.url();

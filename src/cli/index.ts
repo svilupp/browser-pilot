@@ -25,6 +25,7 @@ import { actionsCommand } from './commands/actions.ts';
 import { cleanCommand } from './commands/clean.ts';
 import { closeCommand } from './commands/close.ts';
 import { connectCommand } from './commands/connect.ts';
+import { diagnoseCommand } from './commands/diagnose.ts';
 import { execCommand } from './commands/exec.ts';
 import { listCommand } from './commands/list.ts';
 import { quickstartCommand } from './commands/quickstart.ts';
@@ -45,27 +46,29 @@ Commands:
   exec        Execute actions
   record      Record browser actions to JSON
   snapshot    Get page with element refs
+  diagnose    Debug element selection issues
   text        Extract text content
   screenshot  Take screenshot
   close       Close session
-  list        List sessions
+  list        List sessions (--log-path, --log-tail, --info)
   clean       Clean up old sessions
   actions     Complete action reference
 
 Options:
   -s, --session <id>    Session ID
   -o, --output <fmt>    json | pretty (default: pretty)
+  --json                Alias for -o json
   --trace               Enable debug tracing
   --dialog <mode>       Handle dialogs: accept | dismiss
   -h, --help            Show help
 
 Examples:
   bp connect --provider generic --name dev
+  bp connect -s test --export-log ./logs/test.jsonl
   bp exec '{"action":"goto","url":"https://example.com"}'
   bp snapshot --format text
+  bp list --json                   # JSON output
   bp exec '{"action":"click","selector":"ref:e3"}'
-  bp record                        # Record from local browser
-  bp record -s -f login.json       # Record from latest session
 
 Run 'bp quickstart' for CLI workflow guide.
 Run 'bp actions' for complete action reference.
@@ -91,6 +94,10 @@ function parseGlobalOptions(args: string[]): { options: GlobalOptions; remaining
       options.session = args[++i];
     } else if (arg === '-o' || arg === '--output') {
       options.output = args[++i] as 'json' | 'pretty';
+    } else if (arg === '--json') {
+      options.output = 'json';
+    } else if (arg === '--pretty') {
+      options.output = 'pretty';
     } else if (arg === '--trace') {
       options.trace = true;
     } else if (arg === '-h' || arg === '--help') {
@@ -173,6 +180,10 @@ async function main(): Promise<void> {
 
       case 'snapshot':
         await snapshotCommand(remaining, options);
+        break;
+
+      case 'diagnose':
+        await diagnoseCommand(remaining, options);
         break;
 
       case 'text':

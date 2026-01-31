@@ -128,6 +128,10 @@ function createMockPage() {
       calls.push({ method: 'switchToMain', args: [] });
     },
 
+    getLastMatchedSelector() {
+      return undefined; // Mock returns undefined since we don't track actual matches
+    },
+
     reset() {
       calls.length = 0;
       refMap.clear();

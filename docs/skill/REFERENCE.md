@@ -58,8 +58,16 @@ Custom dropdown:
 
 ```json
 {"action": "submit", "selector": "form"}
+{"action": "submit", "selector": "form#login"}
 {"action": "submit", "selector": "#btn", "method": "click"}
 ```
+
+When targeting a `<form>` element, uses `form.requestSubmit()` which:
+- Fires the `submit` event (allows JS handlers to run)
+- Triggers HTML5 validation
+- Works even without a submit button in the form
+
+When targeting a submit button, uses the configured method (enter, click, or both).
 
 ### Press Key
 
@@ -217,8 +225,10 @@ button[aria-label="Toggle Delta"]
 ## Output Formats
 
 ```bash
-bp exec '...' --output json    # Structured JSON
-bp exec '...' --output pretty  # Human-readable (default)
+bp exec '...' -o json         # Structured JSON
+bp exec '...' --json          # Same as -o json (convenience)
+bp exec '...' -o pretty       # Human-readable (default)
+bp exec '...' --pretty        # Same as -o pretty
 ```
 
 JSON output structure:
@@ -228,11 +238,13 @@ JSON output structure:
   "totalDurationMs": 1500,
   "steps": [
     {"action": "goto", "success": true, "durationMs": 1200},
-    {"action": "click", "success": true, "durationMs": 50, "selectorUsed": "#submit"},
+    {"action": "click", "success": true, "durationMs": 50, "selectorUsed": "#email"},
     {"action": "snapshot", "success": true, "result": "..."}
   ]
 }
 ```
+
+Note: `selectorUsed` shows the actual selector that matched, even when using multi-selector arrays.
 
 ### Error Handling
 
@@ -319,6 +331,81 @@ bp exec --dialog accept '[
   {"action":"click","selector":"ref:e15"},
   {"action":"wait","selector":"[data-testid=\"success\"]","waitFor":"visible"}
 ]'
+```
+
+## Debugging Tools
+
+### Diagnose Selector Issues
+
+When a selector isn't working, diagnose it:
+
+```bash
+# Find out why #submit-button can't be found
+bp diagnose '#submit-button' -s mysession
+
+# Machine-readable output for automated debugging
+bp diagnose '#submit' -s mysession --json --max 10
+```
+
+Output includes:
+- **Exact matches** with visibility issues (hidden, disabled, covered)
+- **Fuzzy matches** with similar element names and confidence scores
+- **Suggested selectors** based on matching elements
+
+### Compare Page States
+
+Track what changed after actions:
+
+```bash
+# Capture initial state
+bp snapshot -s mysession > before.json
+
+# Perform actions
+bp exec -s mysession '[{"action":"click","selector":"ref:e4"}]'
+
+# See what changed
+bp snapshot -s mysession --diff before.json
+```
+
+Shows added, removed, and modified elements.
+
+### Visual Inspection
+
+Inject ref labels directly onto the page:
+
+```bash
+# Inject labels and keep them visible
+bp snapshot -s mysession --inspect --keep
+
+# Labels auto-remove after 10 seconds without --keep
+bp snapshot -s mysession --inspect
+```
+
+### Session Logs
+
+View command history with timing and errors:
+
+```bash
+# Show last 10 commands
+bp list -s mysession --log-tail 10
+
+# Get log file path for external tools
+bp list -s mysession --log-path
+
+# Full session info including log stats
+bp list -s mysession --info
+bp list -s mysession --info --json  # Machine-readable
+```
+
+Logs are in JSONL format at `~/.browser-pilot/sessions/{id}/log.jsonl`.
+
+**Export logs for local analysis:**
+```bash
+# On connect, specify export path
+bp connect -s mysession --export-log ./test-results/session.jsonl
+
+# All subsequent commands automatically duplicate to export log
+# Both files contain identical entries
 ```
 
 ## Troubleshooting

@@ -49,7 +49,7 @@ export async function textCommand(
   });
 
   try {
-    const page = await browser.page();
+    const page = await browser.page(undefined, { targetId: session.targetId });
     const text = await page.text(options.selector);
     const currentUrl = await page.url();
 

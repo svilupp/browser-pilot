@@ -25,6 +25,7 @@ import {
   waitForNetworkIdle as waitForIdle,
   waitForNavigation as waitForNav,
 } from '../wait/index.ts';
+import { generateHints } from './hint-generator.ts';
 import {
   type ActionOptions,
   type ConsoleHandler,
@@ -58,6 +59,7 @@ const DEFAULT_TIMEOUT = 30000;
 
 export class Page {
   private cdp: CDPClient;
+  private _targetId: string;
   private rootNodeId: number | null = null;
   private batchExecutor: BatchExecutor;
   private emulationState: EmulationState = {};
@@ -76,10 +78,20 @@ export class Page {
   private frameExecutionContexts: Map<string, number> = new Map();
   /** Current frame's execution context ID (null = main frame default) */
   private currentFrameContextId: number | null = null;
+  /** Last matched selector from findElement (for selectorUsed tracking) */
+  private _lastMatchedSelector: string | undefined;
 
-  constructor(cdp: CDPClient) {
+  constructor(cdp: CDPClient, targetId: string) {
     this.cdp = cdp;
+    this._targetId = targetId;
     this.batchExecutor = new BatchExecutor(this);
+  }
+
+  /**
+   * Get the CDP target ID for this page
+   */
+  get targetId(): string {
+    return this._targetId;
   }
 
   /**
@@ -88,6 +100,14 @@ export class Page {
    */
   get cdpClient(): CDPClient {
     return this.cdp;
+  }
+
+  /**
+   * Get the last matched selector from findElement (for selectorUsed tracking).
+   * Returns undefined if no selector has been matched yet.
+   */
+  getLastMatchedSelector(): string | undefined {
+    return this._lastMatchedSelector;
   }
 
   /**
@@ -257,7 +277,10 @@ export class Page {
       const element = await this.findElement(selector, options);
       if (!element) {
         if (options.optional) return false;
-        throw new ElementNotFoundError(selector);
+        // Generate hints for the failure
+        const selectorList = Array.isArray(selector) ? selector : [selector];
+        const hints = await generateHints(this, selectorList, 'click');
+        throw new ElementNotFoundError(selector, hints);
       }
 
       await this.scrollIntoView(element.nodeId);
@@ -309,7 +332,9 @@ export class Page {
 
       if (!element) {
         if (options.optional) return false;
-        throw new ElementNotFoundError(selector);
+        const selectorList = Array.isArray(selector) ? selector : [selector];
+        const hints = await generateHints(this, selectorList, 'fill');
+        throw new ElementNotFoundError(selector, hints);
       }
 
       // Focus the element
@@ -428,7 +453,9 @@ export class Page {
     const element = await this.findElement(selector, options);
     if (!element) {
       if (options.optional) return false;
-      throw new ElementNotFoundError(selector);
+      const selectorList = Array.isArray(selector) ? selector : [selector];
+      const hints = await generateHints(this, selectorList, 'select');
+      throw new ElementNotFoundError(selector, hints);
     }
 
     const values = Array.isArray(value) ? value : [value];
@@ -511,7 +538,9 @@ export class Page {
     const element = await this.findElement(selector, options);
     if (!element) {
       if (options.optional) return false;
-      throw new ElementNotFoundError(selector);
+      const selectorList = Array.isArray(selector) ? selector : [selector];
+      const hints = await generateHints(this, selectorList, 'check');
+      throw new ElementNotFoundError(selector, hints);
     }
 
     const result = await this.cdp.send<{ result: RemoteObject }>('Runtime.evaluate', {
@@ -534,7 +563,9 @@ export class Page {
     const element = await this.findElement(selector, options);
     if (!element) {
       if (options.optional) return false;
-      throw new ElementNotFoundError(selector);
+      const selectorList = Array.isArray(selector) ? selector : [selector];
+      const hints = await generateHints(this, selectorList, 'uncheck');
+      throw new ElementNotFoundError(selector, hints);
     }
 
     const result = await this.cdp.send<{ result: RemoteObject }>('Runtime.evaluate', {
@@ -557,6 +588,9 @@ export class Page {
    * - 'auto' (default): Attempt to detect navigation for 1 second, then assume client-side handling
    * - true: Wait for full navigation (traditional forms)
    * - false: Return immediately (AJAX forms where you'll wait for something else)
+   *
+   * When targeting a <form> element directly, uses form.requestSubmit() which fires
+   * the submit event and triggers HTML5 validation.
    */
   async submit(selector: string | string[], options: SubmitOptions = {}): Promise<boolean> {
     const { method = 'enter+click', waitForNavigation: shouldWait = 'auto' } = options;
@@ -564,10 +598,40 @@ export class Page {
 
     if (!element) {
       if (options.optional) return false;
-      throw new ElementNotFoundError(selector);
+      const selectorList = Array.isArray(selector) ? selector : [selector];
+      const hints = await generateHints(this, selectorList, 'submit');
+      throw new ElementNotFoundError(selector, hints);
     }
 
-    // Focus the element
+    // Check if target is a <form> element - forms cannot receive focus
+    const isFormElement = await this.evaluateInFrame<{ result: { value: boolean } }>(
+      `(() => {
+        const el = document.querySelector(${JSON.stringify(element.selector)});
+        return el instanceof HTMLFormElement;
+      })()`
+    );
+
+    if (isFormElement.result.value) {
+      // For form elements, use requestSubmit() which fires submit event and validates
+      await this.evaluateInFrame(
+        `(() => {
+          const form = document.querySelector(${JSON.stringify(element.selector)});
+          if (form && form instanceof HTMLFormElement) {
+            form.requestSubmit();
+          }
+        })()`
+      );
+
+      // Handle navigation waiting
+      if (shouldWait === true) {
+        await this.waitForNavigation({ timeout: options.timeout ?? DEFAULT_TIMEOUT });
+      } else if (shouldWait === 'auto') {
+        await Promise.race([this.waitForNavigation({ timeout: 1000, optional: true }), sleep(500)]);
+      }
+      return true;
+    }
+
+    // For non-form elements, continue with existing focus+enter/click logic
     await this.cdp.send('DOM.focus', { nodeId: element.nodeId });
 
     // Try Enter first if method includes it
@@ -657,7 +721,9 @@ export class Page {
     const element = await this.findElement(selector, options);
     if (!element) {
       if (options.optional) return false;
-      throw new ElementNotFoundError(selector);
+      const selectorList = Array.isArray(selector) ? selector : [selector];
+      const hints = await generateHints(this, selectorList, 'focus');
+      throw new ElementNotFoundError(selector, hints);
     }
 
     await this.cdp.send('DOM.focus', { nodeId: element.nodeId });
@@ -672,7 +738,9 @@ export class Page {
       const element = await this.findElement(selector, options);
       if (!element) {
         if (options.optional) return false;
-        throw new ElementNotFoundError(selector);
+        const selectorList = Array.isArray(selector) ? selector : [selector];
+        const hints = await generateHints(this, selectorList, 'hover');
+        throw new ElementNotFoundError(selector, hints);
       }
 
       await this.scrollIntoView(element.nodeId);
@@ -1922,6 +1990,9 @@ export class Page {
     const { timeout = DEFAULT_TIMEOUT } = options;
     const selectorList = Array.isArray(selectors) ? selectors : [selectors];
 
+    // Clear last matched selector at the start
+    this._lastMatchedSelector = undefined;
+
     // Check for ref: prefix in selectors first (instant lookup, no waiting)
     for (const selector of selectorList) {
       if (selector.startsWith('ref:')) {
@@ -1942,6 +2013,7 @@ export class Page {
           );
 
           if (pushResult.nodeIds?.[0]) {
+            this._lastMatchedSelector = selector;
             return {
               nodeId: pushResult.nodeIds[0],
               backendNodeId,
@@ -1985,6 +2057,7 @@ export class Page {
         { nodeId: queryResult.nodeId }
       );
 
+      this._lastMatchedSelector = result.selector;
       return {
         nodeId: queryResult.nodeId,
         backendNodeId: describeResult.node.backendNodeId,
@@ -2021,6 +2094,7 @@ export class Page {
       { nodeId: nodeResult.nodeId }
     );
 
+    this._lastMatchedSelector = result.selector;
     return {
       nodeId: nodeResult.nodeId,
       backendNodeId: describeResult.node.backendNodeId,

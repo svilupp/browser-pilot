@@ -62,7 +62,7 @@ function createMockCDPClient() {
 async function createTestPage(cdp: ReturnType<typeof createMockCDPClient>) {
   // Dynamically import to avoid circular dependency issues
   const { Page } = await import('../../src/browser/page.ts');
-  return new Page(cdp as unknown as CDPClient);
+  return new Page(cdp as unknown as CDPClient, 'test-target-id');
 }
 
 describe('Device Presets', () => {

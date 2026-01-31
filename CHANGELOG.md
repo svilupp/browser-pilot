@@ -1,54 +1,15 @@
 # Changelog
-All notable changes to this project will be documented in this file.
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
-
-## [Unreleased]
-
-## [0.0.7] - 2026-01-06
-
-### Updated
-- Semantic accessibility capture with role-based selectors (`role=button[name='Submit']`, `text=Submit`) and human-readable annotations
-
-## [0.0.6] - 2026-01-06
-
-### Added
-- `bp record` command to capture browser interactions and save as replayable JSON steps
-
-## [0.0.5] - 2026-01-04
-
-### Added
-- `bp clean` command to remove stale sessions
-- `blur` option for fill action (React/Vue state sync)
-- Session validation with auto-cleanup of stale sessions
-
-### Changed
-- Fill uses `InputEvent` for better React compatibility
-- Pretty output shows truncation hint for large results
-
-## [0.0.4] - 2026-01-04
-
-### Changed
-- Simplified CLI help output and quickstart guide for cleaner UX
+## [0.0.8] - 2025-01-31
 
 ### Fixed
-- CLI exec validates actions before session check (better error messages in CI/fresh environments)
 
-## [0.0.3] - 2026-01-02
+- **Multi-tab page targeting**: Sessions now store `targetId` ensuring successive CLI commands target the same browser tab, even when multiple tabs are open
+- **Accurate selectorUsed reporting**: When using multi-selector arrays like `["#missing", "#actual"]`, the `selectorUsed` field now correctly reports the matched selector instead of always returning the first
+- **Overlay idempotency**: Running `bp snapshot --inspect --keep` multiple times now properly updates labels instead of leaving stale or missing overlays
+- **Form element submission**: `page.submit('form')` now works correctly by using `form.requestSubmit()` instead of failing with "Element is not focusable"
 
 ### Added
-- CLI ref caching: refs from snapshot are now cached per session+URL, reusable across exec calls
-- `bp quickstart` command for getting started guide
 
-### Fixed
-- Iframe context polling: actions in iframes now wait for execution context (fixes race condition with delayed iframe content)
-
-## [0.0.2] - 2026-01-01
-
-### Fixed
-- Better test coverage
-
-## [0.0.1] - 2026-01-01
-
-- Initial release
+- **`--json` flag**: Convenience alias for `-o json` on all CLI commands (`bp list --json`, `bp exec --json`, etc.)
+- **`--export-log` option**: Duplicate session logs to a local file for easier debugging (`bp connect -s test --export-log ./logs/session.jsonl`)

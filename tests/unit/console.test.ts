@@ -82,7 +82,7 @@ function createMockCDPClient() {
 // Create test page helper
 async function createTestPage(cdp: ReturnType<typeof createMockCDPClient>) {
   const { Page } = await import('../../src/browser/page.ts');
-  const page = new Page(cdp as unknown as CDPClient);
+  const page = new Page(cdp as unknown as CDPClient, 'test-target-id');
   await page.init(); // Initialize event listeners including dialog handler
   return page;
 }

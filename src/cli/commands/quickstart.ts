@@ -67,6 +67,31 @@ RECORDING (FOR HUMANS)
 
   Great for creating initial automation scripts that AI agents can refine.
 
+DEBUGGING
+  When element selection fails, use these tools to diagnose:
+
+  1. Diagnose a selector:
+     bp diagnose '#submit-button' -s mysite
+
+     Shows exact matches, fuzzy matches, visibility issues, and suggestions.
+
+  2. Compare page states:
+     bp snapshot > before.json
+     # ... perform actions ...
+     bp snapshot --diff before.json
+
+     Shows what changed: added/removed/modified elements.
+
+  3. Visual inspection:
+     bp snapshot --inspect
+
+     Injects visual ref labels onto the page. Use --keep to leave them visible.
+
+  4. Session logs:
+     bp list -s mysite --log-tail 10
+
+     Shows last N commands with timing and any errors.
+
 Run 'bp actions' for the complete action reference.
 `;
 

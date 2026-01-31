@@ -17,6 +17,10 @@ export interface SessionData {
   wsUrl: string;
   /** Provider-specific session ID (for resumption) */
   providerSessionId?: string;
+  /** CDP target ID of the page we're controlling */
+  targetId?: string;
+  /** Export log path for local duplication (optional) */
+  exportLog?: string;
   /** Creation timestamp */
   createdAt: string;
   /** Last activity timestamp */
@@ -33,8 +37,16 @@ export interface RefCache {
   refMap: Record<string, number>;
 }
 
+export interface LogStats {
+  entries: number;
+  size: number;
+  first?: string;
+  last?: string;
+}
+
 export interface SessionMetadata {
   refCache?: RefCache;
+  logStats?: LogStats;
   [key: string]: unknown;
 }
 

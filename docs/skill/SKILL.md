@@ -38,6 +38,7 @@ bp exec '{"action":"snapshot"}'
 ```bash
 # Connect
 bp connect --provider generic              # Local Chrome (auto-discovers)
+bp connect --provider generic --export-log ./logs/session.jsonl  # With local logs
 bp connect --provider browserbase --name s # Cloud browser
 
 # Execute actions
@@ -49,6 +50,7 @@ bp exec --dialog accept '{"action":"click","selector":"#delete-btn"}'
 
 # Session management
 bp list                    # List sessions
+bp list --json             # JSON output
 bp close -s session-name   # Close session
 bp actions                 # Complete action reference
 ```
@@ -138,13 +140,43 @@ bp exec '{"action":"evaluate","expression":"window.__REACT_STATE__ || window.__V
 bp exec '{"action":"evaluate","expression":"window.dataLayer"}'
 ```
 
+## Debugging
+
+When element selection fails, use these diagnostic tools:
+
+```bash
+# Why can't this selector be found?
+bp diagnose '#submit-button' -s dev
+bp diagnose '#submit-button' -s dev --json  # Machine-readable
+
+# What changed on the page?
+bp snapshot -s dev -o json > before.json
+# ... perform actions ...
+bp snapshot -s dev --diff before.json
+
+# Visual inspection with ref labels
+bp snapshot -s dev --inspect --keep
+
+# View recent command history with errors
+bp list -s dev --log-tail 10
+bp list -s dev --info --json  # Full session info as JSON
+```
+
+The `diagnose` command shows:
+- Exact matches with visibility issues (hidden, disabled, covered)
+- Fuzzy matches with similar element names
+- Suggested alternative selectors
+
 ## Tips
 
 1. **Take a snapshot before using refs** - Populates the ref cache
 2. **Refs solve Shadow DOM** - If CSS selector fails, use ref from snapshot
 3. **Always use `--dialog`** when actions might trigger native dialogs
 4. **Use `blur: true` for React/Vue forms** - Ensures state sync on controlled inputs
-5. **Run `bp actions`** for complete action reference
+5. **Use `bp diagnose`** when selectors fail - Shows why and suggests alternatives
+6. **Run `bp actions`** for complete action reference
+7. **Use `--json` for scripting** - Alias for `-o json`, easier to type
+8. **Use `--export-log` for debugging** - Keeps local copy of session logs
 
 ---
 

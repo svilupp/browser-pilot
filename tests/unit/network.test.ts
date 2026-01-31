@@ -436,7 +436,7 @@ describe('Page network interception methods', () => {
   // Create test page helper
   async function createTestPage(cdp: ReturnType<typeof createMockCDPClient>) {
     const { Page } = await import('../../src/browser/page.ts');
-    return new Page(cdp as unknown as CDPClient);
+    return new Page(cdp as unknown as CDPClient, 'test-target-id');
   }
 
   describe('page.intercept()', () => {

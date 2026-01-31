@@ -19,6 +19,7 @@ interface ConnectOptions {
   resume?: string;
   apiKey?: string;
   projectId?: string;
+  exportLog?: string;
 }
 
 function parseConnectArgs(args: string[]): ConnectOptions {
@@ -39,6 +40,8 @@ function parseConnectArgs(args: string[]): ConnectOptions {
       options.apiKey = args[++i];
     } else if (arg === '--project-id') {
       options.projectId = args[++i];
+    } else if (arg === '--export-log') {
+      options.exportLog = args[++i];
     }
   }
 
@@ -107,6 +110,8 @@ export async function connectCommand(
     provider,
     wsUrl: browser.wsUrl,
     providerSessionId: browser.sessionId,
+    targetId: page.targetId,
+    exportLog: options.exportLog,
     createdAt: new Date().toISOString(),
     lastActivity: new Date().toISOString(),
     currentUrl,

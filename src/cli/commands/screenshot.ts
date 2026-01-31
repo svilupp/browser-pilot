@@ -58,7 +58,7 @@ export async function screenshotCommand(
   });
 
   try {
-    const page = await browser.page();
+    const page = await browser.page(undefined, { targetId: session.targetId });
     const screenshotData = await page.screenshot({
       format: options.format ?? 'png',
       quality: options.quality,
