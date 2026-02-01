@@ -82,7 +82,7 @@ describe('Navigation', () => {
 
   // TODO: Fix flaky in CI - waitForNavigation relies on CDP events that behave
   // differently in headless Chrome on Linux. Works locally on macOS.
-  test.skipIf(!!process.env.CI)('should navigate back and forward', async () => {
+  test.skipIf(!!process.env['CI'])('should navigate back and forward', async () => {
     const { page, baseUrl } = ctx.get();
 
     await withRetry(async () => {
@@ -100,7 +100,7 @@ describe('Navigation', () => {
   });
 
   // TODO: Fix flaky in CI - navigation event timing differs in headless Chrome
-  test.skipIf(!!process.env.CI)('should wait for navigation after link click', async () => {
+  test.skipIf(!!process.env['CI'])('should wait for navigation after link click', async () => {
     const { page, baseUrl } = ctx.get();
 
     await withRetry(async () => {
