@@ -408,6 +408,70 @@ bp connect -s mysession --export-log ./test-results/session.jsonl
 # Both files contain identical entries
 ```
 
+### Failure Hints
+
+When `ElementNotFoundError` is thrown, the error includes suggested alternatives based on fuzzy matching against the current page snapshot. This helps you quickly identify correct selectors when your original selector fails.
+
+**Hint Structure:**
+```json
+{
+  "selector": "ref:e4",
+  "reason": "Similar name: 'Submit Form'",
+  "confidence": "high",
+  "element": {"ref": "e4", "role": "button", "name": "Submit Form"}
+}
+```
+
+**Confidence Levels:**
+- `high` (score >= 0.8): Strong match, likely the correct element
+- `medium` (score >= 0.5): Possible match, worth trying
+- `low` (score < 0.5): Weak match, verify manually before using
+
+**Action-Type Filtering:**
+
+Hints are automatically filtered to show only elements with appropriate roles for your action type:
+
+| Action | Suggested Roles |
+|--------|-----------------|
+| `click` | buttons, links, menuitems, tabs |
+| `fill` | textboxes, searchboxes, spinbuttons |
+| `submit` | buttons, forms |
+| `select` | comboboxes, listboxes |
+| `check` | checkboxes, radios, switches |
+
+**In Batch Results:**
+
+When using `bp exec --json`, hints appear in failed step results:
+```json
+{
+  "success": false,
+  "stoppedAtIndex": 1,
+  "steps": [
+    {"action": "goto", "success": true, "durationMs": 1200},
+    {
+      "action": "click",
+      "success": false,
+      "error": "Element not found: #submit",
+      "hints": [
+        {"selector": "ref:e4", "reason": "Similar name: 'Submit'", "confidence": "high", "element": {"ref": "e4", "role": "button", "name": "Submit"}},
+        {"selector": "ref:e8", "reason": "Same role: button", "confidence": "medium", "element": {"ref": "e8", "role": "button", "name": "Cancel"}}
+      ]
+    }
+  ]
+}
+```
+
+**Using Hints:**
+
+1. **Retry with suggested selector:** Use the `selector` value from a high-confidence hint
+2. **Build resilient selectors:** Combine hints with your original selector as fallbacks
+
+```json
+{"action": "click", "selector": ["ref:e4", "#submit-btn", "button[type=submit]"]}
+```
+
+3. **Verify before using:** For medium/low confidence hints, take a snapshot to confirm the element is correct
+
 ## Troubleshooting
 
 ### "Element not found" for Shadow DOM

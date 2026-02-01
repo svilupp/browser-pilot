@@ -167,6 +167,18 @@ The `diagnose` command shows:
 - Fuzzy matches with similar element names
 - Suggested alternative selectors
 
+### Failure Hints
+
+When an element isn't found, errors include suggested alternatives:
+
+```json
+{"error": "Element not found: #submit", "hints": [
+  {"selector": "ref:e4", "reason": "Similar: 'Submit Form' button", "confidence": "high"}
+]}
+```
+
+Hints are action-aware—`click` suggests buttons/links, `fill` suggests inputs. Use the suggested selector in your next attempt.
+
 ## Tips
 
 1. **Take a snapshot before using refs** - Populates the ref cache
