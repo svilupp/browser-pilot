@@ -150,7 +150,7 @@ bp diagnose '#submit-button' -s dev
 bp diagnose '#submit-button' -s dev --json  # Machine-readable
 
 # What changed on the page?
-bp snapshot -s dev -o json > before.json
+bp snapshot -s dev --json > before.json
 # ... perform actions ...
 bp snapshot -s dev --diff before.json
 

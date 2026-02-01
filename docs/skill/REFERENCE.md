@@ -225,8 +225,8 @@ button[aria-label="Toggle Delta"]
 ## Output Formats
 
 ```bash
-bp exec '...' -o json         # Structured JSON
-bp exec '...' --json          # Same as -o json (convenience)
+bp exec '...' --json          # Structured JSON
+bp exec '...' -o json         # Same as --json (long form)
 bp exec '...' -o pretty       # Human-readable (default)
 bp exec '...' --pretty        # Same as -o pretty
 ```
@@ -252,7 +252,7 @@ Batch with `onFail: stop` (default) stops on first failure.
 
 Check result for failures:
 ```bash
-result=$(bp exec -o json '[...]')
+result=$(bp exec --json '[...]')
 success=$(echo "$result" | jq '.success')
 if [ "$success" = "false" ]; then
   echo "Failed at step: $(echo "$result" | jq '.stoppedAtIndex')"

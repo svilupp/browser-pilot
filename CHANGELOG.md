@@ -1,15 +1,19 @@
 # Changelog
 
-## [0.0.8] - 2025-01-31
-
-### Fixed
-
-- **Multi-tab page targeting**: Sessions now store `targetId` ensuring successive CLI commands target the same browser tab, even when multiple tabs are open
-- **Accurate selectorUsed reporting**: When using multi-selector arrays like `["#missing", "#actual"]`, the `selectorUsed` field now correctly reports the matched selector instead of always returning the first
-- **Overlay idempotency**: Running `bp snapshot --inspect --keep` multiple times now properly updates labels instead of leaving stale or missing overlays
-- **Form element submission**: `page.submit('form')` now works correctly by using `form.requestSubmit()` instead of failing with "Element is not focusable"
+## [0.0.8] - 2025-02-01
 
 ### Added
 
-- **`--json` flag**: Convenience alias for `-o json` on all CLI commands (`bp list --json`, `bp exec --json`, etc.)
-- **`--export-log` option**: Duplicate session logs to a local file for easier debugging (`bp connect -s test --export-log ./logs/session.jsonl`)
+- `bp diagnose` command with fuzzy matching for failed selectors
+- `bp snapshot --diff` (see difference between current page and saved snapshot), `--inspect` (draw the selectors on the page for debugging), `--keep` flags (keep the overlay visible)
+- Session logging (JSONL) with `bp list --log-path | --log-tail | --info`
+- Extract your traces easily by using `--export-log` on connect
+- Failure hints with suggested selectors on `ElementNotFoundError`
+
+### Fixed
+
+- Multi-tab targeting via stored `targetId`
+- `selectorUsed` reports actual matched selector
+- Overlay injection is idempotent
+- `submit('form')` uses `requestSubmit()`
+

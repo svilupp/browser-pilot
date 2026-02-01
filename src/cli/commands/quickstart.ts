@@ -33,9 +33,9 @@ STEP 5: BATCH MULTIPLE ACTIONS
   ]'
 
 FOR AI AGENTS
-  Use -o json for machine-readable output:
-    bp snapshot --format text -o json
-    bp exec '{"action":"click","selector":"ref:e3"}' -o json
+  Use --json for machine-readable output:
+    bp snapshot --format text --json
+    bp exec '{"action":"click","selector":"ref:e3"}' --json
 
 TIPS
   • Refs (e1, e2...) are stable within a page - prefer them over CSS selectors

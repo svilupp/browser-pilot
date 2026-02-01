@@ -120,7 +120,7 @@ export function output(data: unknown, format: 'json' | 'pretty' = 'pretty'): voi
       // Pretty print objects
       const { truncated } = prettyPrint(data as Record<string, unknown>);
       if (truncated) {
-        console.log('\n(Output truncated. Use -o json for full data)');
+        console.log('\n(Output truncated. Use --json for full data)');
       }
     } else {
       console.log(data);

@@ -76,7 +76,7 @@ bp exec '[
 ]'
 
 # With session and JSON output
-bp exec -s my-session -o json '{"action":"snapshot"}'
+bp exec -s my-session --json '{"action":"snapshot"}'
 ```
 
 ### snapshot
@@ -105,7 +105,7 @@ bp snapshot -s my-session --format text
 bp snapshot -s my-session --format interactive
 
 # Full snapshot as JSON
-bp snapshot -s my-session --format full -o json
+bp snapshot -s my-session --format full --json
 
 # Compare with previous state
 bp snapshot -s my-session > before.json
@@ -288,7 +288,7 @@ These options work with all commands:
 
 - `-s, --session <id>` - Session ID to use
 - `-o, --output <format>` - Output format: `json` or `pretty`
-- `--json` - Alias for `-o json` (convenience flag)
+- `--json` - JSON output (preferred over `--json`)
 - `--pretty` - Alias for `-o pretty`
 - `--trace` - Enable execution tracing
 
@@ -381,16 +381,16 @@ Example agent workflow:
 bp connect -p browserbase -n agent-session
 
 # 2. Agent executes actions
-bp exec -s agent-session -o json '[
+bp exec -s agent-session --json '[
   {"action":"goto","url":"https://example.com"},
   {"action":"snapshot"}
 ]'
 
 # 3. Agent reads state
-bp snapshot -s agent-session --format interactive -o json
+bp snapshot -s agent-session --format interactive --json
 
 # 4. Agent continues...
-bp exec -s agent-session -o json '[
+bp exec -s agent-session --json '[
   {"action":"click","selector":"#next-page"}
 ]'
 ```
