@@ -155,6 +155,9 @@ describe('Recording Integration', () => {
       // Navigate to form page
       await page.goto(`${baseUrl}/form.html`);
 
+      // Wait for recorder script to be injected on new page
+      await sleep(100);
+
       // Click something on the new page
       await simulateClick(page, '#name');
 
