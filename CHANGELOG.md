@@ -1,54 +1,19 @@
 # Changelog
-All notable changes to this project will be documented in this file.
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
-
-## [Unreleased]
-
-## [0.0.7] - 2026-01-06
-
-### Updated
-- Semantic accessibility capture with role-based selectors (`role=button[name='Submit']`, `text=Submit`) and human-readable annotations
-
-## [0.0.6] - 2026-01-06
+## [0.0.8] - 2025-02-01
 
 ### Added
-- `bp record` command to capture browser interactions and save as replayable JSON steps
 
-## [0.0.5] - 2026-01-04
-
-### Added
-- `bp clean` command to remove stale sessions
-- `blur` option for fill action (React/Vue state sync)
-- Session validation with auto-cleanup of stale sessions
-
-### Changed
-- Fill uses `InputEvent` for better React compatibility
-- Pretty output shows truncation hint for large results
-
-## [0.0.4] - 2026-01-04
-
-### Changed
-- Simplified CLI help output and quickstart guide for cleaner UX
+- `bp diagnose` command with fuzzy matching for failed selectors
+- `bp snapshot --diff` (see difference between current page and saved snapshot), `--inspect` (draw the selectors on the page for debugging), `--keep` flags (keep the overlay visible)
+- Session logging (JSONL) with `bp list --log-path | --log-tail | --info`
+- Extract your traces easily by using `--export-log` on connect
+- Failure hints with suggested selectors on `ElementNotFoundError`
 
 ### Fixed
-- CLI exec validates actions before session check (better error messages in CI/fresh environments)
 
-## [0.0.3] - 2026-01-02
+- Multi-tab targeting via stored `targetId`
+- `selectorUsed` reports actual matched selector
+- Overlay injection is idempotent
+- `submit('form')` uses `requestSubmit()`
 
-### Added
-- CLI ref caching: refs from snapshot are now cached per session+URL, reusable across exec calls
-- `bp quickstart` command for getting started guide
-
-### Fixed
-- Iframe context polling: actions in iframes now wait for execution context (fixes race condition with delayed iframe content)
-
-## [0.0.2] - 2026-01-01
-
-### Fixed
-- Better test coverage
-
-## [0.0.1] - 2026-01-01
-
-- Initial release

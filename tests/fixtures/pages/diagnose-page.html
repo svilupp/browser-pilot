@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Diagnose Test Page</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      padding: 20px;
+      max-width: 900px;
+      margin: 0 auto;
+    }
+    h1 { color: #333; }
+    h2 { color: #666; margin-top: 30px; }
+    section { margin-bottom: 40px; }
+    .buttons { display: flex; gap: 10px; flex-wrap: wrap; }
+    button {
+      padding: 12px 24px;
+      font-size: 16px;
+      cursor: pointer;
+      border: none;
+      border-radius: 4px;
+      background: #2196F3;
+      color: white;
+    }
+    button:hover:not(:disabled) { background: #1976D2; }
+    button:disabled {
+      background: #ccc;
+      cursor: not-allowed;
+    }
+
+    /* Hidden elements section */
+    .hidden-none { display: none; }
+    .hidden-visibility { visibility: hidden; }
+    .hidden-opacity { opacity: 0; }
+    .hidden-zero-size { width: 0; height: 0; overflow: hidden; }
+    .hidden-offscreen {
+      position: absolute;
+      left: -10000px;
+    }
+
+    /* Modal overlay */
+    .modal-overlay {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.5);
+      z-index: 1000;
+      justify-content: center;
+      align-items: center;
+    }
+    .modal-overlay.open {
+      display: flex;
+    }
+    .modal {
+      background: white;
+      padding: 30px;
+      border-radius: 12px;
+      min-width: 300px;
+      box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+    }
+    .modal-buttons { display: flex; gap: 10px; margin-top: 20px; }
+
+    /* Form section */
+    .form-group {
+      margin-bottom: 15px;
+    }
+    label {
+      display: block;
+      margin-bottom: 5px;
+      font-weight: 500;
+    }
+    input[type="text"],
+    input[type="email"] {
+      width: 100%;
+      max-width: 300px;
+      padding: 10px;
+      font-size: 16px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+    }
+
+    /* Links section */
+    .links { display: flex; gap: 20px; }
+    a {
+      color: #2196F3;
+      text-decoration: none;
+      font-size: 16px;
+    }
+    a:hover { text-decoration: underline; }
+
+    /* Info section */
+    .info {
+      background: #f5f5f5;
+      padding: 15px;
+      border-radius: 8px;
+      margin-top: 30px;
+    }
+    .info code {
+      background: #e0e0e0;
+      padding: 2px 6px;
+      border-radius: 3px;
+      font-family: monospace;
+    }
+  </style>
+</head>
+<body>
+  <h1>Diagnose Test Page</h1>
+  <p>This page contains various elements for testing the diagnose command.</p>
+
+  <!-- Section 1: Similar Buttons -->
+  <section id="similar-buttons-section">
+    <h2>Similar Buttons</h2>
+    <p>Multiple buttons with similar names for fuzzy matching tests.</p>
+    <div class="buttons">
+      <button id="submit-btn" data-testid="submit-button">Submit</button>
+      <button id="submit-form-btn">Submit Form</button>
+      <button id="send-btn">Send</button>
+      <button id="confirm-btn" aria-label="Confirm Action">Confirm</button>
+    </div>
+  </section>
+
+  <!-- Section 2: Hidden Elements -->
+  <section id="hidden-elements-section">
+    <h2>Hidden Elements</h2>
+    <p>Elements hidden in various ways for visibility testing.</p>
+
+    <!-- display: none -->
+    <button id="hidden-display" class="hidden-none">Hidden (display:none)</button>
+
+    <!-- visibility: hidden -->
+    <button id="hidden-visibility" class="hidden-visibility">Hidden (visibility:hidden)</button>
+
+    <!-- opacity: 0 -->
+    <button id="hidden-opacity" class="hidden-opacity">Hidden (opacity:0)</button>
+
+    <!-- zero size -->
+    <button id="hidden-zero-size" class="hidden-zero-size">Hidden (zero size)</button>
+
+    <!-- offscreen -->
+    <button id="hidden-offscreen" class="hidden-offscreen">Hidden (offscreen)</button>
+  </section>
+
+  <!-- Section 3: Disabled Elements -->
+  <section id="disabled-elements-section">
+    <h2>Disabled Elements</h2>
+    <p>Elements with disabled state.</p>
+    <div class="buttons">
+      <button id="disabled-btn" disabled>Disabled Button</button>
+      <button id="enabled-btn">Enabled Button</button>
+    </div>
+    <div class="form-group" style="margin-top: 15px;">
+      <label for="disabled-input">Disabled Input</label>
+      <input type="text" id="disabled-input" disabled value="Cannot edit">
+    </div>
+    <div class="form-group">
+      <label for="readonly-input">Readonly Input</label>
+      <input type="text" id="readonly-input" readonly value="Read only">
+    </div>
+  </section>
+
+  <!-- Section 4: Modal Overlay (covers button) -->
+  <section id="modal-section">
+    <h2>Modal Overlay</h2>
+    <p>Button that opens a modal which covers another button.</p>
+    <div class="buttons">
+      <button id="open-modal-btn">Open Modal</button>
+      <button id="covered-btn">This Button Gets Covered</button>
+    </div>
+  </section>
+
+  <!-- Modal -->
+  <div class="modal-overlay" id="modal-overlay">
+    <div class="modal" role="dialog" aria-labelledby="modal-title">
+      <h3 id="modal-title">Modal Dialog</h3>
+      <p>This modal covers the button behind it.</p>
+      <div class="modal-buttons">
+        <button id="modal-close-btn">Close Modal</button>
+        <button id="modal-submit-btn">Submit</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Section 5: Form Elements -->
+  <section id="form-section">
+    <h2>Form Elements</h2>
+    <form id="test-form">
+      <div class="form-group">
+        <label for="name-input">Name</label>
+        <input type="text" id="name-input" name="name" placeholder="Enter your name" aria-label="Your Name">
+      </div>
+      <div class="form-group">
+        <label for="email-input">Email</label>
+        <input type="email" id="email-input" name="email" placeholder="Enter your email">
+      </div>
+      <div class="form-group">
+        <label for="search-input">Search</label>
+        <input type="text" id="search-input" role="searchbox" placeholder="Search...">
+      </div>
+    </form>
+  </section>
+
+  <!-- Section 6: Links -->
+  <section id="links-section">
+    <h2>Links</h2>
+    <div class="links">
+      <a href="#" id="login-link">Login</a>
+      <a href="#" id="signup-link">Sign Up</a>
+      <a href="#" id="home-link" aria-label="Go Home">Home</a>
+    </div>
+  </section>
+
+  <!-- Info section -->
+  <div class="info">
+    <h3>Test Scenarios</h3>
+    <ul>
+      <li><code>#submit-btn</code> - Button with exact ID match</li>
+      <li><code>"submit"</code> - Fuzzy match should find Submit, Submit Form</li>
+      <li><code>#hidden-display</code> - Hidden with display:none</li>
+      <li><code>#disabled-btn</code> - Disabled button</li>
+      <li><code>#covered-btn</code> - Covered when modal is open</li>
+      <li><code>"login"</code> - Fuzzy match should find login link</li>
+    </ul>
+  </div>
+
+  <script>
+    const overlay = document.getElementById('modal-overlay');
+
+    // Open modal
+    document.getElementById('open-modal-btn').addEventListener('click', () => {
+      overlay.classList.add('open');
+    });
+
+    // Close modal
+    document.getElementById('modal-close-btn').addEventListener('click', () => {
+      overlay.classList.remove('open');
+    });
+
+    // Close on overlay click
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) {
+        overlay.classList.remove('open');
+      }
+    });
+
+    // Prevent form submission
+    document.getElementById('test-form').addEventListener('submit', (e) => {
+      e.preventDefault();
+    });
+  </script>
+</body>
+</html>

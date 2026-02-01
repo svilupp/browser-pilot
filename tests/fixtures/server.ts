@@ -40,6 +40,7 @@ export function createFixtureServer(port = DEFAULT_PORT) {
           '/modal.html',
           '/dropdown.html',
           '/checkboxes.html',
+          '/diagnose-page.html',
           '/multi-page/page1.html',
         ];
 

@@ -17,6 +17,11 @@ export interface BrowserOptions extends ConnectOptions {
   debug?: boolean;
 }
 
+export interface PageOptions {
+  /** Specific target ID to attach to */
+  targetId?: string;
+}
+
 export class Browser {
   private cdp: CDPClient;
   private providerSession: ProviderSession;
@@ -51,7 +56,7 @@ export class Browser {
    * Get or create a page by name
    * If no name is provided, returns the first available page or creates a new one
    */
-  async page(name?: string): Promise<Page> {
+  async page(name?: string, options?: PageOptions): Promise<Page> {
     const pageName = name ?? 'default';
 
     // Return cached page if available
@@ -64,7 +69,23 @@ export class Browser {
 
     let targetId: string;
 
-    if (pageTargets.length > 0) {
+    if (options?.targetId) {
+      // Verify the requested target still exists
+      const targetExists = pageTargets.some((t) => t.targetId === options.targetId);
+      if (targetExists) {
+        targetId = options.targetId;
+      } else {
+        console.warn(`[browser-pilot] Target ${options.targetId} no longer exists, falling back`);
+        targetId =
+          pageTargets.length > 0
+            ? pageTargets[0]!.targetId
+            : (
+                await this.cdp.send<{ targetId: string }>('Target.createTarget', {
+                  url: 'about:blank',
+                })
+              ).targetId;
+      }
+    } else if (pageTargets.length > 0) {
       // Use the first available page
       targetId = pageTargets[0]!.targetId;
     } else {
@@ -79,7 +100,7 @@ export class Browser {
     await this.cdp.attachToTarget(targetId);
 
     // Create and initialize page
-    const page = new Page(this.cdp);
+    const page = new Page(this.cdp, targetId);
     await page.init();
 
     this.pages.set(pageName, page);
@@ -96,7 +117,7 @@ export class Browser {
 
     await this.cdp.attachToTarget(result.targetId);
 
-    const page = new Page(this.cdp);
+    const page = new Page(this.cdp, result.targetId);
     await page.init();
 
     // Generate unique name for the page

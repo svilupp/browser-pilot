@@ -175,6 +175,18 @@ EXAMPLES
     {"action":"click","selector":"#delete-btn"},
     {"action":"wait","selector":"#success-message","waitFor":"visible"}
   ]'
+
+DEBUGGING
+  When actions fail, use these diagnostic tools:
+
+  bp diagnose '#selector'               # Why can't this be found?
+  bp diagnose '#selector' --json        # Machine-readable output
+  bp snapshot --diff prev.json          # What changed on the page?
+  bp snapshot --inspect                 # Visual ref labels on page
+  bp list -s <id> --log-tail 10         # Recent command history
+
+  Failure hints are included in error output when element not found.
+  Use --json output for detailed hints with alternative selectors.
 `;
 
 export async function actionsCommand(): Promise<void> {

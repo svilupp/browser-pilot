@@ -313,7 +313,8 @@ describe('Recorder CDP Integration', () => {
 
       await recorder.start();
       // Add small delay to ensure measurable duration
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      // Use 100ms delay but check >= 50 to account for CI timer imprecision
+      await new Promise((resolve) => setTimeout(resolve, 100));
       const output = await recorder.stop();
 
       expect(output.duration).toBeGreaterThanOrEqual(50);

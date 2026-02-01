@@ -2,12 +2,19 @@
  * Snapshot command - Get page accessibility snapshot
  */
 
+import * as fs from 'node:fs';
+import { injectRefOverlay, removeRefOverlay } from '../../browser/overlay.ts';
+import { diffSnapshots, formatDiffPretty } from '../../browser/snapshot-diff.ts';
+import type { PageSnapshot } from '../../browser/types.ts';
 import { connect } from '../../index.ts';
 import { output } from '../index.ts';
 import { getDefaultSession, loadSession, type SessionData, updateSession } from '../session.ts';
 
 interface SnapshotOptions {
   format?: 'full' | 'interactive' | 'text';
+  diffFile?: string;
+  inspect?: boolean;
+  keep?: boolean;
 }
 
 function parseSnapshotArgs(args: string[]): SnapshotOptions {
@@ -18,10 +25,23 @@ function parseSnapshotArgs(args: string[]): SnapshotOptions {
 
     if (arg === '--format' || arg === '-f') {
       options.format = args[++i] as SnapshotOptions['format'];
+    } else if (arg === '--diff' || arg === '-d') {
+      options.diffFile = args[++i];
+    } else if (arg === '--inspect') {
+      options.inspect = true;
+    } else if (arg === '--keep') {
+      options.keep = true;
     }
   }
 
   return options;
+}
+
+/**
+ * Sleep for specified milliseconds
+ */
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export async function snapshotCommand(
@@ -49,7 +69,7 @@ export async function snapshotCommand(
   });
 
   try {
-    const page = await browser.page();
+    const page = await browser.page(undefined, { targetId: session.targetId });
     const snapshot = await page.snapshot();
 
     // Update session with current URL
@@ -63,6 +83,41 @@ export async function snapshotCommand(
         },
       },
     });
+
+    // Handle diff mode
+    if (options.diffFile) {
+      if (!fs.existsSync(options.diffFile)) {
+        throw new Error(`Diff file not found: ${options.diffFile}`);
+      }
+
+      const beforeContent = fs.readFileSync(options.diffFile, 'utf-8');
+      const beforeSnapshot: PageSnapshot = JSON.parse(beforeContent);
+      const diff = diffSnapshots(beforeSnapshot, snapshot);
+
+      if (globalOptions.output === 'json') {
+        output(diff, 'json');
+      } else {
+        console.log(formatDiffPretty(diff));
+      }
+      return;
+    }
+
+    // Handle inspect mode
+    if (options.inspect) {
+      await injectRefOverlay(page, snapshot);
+      console.log('Overlay injected. Element refs are now visible on the page.');
+
+      if (options.keep) {
+        console.log(
+          'Overlay will remain visible. Use removeRefOverlay() or refresh the page to remove.'
+        );
+      } else {
+        console.log('Overlay will be removed in 10 seconds...');
+        await sleep(10000);
+        await removeRefOverlay(page);
+        console.log('Overlay removed.');
+      }
+    }
 
     // Output based on format
     switch (options.format) {

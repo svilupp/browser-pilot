@@ -151,15 +151,34 @@ export interface InteractiveElement {
   disabled?: boolean;
 }
 
+// Failure hint for element not found errors
+export interface FailureHint {
+  /** Suggested selector */
+  selector: string;
+  /** Why this might work */
+  reason: string;
+  /** Confidence level */
+  confidence: 'high' | 'medium' | 'low';
+  /** Element info */
+  element: {
+    ref: string;
+    role: string;
+    name: string;
+    disabled?: boolean;
+  };
+}
+
 // Errors
 export class ElementNotFoundError extends Error {
   selectors: string[];
+  hints?: FailureHint[];
 
-  constructor(selectors: string | string[]) {
+  constructor(selectors: string | string[], hints?: FailureHint[]) {
     const selectorList = Array.isArray(selectors) ? selectors : [selectors];
     super(`Element not found: ${selectorList.join(', ')}`);
     this.name = 'ElementNotFoundError';
     this.selectors = selectorList;
+    this.hints = hints;
   }
 }
 

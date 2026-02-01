@@ -3,6 +3,7 @@
  */
 
 import type { Page } from '../browser/page.ts';
+import { ElementNotFoundError } from '../browser/types.ts';
 import type { BatchOptions, BatchResult, Step, StepResult } from './types.ts';
 
 const DEFAULT_TIMEOUT = 30000;
@@ -41,6 +42,7 @@ export class BatchExecutor {
         });
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
+        const hints = error instanceof ElementNotFoundError ? error.hints : undefined;
 
         results.push({
           index: i,
@@ -49,6 +51,7 @@ export class BatchExecutor {
           success: false,
           durationMs: Date.now() - stepStart,
           error: errorMessage,
+          hints,
         });
 
         // Stop execution on failure (unless optional or onFail: 'continue')
@@ -283,10 +286,13 @@ export class BatchExecutor {
   }
 
   /**
-   * Get the first selector if multiple were provided
-   * (actual used selector tracking would need to be implemented in Page)
+   * Get the actual selector that matched the element.
+   * Uses the last matched selector tracked by Page, falls back to first selector if unavailable.
    */
   private getUsedSelector(selector: string | string[]): string {
+    const matched = this.page.getLastMatchedSelector();
+    if (matched) return matched;
+    // Fallback for actions that don't track selector
     return Array.isArray(selector) ? selector[0]! : selector;
   }
 }

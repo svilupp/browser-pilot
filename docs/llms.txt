@@ -14,7 +14,7 @@ bp connect --provider browserbase --api-key $KEY # Cloud browser
 
 # Execute actions (single or batch)
 bp exec '{"action":"goto","url":"https://example.com"}'
-bp exec '[{"action":"fill","selector":"#q","value":"test"},{"action":"submit","selector":"form"}]' -o json
+bp exec '[{"action":"fill","selector":"#q","value":"test"},{"action":"submit","selector":"form"}]' --json
 
 # Get page state
 bp snapshot --format text          # Accessibility tree
@@ -71,7 +71,7 @@ Cookie consent (optional):
 
 ## Output
 
-With `-o json`, returns:
+With `--json`, returns:
 ```json
 {
   "success": true,

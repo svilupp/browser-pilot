@@ -32,12 +32,16 @@ bp connect [options]
 - `--url <wsUrl>` - WebSocket URL (for generic provider)
 - `--api-key <key>` - API key (or use env vars)
 - `--project-id <id>` - Project ID (BrowserBase)
+- `--export-log <path>` - Duplicate logs to specified file for local analysis
 
 **Examples:**
 
 ```bash
 # Local Chrome (auto-discovers)
 bp connect --provider generic --name dev
+
+# With export log for local debugging
+bp connect --provider generic --name dev --export-log ./logs/session.jsonl
 
 # BrowserBase
 bp connect -p browserbase -n prod --api-key $BROWSERBASE_API_KEY
@@ -72,7 +76,7 @@ bp exec '[
 ]'
 
 # With session and JSON output
-bp exec -s my-session -o json '{"action":"snapshot"}'
+bp exec -s my-session --json '{"action":"snapshot"}'
 ```
 
 ### snapshot
@@ -87,6 +91,9 @@ bp snapshot [options]
 - `-s, --session <id>` - Session to use
 - `-o, --output <format>` - Output: `json`, `pretty`
 - `--format <type>` - Snapshot format: `full`, `interactive`, `text` (default: `text`)
+- `--diff <file>` - Compare with saved snapshot and show differences
+- `--inspect` - Inject visual ref labels on the page
+- `--keep` - Keep overlay visible (with `--inspect`)
 
 **Examples:**
 
@@ -98,8 +105,48 @@ bp snapshot -s my-session --format text
 bp snapshot -s my-session --format interactive
 
 # Full snapshot as JSON
-bp snapshot -s my-session --format full -o json
+bp snapshot -s my-session --format full --json
+
+# Compare with previous state
+bp snapshot -s my-session > before.json
+# ... perform actions ...
+bp snapshot -s my-session --diff before.json
+
+# Visual inspection with ref labels
+bp snapshot -s my-session --inspect --keep
 ```
+
+### diagnose
+
+Debug element selection issues. Finds exact matches, fuzzy matches, and explains why selectors might fail.
+
+```bash
+bp diagnose <selector> [options]
+```
+
+**Options:**
+- `-s, --session <id>` - Session to use
+- `-o, --output <format>` - Output: `json`, `pretty`
+- `--max <n>` - Maximum candidates to return (default: 5)
+
+**Examples:**
+
+```bash
+# Diagnose a CSS selector
+bp diagnose '#submit-button' -s my-session
+
+# Machine-readable output for AI agents
+bp diagnose '#submit' -s my-session --json
+
+# Find up to 10 candidates
+bp diagnose '.btn' -s my-session --max 10
+```
+
+**Output includes:**
+- Exact matches with visibility status
+- Fuzzy matches with similarity scores
+- Reasons elements might not be interactable (hidden, disabled, covered)
+- Suggested alternative selectors
 
 ### text
 
@@ -148,22 +195,37 @@ bp screenshot -s my-session --format jpeg --quality 80 --output page.jpg
 
 ### list
 
-List all saved sessions.
+List all saved sessions with optional log access.
 
 ```bash
 bp list [options]
 ```
 
 **Options:**
+- `-s, --session <id>` - Filter to specific session
 - `-o, --output <format>` - Output: `json`, `pretty`
+- `--log-path` - Show path to session log file
+- `--log-tail <n>` - Show last N log entries
+- `--info` - Show detailed session info including log stats
 
-**Example:**
+**Examples:**
 
 ```bash
+# List all sessions
 bp list
 # ID          PROVIDER     CREATED              URL
 # my-session  browserbase  2024-01-15 10:30:00  https://example.com
 # dev         generic      2024-01-15 09:00:00  about:blank
+
+# Show session log path
+bp list -s my-session --log-path
+# /Users/you/.browser-pilot/sessions/my-session/log.jsonl
+
+# View recent commands
+bp list -s my-session --log-tail 10
+
+# Full session info with log stats
+bp list -s my-session --info
 ```
 
 ### record
@@ -226,6 +288,8 @@ These options work with all commands:
 
 - `-s, --session <id>` - Session ID to use
 - `-o, --output <format>` - Output format: `json` or `pretty`
+- `--json` - JSON output (preferred over `--json`)
+- `--pretty` - Alias for `-o pretty`
 - `--trace` - Enable execution tracing
 
 ## Action DSL
@@ -250,7 +314,8 @@ interface Action {
   // Options
   timeout?: number;       // Override default timeout
   optional?: boolean;     // Don't fail if element not found
-  method?: 'enter' | 'click' | 'enter+click';  // submit
+  method?: 'enter' | 'click' | 'enter+click';  // submit (for buttons)
+  // Note: When targeting a <form> element directly, uses form.requestSubmit()
   clear?: boolean;        // fill (default: true)
   delay?: number;         // type (ms between keystrokes)
 }
@@ -275,11 +340,15 @@ Each session file contains:
   "provider": "browserbase",
   "wsUrl": "wss://...",
   "providerSessionId": "...",
+  "targetId": "ABCD1234...",
+  "exportLog": "./logs/my-session.jsonl",
   "createdAt": "2024-01-15T10:30:00Z",
   "lastActivity": "2024-01-15T10:35:00Z",
   "currentUrl": "https://example.com"
 }
 ```
+
+The `targetId` field ensures consistent page targeting when multiple browser tabs are open. The `exportLog` field is only present if `--export-log` was used during connect.
 
 ## AI Agent Integration
 
@@ -312,16 +381,16 @@ Example agent workflow:
 bp connect -p browserbase -n agent-session
 
 # 2. Agent executes actions
-bp exec -s agent-session -o json '[
+bp exec -s agent-session --json '[
   {"action":"goto","url":"https://example.com"},
   {"action":"snapshot"}
 ]'
 
 # 3. Agent reads state
-bp snapshot -s agent-session --format interactive -o json
+bp snapshot -s agent-session --format interactive --json
 
 # 4. Agent continues...
-bp exec -s agent-session -o json '[
+bp exec -s agent-session --json '[
   {"action":"click","selector":"#next-page"}
 ]'
 ```
