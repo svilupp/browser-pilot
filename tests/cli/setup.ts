@@ -5,7 +5,6 @@
  * to avoid conflicts when tests run in parallel.
  */
 
-import { $ } from 'bun';
 import { createTestHarness, destroyHarness, type TestHarness } from '../utils/harness';
 
 export interface CLIResult {
@@ -20,12 +19,24 @@ let fileHarness: TestHarness | null = null;
 
 /**
  * Run the CLI with given arguments
+ *
+ * Uses Bun.spawn() instead of shell template ($`...`) for reliable behavior
+ * in CI environments. The shell syntax can hang in GitHub Actions.
  */
 export async function runCLI(args: string[]): Promise<CLIResult> {
-  const result = await $`bun ./src/cli/index.ts ${args}`.quiet().nothrow();
+  const proc = Bun.spawn(['bun', './src/cli/index.ts', ...args], {
+    stdout: 'pipe',
+    stderr: 'pipe',
+    stdin: 'ignore', // Critical: don't wait for stdin in CI
+  });
 
-  const stdout = result.stdout.toString();
-  const stderr = result.stderr.toString();
+  // Read stdout and stderr as text
+  const [stdout, stderr] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+  ]);
+
+  const exitCode = await proc.exited;
 
   let json: unknown;
   try {
@@ -37,7 +48,7 @@ export async function runCLI(args: string[]): Promise<CLIResult> {
   return {
     stdout,
     stderr,
-    exitCode: result.exitCode,
+    exitCode,
     json,
   };
 }

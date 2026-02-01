@@ -85,8 +85,7 @@ describe('Session Logging Integration', () => {
       });
     }, 60000);
 
-    // TODO: Fix flaky in CI - depends on CLI and filesystem timing
-    test.skipIf(!!process.env['CI'])('log includes command, args, status, duration', async () => {
+    test('log includes command, args, status, duration', async () => {
       const sessionName = generateSessionName();
 
       await withRetry(async () => {
@@ -139,8 +138,7 @@ describe('Session Logging Integration', () => {
       });
     }, 60000);
 
-    // TODO: Fix flaky in CI - depends on CLI and filesystem timing
-    test.skipIf(!!process.env['CI'])('failed commands log error and hints', async () => {
+    test('failed commands log error and hints', async () => {
       const sessionName = generateSessionName();
 
       await withRetry(async () => {

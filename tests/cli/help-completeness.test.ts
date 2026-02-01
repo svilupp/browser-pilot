@@ -214,9 +214,7 @@ describe('bp actions Command', () => {
   });
 });
 
-// TODO: These tests hang in CI - Bun's subprocess spawning ($`...`) behaves
-// differently in GitHub Actions. Works locally. Need to investigate.
-describe.skipIf(!!process.env['CI'])('Error Messages', () => {
+describe('Error Messages', () => {
   test('exec without actions suggests bp actions', async () => {
     const result = await runCLI(['exec']);
 
