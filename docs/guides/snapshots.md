@@ -210,7 +210,7 @@ bp snapshot -s my-session
 bp snapshot -s my-session --format interactive
 
 # Full JSON
-bp snapshot -s my-session --format full -o json
+bp snapshot -s my-session --format full --json
 ```
 
 ## Batch Actions

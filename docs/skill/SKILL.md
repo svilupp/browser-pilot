@@ -175,7 +175,7 @@ The `diagnose` command shows:
 4. **Use `blur: true` for React/Vue forms** - Ensures state sync on controlled inputs
 5. **Use `bp diagnose`** when selectors fail - Shows why and suggests alternatives
 6. **Run `bp actions`** for complete action reference
-7. **Use `--json` for scripting** - Alias for `-o json`, easier to type
+7. **Use `--json` for scripting** - Cleaner than `-o json`
 8. **Use `--export-log` for debugging** - Keeps local copy of session logs
 
 ---
