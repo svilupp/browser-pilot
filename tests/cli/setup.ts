@@ -5,7 +5,13 @@
  * to avoid conflicts when tests run in parallel.
  */
 
-import { createTestHarness, destroyHarness, type TestHarness } from '../utils/harness';
+import {
+  createTestHarness,
+  destroyHarness,
+  isChromeHealthy,
+  recoverHarness,
+  type TestHarness,
+} from '../utils/harness';
 
 export interface CLIResult {
   stdout: string;
@@ -95,6 +101,21 @@ export function getChromePort(): number {
 }
 
 /**
+ * Ensures Chrome is alive, recovers if dead
+ * Called automatically before operations that need Chrome
+ */
+export async function ensureHealthyHarness(): Promise<void> {
+  if (!fileHarness) {
+    throw new Error('CLI test harness not initialized. Call setup() in beforeAll.');
+  }
+
+  const healthy = await isChromeHealthy(fileHarness.chrome.port);
+  if (!healthy) {
+    await recoverHarness(fileHarness);
+  }
+}
+
+/**
  * Get WebSocket URL for the browser
  * Fetches from Chrome's /json/version endpoint
  */
@@ -102,6 +123,10 @@ export async function getWebSocketUrl(): Promise<string> {
   if (!fileHarness) {
     throw new Error('CLI test harness not initialized. Call setup() in beforeAll.');
   }
+
+  // Ensure Chrome is healthy before fetching WebSocket URL
+  await ensureHealthyHarness();
+
   const port = fileHarness.chrome.port;
   const response = await fetch(`http://localhost:${port}/json/version`);
   const info = (await response.json()) as { webSocketDebuggerUrl: string };

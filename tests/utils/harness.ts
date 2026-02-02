@@ -6,6 +6,12 @@
 import * as chromeLauncher from 'chrome-launcher';
 import { type Browser, connect, getBrowserWebSocketUrl, type Page } from '../../src';
 
+export interface RecoveryOptions {
+  maxAttempts?: number; // Default: 2
+  retryDelay?: number; // Default: 500ms
+  healthCheckTimeout?: number; // Default: 2000ms
+}
+
 export interface TestHarness {
   browser: Browser;
   baseUrl: string;
@@ -161,4 +167,107 @@ function getContentType(path: string): string {
   if (path.endsWith('.jpg') || path.endsWith('.jpeg')) return 'image/jpeg';
   if (path.endsWith('.svg')) return 'image/svg+xml';
   return 'application/octet-stream';
+}
+
+/**
+ * Check if Chrome is healthy by pinging its /json/version endpoint
+ * Fast check (~100ms typical), returns boolean
+ */
+export async function isChromeHealthy(port: number, timeoutMs = 2000): Promise<boolean> {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+    const response = await fetch(`http://localhost:${port}/json/version`, {
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeout);
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Recover a harness by killing the old Chrome instance and launching a new one
+ * Mutates the harness in-place (critical - fileHarness is module-level variable)
+ */
+export async function recoverHarness(
+  harness: TestHarness,
+  options: RecoveryOptions = {}
+): Promise<TestHarness> {
+  const { maxAttempts = 2, retryDelay = 500, healthCheckTimeout = 2000 } = options;
+
+  console.log('[HARNESS] Chrome appears dead, attempting recovery...');
+
+  // Kill the old Chrome instance
+  try {
+    await harness.chrome.kill();
+  } catch {
+    // Ignore kill errors - Chrome may already be dead
+  }
+
+  // Try to close the browser connection gracefully
+  try {
+    await harness.browser.close();
+  } catch {
+    // Ignore close errors
+  }
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    console.log(`[HARNESS] Recovery attempt ${attempt}/${maxAttempts}`);
+
+    try {
+      // Launch new Chrome
+      const chrome = await chromeLauncher.launch({
+        chromeFlags: [
+          '--headless=new',
+          '--disable-gpu',
+          '--no-sandbox',
+          '--disable-dev-shm-usage',
+          '--disable-extensions',
+          '--disable-background-networking',
+          '--disable-sync',
+          '--disable-translate',
+          '--mute-audio',
+          '--hide-scrollbars',
+        ],
+        userDataDir: false,
+      });
+
+      console.log(`[HARNESS] New Chrome launched on port ${chrome.port}`);
+
+      // Verify Chrome is healthy before connecting
+      const healthy = await isChromeHealthy(chrome.port, healthCheckTimeout);
+      if (!healthy) {
+        await chrome.kill();
+        throw new Error('New Chrome instance failed health check');
+      }
+
+      // Connect browser-pilot
+      const wsUrl = await getBrowserWebSocketUrl(`localhost:${chrome.port}`);
+      const browser = await connect({
+        provider: 'generic',
+        wsUrl,
+        debug: false,
+      });
+
+      console.log('[HARNESS] Browser reconnected successfully');
+
+      // Mutate harness in-place
+      harness.chrome = chrome;
+      harness.browser = browser;
+
+      return harness;
+    } catch (error) {
+      console.log(`[HARNESS] Recovery attempt ${attempt} failed:`, error);
+
+      if (attempt < maxAttempts) {
+        await new Promise((resolve) => setTimeout(resolve, retryDelay));
+      }
+    }
+  }
+
+  throw new Error(`[HARNESS] Failed to recover Chrome after ${maxAttempts} attempts`);
 }
