@@ -21,7 +21,7 @@ export interface CLIResult {
 }
 
 export interface CLIOptions {
-  /** Timeout in milliseconds (default: 20000) */
+  /** Timeout in milliseconds (default: 35000, covers 30s element wait + overhead) */
   timeout?: number;
 }
 
@@ -34,12 +34,14 @@ let fileHarness: TestHarness | null = null;
  * Uses Bun.spawn() instead of shell template ($`...`) for reliable behavior
  * in CI environments. The shell syntax can hang in GitHub Actions.
  *
- * Includes per-command timeout (default 20s) to prevent hung commands from
- * consuming entire test timeout. On timeout, kills the process and attempts
- * Chrome health recovery for subsequent tests.
+ * Includes per-command timeout (default 35s) to prevent hung commands from
+ * consuming entire test timeout. The 35s default covers the 30s element wait
+ * timeout plus overhead. On timeout, kills the process and attempts Chrome
+ * health recovery for subsequent tests.
  */
 export async function runCLI(args: string[], options: CLIOptions = {}): Promise<CLIResult> {
-  const { timeout = 20000 } = options;
+  // 35s covers 30s element wait timeout + 5s overhead
+  const { timeout = 35000 } = options;
 
   const proc = Bun.spawn(['bun', './src/cli/index.ts', ...args], {
     stdout: 'pipe',
