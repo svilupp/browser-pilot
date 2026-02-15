@@ -15,8 +15,8 @@ Options:
   --max-age <hours>    Remove sessions older than N hours (default: 24)
   --dry-run            Show what would be removed without deleting
   --all                Remove all sessions regardless of age
-  -o, --output <fmt>   Output format: json | pretty (default: pretty)
-  --json               Alias for -o json
+  -f, --format <fmt>   Output format: json | pretty (default: pretty)
+  --json               Alias for -f json
   -h, --help           Show this help
 
 Examples:
@@ -55,7 +55,7 @@ function parseCleanArgs(args: string[]): CleanOptions {
 
 export async function cleanCommand(
   args: string[],
-  globalOptions: { output?: 'json' | 'pretty'; help?: boolean }
+  globalOptions: { format?: 'json' | 'pretty'; help?: boolean }
 ): Promise<void> {
   const options = parseCleanArgs(args);
 
@@ -75,7 +75,7 @@ export async function cleanCommand(
   });
 
   if (stale.length === 0) {
-    output({ message: 'No stale sessions found', cleaned: 0 }, globalOptions.output);
+    output({ message: 'No stale sessions found', cleaned: 0 }, globalOptions.format);
     return;
   }
 
@@ -86,7 +86,7 @@ export async function cleanCommand(
         sessions: stale.map((s) => s.id),
         dryRun: true,
       },
-      globalOptions.output
+      globalOptions.format
     );
     return;
   }
@@ -101,6 +101,6 @@ export async function cleanCommand(
       cleaned: stale.length,
       sessions: stale.map((s) => s.id),
     },
-    globalOptions.output
+    globalOptions.format
   );
 }

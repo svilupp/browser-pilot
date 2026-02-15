@@ -199,82 +199,75 @@ Hints are action-aware—`click` suggests buttons/links, `fill` suggests inputs.
 
 ## Voice Agent Testing
 
-Test audio-based AI apps (voice assistants, phone agents, audio chatbots) by injecting microphone input and capturing spoken responses.
+Test audio-based AI agents (voice assistants, phone agents, audio chatbots) by injecting microphone input and capturing spoken responses.
 
-**Requires:** `OPENAI_API_KEY` env var for `--transcribe` (validated immediately — fails fast with helpful error if missing).
+> **Full guide:** [VOICE_AGENT_TESTING.md](./VOICE_AGENT_TESTING.md) — setup, troubleshooting decision tree, validation checklist, multi-turn patterns.
 
-### Typical Workflow
+**Requires:** `OPENAI_API_KEY` env var for `--transcribe`. Chrome with `--remote-debugging-port=9222`.
+
+### Quick Start
 
 ```bash
-# 1. Connect to browser
-bp connect --provider generic --name voice-test
-
-# 2. Navigate to the voice agent page
-bp exec '[{"action":"goto","url":"https://my-voice-app.com"},{"action":"snapshot"}]'
-
-# 3. Click "start call" or similar button if needed
-bp exec '{"action":"click","selector":"ref:e4"}'
-
-# 4. Full round-trip: send audio → wait for response → transcribe
-bp audio roundtrip -i question.wav --transcribe --silence-timeout 5000
-# Output: { "transcript": "The answer is 42", "latencyMs": 1200, ... }
-
-# 5. Multiple turns in conversation
-bp audio roundtrip -i followup.wav --transcribe --silence-timeout 5000
-
-# 6. Push-to-talk: play audio, click send button, capture response
-bp audio roundtrip -i prompt.wav --send-selector ref:e31 --transcribe
-
-# 7. Capture-only (agent already speaking)
-bp audio capture --transcribe --silence-timeout 8000
-
-# 8. Save response audio for manual review
-bp audio roundtrip -i prompt.wav -o response.wav --transcribe
-
-# 9. Debug capture issues with --verbose
-bp audio capture --verbose --transcribe --silence-timeout 5000
+bp connect --provider generic --name vt
+bp exec -s vt '{"action":"goto","url":"https://my-voice-app.com"}'
+sleep 3
+bp audio check -s vt                # auto-sets up + validates pipeline
+bp audio roundtrip -s vt -i prompt.wav --transcribe --silence-timeout 1500
 ```
+
+### Critical: Setup Order
+
+Audio overrides MUST exist BEFORE the voice agent creates its AudioContext. If the agent auto-starts on page load, reload after setup:
+
+```bash
+bp audio setup -s vt
+bp exec -s vt '{"action":"goto","url":"https://my-voice-app.com"}'
+sleep 3
+bp audio check -s vt   # expect "READY for roundtrip"
+```
+
+If `bp audio check` shows 0 AudioContexts or `NOT READY` — the agent initialized before overrides. Reload the page.
 
 ### Key Options
 
-- **`--silence-timeout 5000`** — Voice agents take 2-8s to respond. Default 3s may cut off responses. Increase for slower agents.
-- **`--transcribe`** — Adds ~1-2s (Whisper API is fast). Requires `OPENAI_API_KEY`.
-- **`--language <lang>`** — Language hint for transcription (e.g. `en`, `es`, `ja`). Improves accuracy for non-English audio.
-- **`--pre-delay`** — Wait before playing input if the page needs setup time.
-- **`--send-selector`** — Click a button after input finishes (push-to-talk UIs).
-- **`--verbose`** — Show detailed capture diagnostics (chunk RMS, connection counts).
-- **`--json`** — Structured output for CI/scripting.
+| Option | Default | Use |
+|--------|---------|-----|
+| `--silence-timeout` | 1500ms | Increase for agents with long pauses |
+| `--transcribe` | off | Transcribe response via Whisper |
+| `--verbose` | off | Debug: per-chunk RMS, silence detection |
+| `-o response.wav` | none | Save response audio |
+| `--send-selector` | none | Push-to-talk UIs |
+| `--pre-delay` | 0 | Wait before playing input |
+| `--json` | off | CI/scripting output |
 
-### Troubleshooting
-
-- **Transcript is always silence / "you"** — Use `--verbose` to see if chunks are arriving. Check if the voice agent uses WebRTC (connections should show in verbose output).
-- **Audio setup fails** — Make sure you've navigated to a real page first. `bp audio setup` on `about:blank` will error with a clear message.
-
-### Generating Test Audio
-
-Use the bundled TTS script to create test prompts from text:
+### Common Patterns
 
 ```bash
-# Generate a WAV prompt (requires OPENAI_API_KEY in env or .env in project root)
+# Push-to-talk
+bp audio roundtrip -i prompt.wav --send-selector "#send-btn" --transcribe
+
+# Capture-only (agent already speaking)
+bp audio capture --transcribe --silence-timeout 1500
+
+# Generate test audio from text
 uv run docs/skill/generate-audio.py "Hello, what can you help me with?" -o prompt.wav
-uv run docs/skill/generate-audio.py "Can you tell me more?" -o followup.wav
 
-# Options
-uv run docs/skill/generate-audio.py "text" --voice nova --model tts-1-hd -o high-quality.wav
+# Multi-turn conversation
+bp audio roundtrip -s vt -i greeting.wav --transcribe --silence-timeout 1500
+bp audio roundtrip -s vt -i question.wav --transcribe --silence-timeout 1500
 ```
 
-### Environment Setup
+### Diagnosing Issues
 
-```bash
-# Required for transcription and audio generation
-# Check .env in the project root if not in your shell environment
-export OPENAI_API_KEY=sk-...
+Run `bp audio check` first. Then see [VOICE_AGENT_TESTING.md](./VOICE_AGENT_TESTING.md) for the full troubleshooting decision tree.
 
-# Optional: Chrome with fake media device support
-chrome --remote-debugging-port=9222 \
-  --use-fake-device-for-media-stream \
-  --use-fake-ui-for-media-stream
-```
+| Symptom | Quick Fix |
+|---------|-----------|
+| 0 AudioContexts | Agent not initialized — wait, interact, or reload |
+| `NOT READY` | Overrides missing — `bp audio setup`, then reload |
+| `latencyMs: -1` | Agent didn't respond — check `bp audio check` |
+| Garbage transcript | Sample rate issue — use `--verbose` to check |
+| Capture runs forever | No audio arriving — 15s `noAudioTimeout` should trigger |
 
 ## Tips
 
@@ -285,11 +278,12 @@ chrome --remote-debugging-port=9222 \
 5. **Use `bp diagnose`** when selectors fail - Shows why and suggests alternatives
 6. **Use `bp eval`** for quick JS checks - No JSON wrapping needed
 7. **Use `bp exec -f`** for complex multi-step actions - Avoids shell escaping
-8. **Use `--json` for scripting** - Cleaner than `-o json`
+8. **Use `--json` for scripting** - Cleaner than `-f json`
 9. **Use `--export-log` for debugging** - Keeps local copy of session logs
-10. **Voice agents: increase `--silence-timeout`** - Default 3s is often too short
-11. **Voice transcript is silence?** - Use `--verbose` to diagnose capture issues
-12. **Debug a past session** - `bp list -s <name> --log-tail 50` shows recent actions; `cat $(bp list -s <name> --log-path)` dumps the full JSONL execution log
+10. **Voice agents: setup order matters** - Inject audio overrides BEFORE activating the voice agent, or capture returns empty
+11. **Voice transcript is silence?** - Run `bp audio check` first, then use `--verbose` to diagnose capture issues
+12. **Validate audio pipeline** - `bp audio check` shows overrides, AudioContexts, taps, and fake mic status
+13. **Debug a past session** - `bp list -s <name> --log-tail 50` shows recent actions; `cat $(bp list -s <name> --log-path)` dumps the full JSONL execution log
 
 ---
 

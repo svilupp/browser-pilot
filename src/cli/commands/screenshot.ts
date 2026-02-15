@@ -60,7 +60,7 @@ function parseScreenshotArgs(args: string[]): ScreenshotOptions {
 
 export async function screenshotCommand(
   args: string[],
-  globalOptions: { session?: string; output?: 'json' | 'pretty'; trace?: boolean; help?: boolean }
+  globalOptions: { session?: string; format?: 'json' | 'pretty'; trace?: boolean; help?: boolean }
 ): Promise<void> {
   const options = parseScreenshotArgs(args);
 
@@ -106,11 +106,11 @@ export async function screenshotCommand(
           size: buffer.length,
           format: options.format ?? 'png',
         },
-        globalOptions.output
+        globalOptions.format
       );
     } else {
       // Output base64 data
-      if (globalOptions.output === 'json') {
+      if (globalOptions.format === 'json') {
         output({ data: screenshotData, format: options.format ?? 'png' }, 'json');
       } else {
         console.log(screenshotData);

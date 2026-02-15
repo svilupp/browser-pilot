@@ -60,7 +60,7 @@ bp exec <actions> [options]
 
 **Options:**
 - `-s, --session <id>` - Session to use (uses most recent if not specified)
-- `-o, --output <format>` - Output format: `json`, `pretty` (default: `pretty`)
+- `-f, --format <format>` - Output format: `json`, `pretty` (default: `pretty`)
 - `--trace` - Enable tracing output
 
 **Examples:**
@@ -89,7 +89,7 @@ bp snapshot [options]
 
 **Options:**
 - `-s, --session <id>` - Session to use
-- `-o, --output <format>` - Output: `json`, `pretty`
+- `-f, --format <format>` - Output: `json`, `pretty`
 - `-i, --interactive` - Show interactive elements only (recommended)
 - `--format <type>` - Snapshot format: `full`, `interactive`, `text` (default: `text`)
 - `--diff <file>` - Compare with saved snapshot and show differences
@@ -127,7 +127,7 @@ bp diagnose <selector> [options]
 
 **Options:**
 - `-s, --session <id>` - Session to use
-- `-o, --output <format>` - Output: `json`, `pretty`
+- `-f, --format <format>` - Output: `json`, `pretty`
 - `--max <n>` - Maximum candidates to return (default: 5)
 
 **Examples:**
@@ -204,7 +204,7 @@ bp list [options]
 
 **Options:**
 - `-s, --session <id>` - Filter to specific session
-- `-o, --output <format>` - Output: `json`, `pretty`
+- `-f, --format <format>` - Output: `json`, `pretty`
 - `--log-path` - Show path to session log file
 - `--log-tail <n>` - Show last N log entries
 - `--info` - Show detailed session info including log stats
@@ -270,6 +270,8 @@ bp exec --file recording.json
 
 Test voice/audio AI agents. Feed audio as microphone input, capture spoken responses, and optionally transcribe via OpenAI Whisper.
 
+> **Full guide:** [Voice Agent Testing Guide](./guides/voice-agent-testing.md) — setup order, troubleshooting, validation checklist.
+
 ```bash
 bp audio <subcommand> [options]
 ```
@@ -279,45 +281,55 @@ bp audio <subcommand> [options]
 - `play` - Feed audio file into the page's fake microphone
 - `capture` - Capture audio output from the page
 - `setup` - Set up audio I/O on the session (auto-runs if needed)
+- `check` - Validate audio pipeline and report status
 
 **Common Options:**
 - `-s, --session [id]` - Session to use (omit: auto-connect, `-s`: latest, `-s <id>`: specific)
 - `--transcribe` - Transcribe captured audio via OpenAI Whisper. **Requires `OPENAI_API_KEY`** env var (validated immediately)
 - `--language <lang>` - Language hint for transcription (e.g. `en`, `es`)
+- `--verbose` - Show per-chunk RMS levels and silence detection diagnostics
 - `-i, --input <file>` - Audio file to play (WAV, MP3, OGG)
 - `-o, --out <file>` - Save captured audio to WAV file
-- `--silence-timeout <ms>` - Stop after N ms of silence (default: 3000)
+- `--silence-timeout <ms>` - Stop after N ms of silence (default: 1500)
 - `--silence-threshold <n>` - RMS threshold for silence (default: 0.01)
 - `--max-duration <ms>` - Maximum capture time (default: 300000)
 - `--pre-delay <ms>` - Wait before playing input (default: 0)
 - `--timeout <ms>` - Max total round-trip time (default: 120000)
+- `--send-selector <sel>` - Click this selector after input finishes (push-to-talk UIs)
 - `--no-wait` - Don't wait for playback to finish (play only)
 - `--duration <ms>` - Fixed-duration capture (capture only)
 
 **Examples:**
 
 ```bash
-# Full voice agent test: send prompt, capture response, transcribe
-bp audio roundtrip -i question.wav --transcribe --silence-timeout 5000
-# Output: { "transcript": "The answer is 42", "latencyMs": 1200, ... }
+# Validate audio pipeline before testing
+bp audio check -s mysession
+# Output: "READY for roundtrip" with agent AudioContext detected
 
-# Capture audio output and transcribe (agent already speaking)
-bp audio capture --transcribe --silence-timeout 8000
+# Full voice agent test: send prompt, capture response, transcribe
+bp audio roundtrip -i prompt.wav --transcribe --silence-timeout 1500
 
 # Save response audio for manual review
 bp audio roundtrip -i prompt.wav -o response.wav --transcribe
 
+# Push-to-talk agent
+bp audio roundtrip -i prompt.wav --send-selector "#send-btn" --transcribe
+
+# Capture audio output (agent already speaking)
+bp audio capture --transcribe --silence-timeout 1500
+
 # Just play audio into the microphone
 bp audio play -i greeting.wav
 
-# Set up audio I/O explicitly (usually auto-runs)
-bp audio setup -s mysession
+# Debug with verbose output
+bp audio roundtrip -i prompt.wav --verbose --transcribe --silence-timeout 1500
 ```
 
-**Notes:**
-- Voice agents typically take 2-8s to respond. Use `--silence-timeout 5000` or higher.
+**Important:**
+- Audio overrides must be injected BEFORE the voice agent initializes. If capture returns empty, reload the page after `bp audio setup`.
+- Default `--silence-timeout` is 1500ms — agents rarely pause >1.5s mid-sentence.
 - `--transcribe` adds ~1-2s overhead (Whisper API). Safe to use in hot loops.
-- `OPENAI_API_KEY` is validated immediately when `--transcribe` is used — fails fast with a helpful error.
+- Use `bp audio check` to validate the pipeline before testing.
 - Use `--json` for structured output in CI/scripting.
 
 ### close
@@ -342,9 +354,9 @@ bp close -s my-session
 These options work with all commands:
 
 - `-s, --session <id>` - Session ID to use
-- `-o, --output <format>` - Output format: `json` or `pretty`
-- `--json` - JSON output (preferred over `--json`)
-- `--pretty` - Alias for `-o pretty`
+- `-f, --format <format>` - Output format: `json` or `pretty`
+- `--json` - JSON output (preferred over `-f json`)
+- `--pretty` - Alias for `-f pretty`
 - `--trace` - Enable execution tracing
 
 ## Action DSL

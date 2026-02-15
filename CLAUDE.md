@@ -94,28 +94,38 @@ Complex patterns (custom dropdowns, multi-step forms) are composed from primitiv
 | Audio output (capture) | `src/audio/output.ts` |
 | Transcription (Whisper) | `src/audio/transcribe.ts` |
 | CLI | `src/cli/index.ts` |
-| CLI audio command | `src/cli/commands/audio.ts` |
+| CLI audio command | `src/cli/commands/audio.ts` (subcommands: setup, play, capture, roundtrip, check) |
 
 ## Audio I/O Pattern
 
-Voice agent testing via JS injection (works on already-running browsers, no special launch flags required):
+Voice agent testing via JS injection (works on already-running browsers, no special launch flags required).
+
+**Setup order matters:** Audio overrides must be injected *before* the voice agent initializes (calls `getUserMedia`, creates `AudioContext`, etc.). Use `bp audio check` to validate pipeline state after setup.
 
 ```
 Page.setupAudio()
   ├── AudioInput: getUserMedia monkey-patch → fake MediaStream via AudioContext
   │   └── play(bytes) → decodeAudioData → AudioBufferSourceNode → destination
   └── AudioOutput: AudioNode.connect + HTMLMediaElement.play interception
-      └── ScriptProcessorNode taps PCM → Runtime.addBinding → Node.js
+      └── Per-context ScriptProcessorNode taps PCM → Runtime.addBinding → Node.js
 
 Page.audioRoundTrip()
   1. Start output capture
   2. Play input audio into fake mic
-  3. captureUntilSilence (RMS-based, configurable timeout)
+  3. captureUntilSilence (RMS-based, silenceTimeout default 1500ms)
+     - noAudioTimeout (15s): early exit if no audio arrives at all
+     - Chunks grouped by AudioContext sample rate; best group selected on merge
   4. Return { audio, latencyMs, totalMs }
 
 Transcription: transcribe(CaptureResult) → pcmToWav → fetch(Whisper API)
   - Zero dependencies, manual multipart/form-data
   - Gated on OPENAI_API_KEY (validated immediately)
+
+bp audio check
+  - Validates overrides (getUserMedia, AudioNode.connect, AudioContext)
+  - Reports tracked AudioContexts with role heuristic:
+    non-48kHz context = likely voice agent, 48kHz = browser-pilot input/capture
+  - Shows input/output readiness and overall pipeline status
 ```
 
 - Data transfer: base64-encoded Float32Array via `Runtime.addBinding`, flushed ~1s

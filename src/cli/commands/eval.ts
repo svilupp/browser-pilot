@@ -29,8 +29,8 @@ Usage:
 Options:
   -f, --file <path>    Read JavaScript from a file
   -s, --session <id>   Session to use (default: most recent)
-  -o, --output <fmt>   Output format: json | pretty (default: pretty)
-  --json               Alias for -o json
+  -f, --format <fmt>   Output format: json | pretty (default: pretty)
+  --json               Alias for -f json
   --trace              Enable debug tracing
   -h, --help           Show this help
 
@@ -74,7 +74,7 @@ function parseEvalArgs(args: string[]): { expression: string | undefined; option
 
 export async function evalCommand(
   args: string[],
-  globalOptions: { session?: string; output?: 'json' | 'pretty'; trace?: boolean; help?: boolean }
+  globalOptions: { session?: string; format?: 'json' | 'pretty'; trace?: boolean; help?: boolean }
 ): Promise<void> {
   if (globalOptions.help) {
     console.log(EVAL_HELP);
@@ -157,10 +157,10 @@ export async function evalCommand(
 
     // Output the result
     output(
-      globalOptions.output === 'json'
+      globalOptions.format === 'json'
         ? { success: true, result: stepResult.result }
         : stepResult.result,
-      globalOptions.output
+      globalOptions.format
     );
 
     await updateSession(session.id, { currentUrl: await page.url() });

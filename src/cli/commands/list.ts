@@ -31,7 +31,7 @@ Options:
   --info                Show session details and log statistics
   --log-tail [n]        Show last n action log entries (default: 20)
   --log-path            Print absolute path to log.jsonl file
-  -o json, --json       Machine-readable JSON output
+  -f json, --json       Machine-readable JSON output
   -h, --help            Show this help
 
 Examples:
@@ -94,7 +94,7 @@ function formatLogEntry(entry: LogEntry): string {
 
 export async function listCommand(
   args: string[],
-  globalOptions: { session?: string; output?: 'json' | 'pretty'; trace?: boolean }
+  globalOptions: { session?: string; format?: 'json' | 'pretty'; trace?: boolean }
 ): Promise<void> {
   const listOptions = parseListArgs(args);
 
@@ -126,7 +126,7 @@ export async function listCommand(
     if (listOptions.logTail !== undefined) {
       const entries = logger.tailLog(listOptions.logTail);
 
-      if (globalOptions.output === 'json') {
+      if (globalOptions.format === 'json') {
         output(entries, 'json');
         return;
       }
@@ -146,7 +146,7 @@ export async function listCommand(
     if (listOptions.info) {
       const stats = logger.getLogStats();
 
-      if (globalOptions.output === 'json') {
+      if (globalOptions.format === 'json') {
         output({ session, logStats: stats }, 'json');
         return;
       }
@@ -189,7 +189,7 @@ export async function listCommand(
     }
   }
 
-  if (globalOptions.output === 'json') {
+  if (globalOptions.format === 'json') {
     output(fresh, 'json');
     return;
   }

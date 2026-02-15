@@ -14,8 +14,8 @@ Usage:
 
 Options:
   -s, --session <id>   Session to close (default: most recent)
-  -o, --output <fmt>   Output format: json | pretty (default: pretty)
-  --json               Alias for -o json
+  -f, --format <fmt>   Output format: json | pretty (default: pretty)
+  --json               Alias for -f json
   --trace              Enable debug tracing
   -h, --help           Show this help
 
@@ -27,7 +27,7 @@ Examples:
 
 export async function closeCommand(
   args: string[],
-  globalOptions: { session?: string; output?: 'json' | 'pretty'; trace?: boolean; help?: boolean }
+  globalOptions: { session?: string; format?: 'json' | 'pretty'; trace?: boolean; help?: boolean }
 ): Promise<void> {
   if (globalOptions.help) {
     console.log(CLOSE_HELP);
@@ -69,6 +69,6 @@ export async function closeCommand(
       sessionId: session.id,
       message: 'Session closed',
     },
-    globalOptions.output
+    globalOptions.format
   );
 }

@@ -61,8 +61,8 @@ Commands:
 
 Options:
   -s, --session <id>    Session ID
-  -o, --output <fmt>    json | pretty (default: pretty)
-  --json                Alias for -o json
+  -f, --format <fmt>    json | pretty (default: pretty)
+  --json                Alias for -f json
   --trace               Enable debug tracing
   --dialog <mode>       Handle dialogs: accept | dismiss
   -h, --help            Show help
@@ -82,14 +82,17 @@ Run 'bp audio --help' for voice agent testing guide.
 
 interface GlobalOptions {
   session?: string;
-  output?: 'json' | 'pretty';
+  format?: 'json' | 'pretty';
   trace?: boolean;
   help?: boolean;
 }
 
-function parseGlobalOptions(args: string[]): { options: GlobalOptions; remaining: string[] } {
+export function parseGlobalOptions(args: string[]): {
+  options: GlobalOptions;
+  remaining: string[];
+} {
   const options: GlobalOptions = {
-    output: 'pretty',
+    format: 'pretty',
   };
   const remaining: string[] = [];
 
@@ -98,12 +101,19 @@ function parseGlobalOptions(args: string[]): { options: GlobalOptions; remaining
 
     if (arg === '-s' || arg === '--session') {
       options.session = args[++i];
-    } else if (arg === '-o' || arg === '--output') {
-      options.output = args[++i] as 'json' | 'pretty';
+    } else if (arg === '-f' || arg === '--format') {
+      const nextVal = args[i + 1];
+      if (nextVal === 'json' || nextVal === 'pretty') {
+        options.format = args[++i] as 'json' | 'pretty';
+      } else {
+        // Not a known format — pass through as command-specific arg
+        // (e.g. `bp snapshot -f interactive`)
+        remaining.push(arg);
+      }
     } else if (arg === '--json') {
-      options.output = 'json';
+      options.format = 'json';
     } else if (arg === '--pretty') {
-      options.output = 'pretty';
+      options.format = 'pretty';
     } else if (arg === '--trace') {
       options.trace = true;
     } else if (arg === '-h' || arg === '--help') {
@@ -246,4 +256,7 @@ async function main(): Promise<void> {
   }
 }
 
-main();
+// Only run when executed directly (not when imported for testing)
+if (import.meta.main) {
+  main();
+}

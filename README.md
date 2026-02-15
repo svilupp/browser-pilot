@@ -399,7 +399,7 @@ bp exec '[
   {"action":"fill","selector":"ref:e5","value":"laptop"},
   {"action":"click","selector":"ref:e12"},
   {"action":"snapshot"}
-]' --output json
+]' --format json
 ```
 
 Multi-selector fallbacks for robustness:
@@ -426,36 +426,40 @@ Run `bp actions` for complete action reference.
 
 ### Voice Agent Testing
 
-Test audio-based AI apps (voice assistants, phone agents) by injecting microphone input and capturing spoken responses:
+Test audio-based AI apps (voice assistants, phone agents) by injecting microphone input and capturing spoken responses.
+
+> **Full guide:** [Voice Agent Testing Guide](./docs/guides/voice-agent-testing.md)
 
 ```bash
-# Full round-trip: send audio prompt → wait for response → transcribe
 export OPENAI_API_KEY=sk-...  # Required for --transcribe
-bp audio roundtrip -i question.wav --transcribe --silence-timeout 5000
-# Output: { "transcript": "The answer is 42", "latencyMs": 1200, ... }
 
-# Capture audio output and transcribe
-bp audio capture --transcribe --silence-timeout 8000
+# Validate audio pipeline
+bp audio check -s my-session
+# Output: "READY for roundtrip" with agent AudioContext detected
+
+# Full round-trip: send audio prompt → wait for response → transcribe
+bp audio roundtrip -i prompt.wav --transcribe --silence-timeout 1500
+# Output: { "transcript": "Welcome! I'd be happy to help...", "latencyMs": 5200, ... }
 
 # Save response audio for manual review
 bp audio roundtrip -i prompt.wav -o response.wav --transcribe
 ```
+
+**Important:** Audio overrides must be injected before the voice agent initializes. Use `bp audio check` to validate the pipeline. See the [full guide](./docs/guides/voice-agent-testing.md) for setup order and troubleshooting.
 
 Programmatic API:
 
 ```typescript
 await page.setupAudio();
 
-// Play audio into the page's fake microphone, capture response
 const result = await page.audioRoundTrip({
   input: audioBytes,
-  silenceTimeout: 5000, // Voice agents take 2-8s to respond
+  silenceTimeout: 1500,
 });
 
-// Transcribe the response
 import { transcribe } from 'browser-pilot';
 const { text } = await transcribe(result.audio);
-console.log(text); // "The answer is forty-two"
+console.log(text); // "Welcome! I'd be happy to help..."
 ```
 
 ### Recording Browser Actions
@@ -628,6 +632,7 @@ See the [docs](./docs) folder for detailed documentation:
 - [Multi-Selector Guide](./docs/guides/multi-selector.md)
 - [Batch Actions](./docs/guides/batch-actions.md)
 - [Snapshots](./docs/guides/snapshots.md)
+- [Voice Agent Testing](./docs/guides/voice-agent-testing.md)
 - [CLI Reference](./docs/cli.md)
 - [API Reference](./docs/api/page.md)
 

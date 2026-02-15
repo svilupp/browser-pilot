@@ -23,8 +23,8 @@ Options:
   --inspect              Inject visual ref labels onto the page (auto-removes after 10s)
   --keep                 Keep visual ref labels visible (use with --inspect)
   -s, --session <id>     Session to use (default: most recent)
-  -o, --output <fmt>     Output format: json | pretty (default: pretty)
-  --json                 Alias for -o json
+  -f, --format <fmt>     Output format: json | pretty (default: pretty)
+  --json                 Alias for -f json
   --trace                Enable debug tracing
   -h, --help             Show this help
 
@@ -77,7 +77,7 @@ function sleep(ms: number): Promise<void> {
 
 export async function snapshotCommand(
   args: string[],
-  globalOptions: { session?: string; output?: 'json' | 'pretty'; trace?: boolean; help?: boolean }
+  globalOptions: { session?: string; format?: 'json' | 'pretty'; trace?: boolean; help?: boolean }
 ): Promise<void> {
   const options = parseSnapshotArgs(args);
 
@@ -130,7 +130,7 @@ export async function snapshotCommand(
       const beforeSnapshot: PageSnapshot = JSON.parse(beforeContent);
       const diff = diffSnapshots(beforeSnapshot, snapshot);
 
-      if (globalOptions.output === 'json') {
+      if (globalOptions.format === 'json') {
         output(diff, 'json');
       } else {
         console.log(formatDiffPretty(diff));
@@ -158,7 +158,7 @@ export async function snapshotCommand(
     // Output based on format
     switch (options.format) {
       case 'interactive':
-        output(snapshot.interactiveElements, globalOptions.output);
+        output(snapshot.interactiveElements, globalOptions.format);
         break;
 
       case 'text':
@@ -166,7 +166,7 @@ export async function snapshotCommand(
         console.log(snapshot.text);
         break;
       default:
-        output(snapshot, globalOptions.output);
+        output(snapshot, globalOptions.format);
         break;
     }
   } finally {

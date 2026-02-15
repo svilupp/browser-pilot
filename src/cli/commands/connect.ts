@@ -75,7 +75,7 @@ function parseConnectArgs(args: string[]): ConnectOptions {
 
 export async function connectCommand(
   args: string[],
-  globalOptions: { session?: string; output?: 'json' | 'pretty'; trace?: boolean; help?: boolean }
+  globalOptions: { session?: string; format?: 'json' | 'pretty'; trace?: boolean; help?: boolean }
 ): Promise<void> {
   if (globalOptions.help) {
     console.log(CONNECT_HELP);
@@ -97,7 +97,7 @@ export async function connectCommand(
         provider: session.provider,
         currentUrl: session.currentUrl,
       },
-      globalOptions.output
+      globalOptions.format
     );
     return;
   }
@@ -161,6 +161,6 @@ export async function connectCommand(
       currentUrl,
       metadata: browser.metadata,
     },
-    globalOptions.output
+    globalOptions.format
   );
 }

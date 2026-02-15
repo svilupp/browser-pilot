@@ -25,8 +25,8 @@ Options:
   -f, --file <path>    Read actions from a JSON file
   --dialog <mode>      Handle native dialogs: accept | dismiss
   -s, --session <id>   Session to use (default: most recent)
-  -o, --output <fmt>   Output format: json | pretty (default: pretty)
-  --json               Alias for -o json
+  -f, --format <fmt>   Output format: json | pretty (default: pretty)
+  --json               Alias for -f json
   --trace              Enable debug tracing
   -h, --help           Show this help
 
@@ -91,7 +91,7 @@ function parseExecArgs(args: string[]): {
 
 export async function execCommand(
   args: string[],
-  globalOptions: { session?: string; output?: 'json' | 'pretty'; trace?: boolean; help?: boolean }
+  globalOptions: { session?: string; format?: 'json' | 'pretty'; trace?: boolean; help?: boolean }
 ): Promise<void> {
   if (globalOptions.help) {
     console.log(EXEC_HELP);
@@ -267,7 +267,7 @@ export async function execCommand(
         totalDurationMs: result.totalDurationMs,
         currentUrl,
       },
-      globalOptions.output
+      globalOptions.format
     );
 
     // Tip: suggest bp eval when an evaluate action fails

@@ -195,43 +195,38 @@ const AUDIO_OUTPUT_SCRIPT = `
     origConnect.call(captureProcessor, captureCtx.destination);
   }
 
-  function flushToNodeJs() {
-    if (capturedChunks.length === 0) return;
-
-    // Determine sample rate from chunks (use first chunk's rate)
-    var sampleRate = capturedChunks[0].sampleRate || 48000;
-    var totalLen = 0;
-    for (var i = 0; i < capturedChunks.length; i++) {
-      totalLen += capturedChunks[i].left.length;
+  function uint8ToBase64(bytes) {
+    var CHUNK = 8192;
+    var parts = [];
+    for (var i = 0; i < bytes.length; i += CHUNK) {
+      var slice = bytes.subarray(i, Math.min(i + CHUNK, bytes.length));
+      var binary = '';
+      for (var j = 0; j < slice.length; j++) {
+        binary += String.fromCharCode(slice[j]);
+      }
+      parts.push(binary);
     }
+    return btoa(parts.join(''));
+  }
+
+  function flushGroup(chunks, rate) {
+    var totalLen = 0;
+    for (var i = 0; i < chunks.length; i++) {
+      totalLen += chunks[i].left.length;
+    }
+    if (totalLen === 0) return;
+
     var left = new Float32Array(totalLen);
     var right = new Float32Array(totalLen);
     var offset = 0;
-    for (var i = 0; i < capturedChunks.length; i++) {
-      left.set(capturedChunks[i].left, offset);
-      right.set(capturedChunks[i].right, offset);
-      offset += capturedChunks[i].left.length;
+    for (var i = 0; i < chunks.length; i++) {
+      left.set(chunks[i].left, offset);
+      right.set(chunks[i].right, offset);
+      offset += chunks[i].left.length;
     }
 
-    var leftBytes = new Uint8Array(left.buffer);
-    var rightBytes = new Uint8Array(right.buffer);
-
-    function uint8ToBase64(bytes) {
-      var CHUNK = 8192;
-      var parts = [];
-      for (var i = 0; i < bytes.length; i += CHUNK) {
-        var slice = bytes.subarray(i, Math.min(i + CHUNK, bytes.length));
-        var binary = '';
-        for (var j = 0; j < slice.length; j++) {
-          binary += String.fromCharCode(slice[j]);
-        }
-        parts.push(binary);
-      }
-      return btoa(parts.join(''));
-    }
-
-    var leftB64 = uint8ToBase64(leftBytes);
-    var rightB64 = uint8ToBase64(rightBytes);
+    var leftB64 = uint8ToBase64(new Uint8Array(left.buffer));
+    var rightB64 = uint8ToBase64(new Uint8Array(right.buffer));
 
     flushCount++;
 
@@ -240,11 +235,30 @@ const AUDIO_OUTPUT_SCRIPT = `
         window.__bpAudioOutputData(JSON.stringify({
           left: leftB64,
           right: rightB64,
-          sampleRate: sampleRate,
+          sampleRate: rate,
           samples: totalLen
         }));
       }
     } catch(e) {}
+  }
+
+  function flushToNodeJs() {
+    if (capturedChunks.length === 0) return;
+
+    // Group chunks by sample rate to avoid mixing different-rate audio
+    var byRate = {};
+    for (var i = 0; i < capturedChunks.length; i++) {
+      var rate = capturedChunks[i].sampleRate || 48000;
+      if (!byRate[rate]) byRate[rate] = [];
+      byRate[rate].push(capturedChunks[i]);
+    }
+
+    // Flush each sample rate group separately
+    for (var rateKey in byRate) {
+      if (byRate.hasOwnProperty(rateKey)) {
+        flushGroup(byRate[rateKey], Number(rateKey));
+      }
+    }
 
     capturedChunks = [];
     totalSamples = 0;
@@ -491,38 +505,63 @@ export class AudioOutput {
 
   /**
    * Capture audio until silence is detected.
-   * Resolves when `silenceTimeout` ms of consecutive silence pass.
+   *
+   * Two-phase approach:
+   * 1. **Wait phase**: Wait up to `maxDuration` for the first non-silent chunk.
+   *    The silence countdown does NOT tick during this phase, so slow voice agents
+   *    (STT → LLM → TTS can take 5-15s) don't cause premature timeout.
+   * 2. **Capture phase**: Once audio is detected, capture until `silenceTimeout` ms
+   *    of consecutive silence pass, then stop.
    */
   async captureUntilSilence(options?: CaptureOptions): Promise<CaptureResult> {
-    const silenceTimeout = options?.silenceTimeout ?? 3000;
+    const silenceTimeout = options?.silenceTimeout ?? 1500;
     const silenceThreshold = options?.silenceThreshold ?? 0.01;
     const maxDuration = options?.maxDuration ?? 300000;
+    const noAudioTimeout = options?.noAudioTimeout ?? 15000;
 
-    await this.start();
+    if (!this.capturing) {
+      await this.start();
+    }
 
     return new Promise<CaptureResult>((resolve) => {
-      let lastSoundTime = Date.now();
+      let heardAudio = false;
+      let lastSoundTime = 0;
       const startTime = Date.now();
 
       const checkInterval = setInterval(async () => {
-        // Check max duration
-        if (Date.now() - startTime > maxDuration) {
+        const elapsed = Date.now() - startTime;
+
+        // Check max duration (applies to both phases)
+        if (elapsed > maxDuration) {
           clearInterval(checkInterval);
+          this.onDiagHandler?.(`max duration reached (${maxDuration}ms), stopping`);
           resolve(await this.stop());
           return;
         }
 
-        // Check latest chunk for silence
+        // Check latest chunk for sound
         const latest = this.chunks[this.chunks.length - 1];
         if (latest) {
           const rms = calculateRMS(latest.left);
           if (rms > silenceThreshold) {
+            if (!heardAudio) {
+              heardAudio = true;
+              this.onDiagHandler?.('first audio detected — silence countdown begins');
+            }
             lastSoundTime = Date.now();
           }
         }
 
-        // Check silence timeout
-        if (Date.now() - lastSoundTime > silenceTimeout) {
+        // Early exit if no audio arrives within noAudioTimeout
+        if (!heardAudio && elapsed > noAudioTimeout) {
+          clearInterval(checkInterval);
+          this.onDiagHandler?.(`no audio detected after ${noAudioTimeout}ms, stopping early`);
+          resolve(await this.stop());
+          return;
+        }
+
+        // Only apply silence timeout AFTER first audio detected
+        if (heardAudio && Date.now() - lastSoundTime > silenceTimeout) {
           clearInterval(checkInterval);
           resolve(await this.stop());
         }
@@ -665,27 +704,61 @@ export class AudioOutput {
       return emptyCaptureResult();
     }
 
-    const sampleRate = this.chunks[0]!.sampleRate;
-    let totalLen = 0;
+    // Group chunks by sample rate
+    const byRate = new Map<number, AudioChunk[]>();
     for (const chunk of this.chunks) {
+      const rate = chunk.sampleRate;
+      if (!byRate.has(rate)) byRate.set(rate, []);
+      byRate.get(rate)!.push(chunk);
+    }
+
+    // Pick the best sample rate group:
+    // Prefer the group with the most non-silent audio content
+    let bestRate = this.chunks[0]!.sampleRate;
+    let bestNonSilentSamples = 0;
+
+    for (const [rate, chunks] of byRate) {
+      let nonSilentSamples = 0;
+      for (const chunk of chunks) {
+        const rms = calculateRMS(chunk.left);
+        if (rms > 0.01) {
+          nonSilentSamples += chunk.left.length;
+        }
+      }
+      if (nonSilentSamples > bestNonSilentSamples) {
+        bestNonSilentSamples = nonSilentSamples;
+        bestRate = rate;
+      }
+    }
+
+    // Merge only chunks from the best rate group
+    const bestChunks = byRate.get(bestRate)!;
+    let totalLen = 0;
+    for (const chunk of bestChunks) {
       totalLen += chunk.left.length;
     }
 
     const left = new Float32Array(totalLen);
     const right = new Float32Array(totalLen);
     let offset = 0;
-    for (const chunk of this.chunks) {
+    for (const chunk of bestChunks) {
       left.set(chunk.left, offset);
       right.set(chunk.right, offset);
       offset += chunk.left.length;
     }
 
+    if (byRate.size > 1) {
+      this.onDiagHandler?.(
+        `mergeChunks: ${byRate.size} sample rates detected, using ${bestRate}Hz (${bestNonSilentSamples} non-silent samples)`
+      );
+    }
+
     return {
       left,
       right,
-      sampleRate,
-      durationMs: (totalLen / sampleRate) * 1000,
-      chunkCount: this.chunks.length,
+      sampleRate: bestRate,
+      durationMs: (totalLen / bestRate) * 1000,
+      chunkCount: bestChunks.length,
     };
   }
 }

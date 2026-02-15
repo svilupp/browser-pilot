@@ -32,12 +32,14 @@ export interface CaptureResult {
 
 /** Options for audio output capture */
 export interface CaptureOptions {
-  /** Stop after N ms of silence (RMS below threshold). Default: 0 (manual stop) */
+  /** Stop after N ms of silence (RMS below threshold). Default: 1500 */
   silenceTimeout?: number;
   /** RMS threshold to consider as silence. Default: 0.01 */
   silenceThreshold?: number;
   /** Maximum capture duration in ms. Default: 300000 (5 min) */
   maxDuration?: number;
+  /** Stop early if no non-silent audio arrives within this many ms. Default: 15000 */
+  noAudioTimeout?: number;
 }
 
 /** Options for audio input playback */
@@ -62,7 +64,7 @@ export interface AudioInputState {
 export interface RoundTripOptions {
   /** Audio data to send as microphone input (WAV, MP3, OGG, etc.) */
   input: ArrayBuffer | Uint8Array;
-  /** Ms of silence before considering the agent "done talking". Default: 3000 */
+  /** Ms of silence before considering the agent "done talking". Default: 1500 */
   silenceTimeout?: number;
   /** RMS threshold for silence. Default: 0.01 */
   silenceThreshold?: number;

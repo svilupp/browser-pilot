@@ -2255,6 +2255,8 @@ export class Page {
 
     const start = Date.now();
 
+    // Start capture once — captureUntilSilence will skip its internal start()
+    // since we're already capturing
     await this.audioOutput.start();
 
     if (options.preDelay && options.preDelay > 0) {
@@ -2272,8 +2274,11 @@ export class Page {
       await this.click(options.sendSelector);
     }
 
+    // captureUntilSilence uses two-phase detection:
+    // Phase 1: Wait for first non-silent audio (no timeout countdown)
+    // Phase 2: Once audio detected, stop after silenceTimeout ms of silence
     const audio: CaptureResult = await this.audioOutput.captureUntilSilence({
-      silenceTimeout: options.silenceTimeout ?? 3000,
+      silenceTimeout: options.silenceTimeout ?? 1500,
       silenceThreshold: options.silenceThreshold ?? 0.01,
       maxDuration: options.timeout ?? 120000,
     });

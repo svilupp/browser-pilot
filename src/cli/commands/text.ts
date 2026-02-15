@@ -15,8 +15,8 @@ Usage:
 Options:
   --selector <sel>     Extract text from a specific element (default: entire page)
   -s, --session <id>   Session to use (default: most recent)
-  -o, --output <fmt>   Output format: json | pretty (default: pretty)
-  --json               Alias for -o json
+  -f, --format <fmt>   Output format: json | pretty (default: pretty)
+  --json               Alias for -f json
   --trace              Enable debug tracing
   -h, --help           Show this help
 
@@ -49,7 +49,7 @@ function parseTextArgs(args: string[]): TextOptions {
 
 export async function textCommand(
   args: string[],
-  globalOptions: { session?: string; output?: 'json' | 'pretty'; trace?: boolean; help?: boolean }
+  globalOptions: { session?: string; format?: 'json' | 'pretty'; trace?: boolean; help?: boolean }
 ): Promise<void> {
   const options = parseTextArgs(args);
 
@@ -85,7 +85,7 @@ export async function textCommand(
     await updateSession(session.id, { currentUrl });
 
     // Output text
-    if (globalOptions.output === 'json') {
+    if (globalOptions.format === 'json') {
       output({ text, url: currentUrl, selector: options.selector }, 'json');
     } else {
       console.log(text);

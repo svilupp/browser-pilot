@@ -231,9 +231,9 @@ button[aria-label="Toggle Delta"]
 
 ```bash
 bp exec '...' --json          # Structured JSON
-bp exec '...' -o json         # Same as --json (long form)
-bp exec '...' -o pretty       # Human-readable (default)
-bp exec '...' --pretty        # Same as -o pretty
+bp exec '...' -f json         # Same as --json (long form)
+bp exec '...' -f pretty       # Human-readable (default)
+bp exec '...' --pretty        # Same as -f pretty
 ```
 
 JSON output structure:
@@ -283,7 +283,7 @@ bp exec '[
   {"action":"click","selector":"ref:e7"},
   {"action":"wait","waitFor":"navigation"},
   {"action":"snapshot"}
-]' --output json
+]' --format json
 ```
 
 ### Search and Extract Results
@@ -299,7 +299,7 @@ bp exec '[
   {"action":"click","selector":"ref:e5"},
   {"action":"wait","selector":"[data-testid=\"results\"]","waitFor":"visible"},
   {"action":"snapshot"}
-]' --output json
+]' --format json
 ```
 
 ### Handle Cookie Consent

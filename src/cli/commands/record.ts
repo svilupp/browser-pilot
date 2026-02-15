@@ -164,7 +164,7 @@ async function resolveConnection(
 
 export async function recordCommand(
   args: string[],
-  globalOptions: { session?: string; output?: 'json' | 'pretty'; trace?: boolean; help?: boolean }
+  globalOptions: { session?: string; format?: 'json' | 'pretty'; trace?: boolean; help?: boolean }
 ): Promise<void> {
   const options = parseRecordArgs(args);
 
@@ -219,7 +219,7 @@ export async function recordCommand(
       // Output summary
       console.log(`\nSaved ${recording.steps.length} steps to ${outputFile}`);
 
-      if (globalOptions.output === 'json') {
+      if (globalOptions.format === 'json') {
         output(
           {
             success: true,
