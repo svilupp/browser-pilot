@@ -16,6 +16,12 @@ export { type AudioFlagOptions, getAudioChromeFlags } from './flags.ts';
 export { AudioInput } from './input.ts';
 export { AudioOutput } from './output.ts';
 export { grantAudioPermissions } from './permissions.ts';
+export {
+  isTranscriptionAvailable,
+  type TranscribeOptions,
+  type TranscribeResult,
+  transcribe,
+} from './transcribe.ts';
 export type {
   AudioChunk,
   AudioInputState,

@@ -30,11 +30,15 @@ export {
   generateTone,
   getAudioChromeFlags,
   grantAudioPermissions,
+  isTranscriptionAvailable,
   type PlayOptions,
   parseWavHeader,
   pcmToWav,
   type RoundTripOptions,
   type RoundTripResult,
+  type TranscribeOptions,
+  type TranscribeResult,
+  transcribe,
 } from './audio/index.ts';
 // Browser & Page
 export {

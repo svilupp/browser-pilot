@@ -10,6 +10,7 @@
  *   quickstart  Getting started guide
  *   connect     Create browser session
  *   exec        Execute actions (supports --dialog accept|dismiss)
+ *   audio       Audio I/O for voice agent testing
  *   snapshot    Get page snapshot with element refs
  *   text        Extract text content
  *   screenshot  Take screenshot
@@ -22,6 +23,7 @@
  */
 
 import { actionsCommand } from './commands/actions.ts';
+import { audioCommand } from './commands/audio.ts';
 import { cleanCommand } from './commands/clean.ts';
 import { closeCommand } from './commands/close.ts';
 import { connectCommand } from './commands/connect.ts';
@@ -45,6 +47,7 @@ Commands:
   connect     Create browser session
   exec        Execute actions
   record      Record browser actions to JSON
+  audio       Audio I/O for voice agent testing
   snapshot    Get page with element refs
   diagnose    Debug element selection issues
   text        Extract text content
@@ -212,6 +215,10 @@ async function main(): Promise<void> {
 
       case 'record':
         await recordCommand(remaining, options);
+        break;
+
+      case 'audio':
+        await audioCommand(remaining, options);
         break;
 
       case 'help':
