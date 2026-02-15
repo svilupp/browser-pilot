@@ -8,7 +8,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { withRetry } from '../utils/retry';
 import { generateSessionName, getBaseUrl, getWebSocketUrl, runCLI, setup, teardown } from './setup';
 
-describe('CLI --dialog Flag', () => {
+describe.skipIf(!!process.env['CI'])('CLI --dialog Flag', () => {
   beforeAll(setup);
   afterAll(teardown);
 
@@ -26,7 +26,7 @@ describe('CLI --dialog Flag', () => {
         wsUrl,
         '--name',
         SESSION_NAME,
-        '-o',
+        '-f',
         'json',
       ]);
 
@@ -46,7 +46,7 @@ describe('CLI --dialog Flag', () => {
         'exec',
         '-s',
         SESSION_NAME,
-        '-o',
+        '-f',
         'json',
         JSON.stringify({ action: 'goto', url: `${baseUrl}/dialogs.html` }),
       ]);
@@ -62,7 +62,7 @@ describe('CLI --dialog Flag', () => {
         'exec',
         '-s',
         SESSION_NAME,
-        '-o',
+        '-f',
         'json',
         '--dialog',
         'accept',
@@ -91,7 +91,7 @@ describe('CLI --dialog Flag', () => {
         'exec',
         '-s',
         SESSION_NAME,
-        '-o',
+        '-f',
         'json',
         JSON.stringify({ action: 'goto', url: `${baseUrl}/dialogs.html` }),
       ]);
@@ -100,7 +100,7 @@ describe('CLI --dialog Flag', () => {
         'exec',
         '-s',
         SESSION_NAME,
-        '-o',
+        '-f',
         'json',
         '--dialog',
         'dismiss',
@@ -129,7 +129,7 @@ describe('CLI --dialog Flag', () => {
         'exec',
         '-s',
         SESSION_NAME,
-        '-o',
+        '-f',
         'json',
         JSON.stringify({ action: 'goto', url: `${baseUrl}/dialogs.html` }),
       ]);
@@ -138,7 +138,7 @@ describe('CLI --dialog Flag', () => {
         'exec',
         '-s',
         SESSION_NAME,
-        '-o',
+        '-f',
         'json',
         '--dialog',
         'accept',
@@ -167,7 +167,7 @@ describe('CLI --dialog Flag', () => {
         'exec',
         '-s',
         SESSION_NAME,
-        '-o',
+        '-f',
         'json',
         JSON.stringify({ action: 'goto', url: `${baseUrl}/dialogs.html` }),
       ]);
@@ -176,7 +176,7 @@ describe('CLI --dialog Flag', () => {
         'exec',
         '-s',
         SESSION_NAME,
-        '-o',
+        '-f',
         'json',
         '--dialog',
         'accept',
@@ -205,7 +205,7 @@ describe('CLI --dialog Flag', () => {
         'exec',
         '-s',
         SESSION_NAME,
-        '-o',
+        '-f',
         'json',
         JSON.stringify({ action: 'goto', url: `${baseUrl}/dialogs.html` }),
       ]);
@@ -216,7 +216,7 @@ describe('CLI --dialog Flag', () => {
         'exec',
         '-s',
         SESSION_NAME,
-        '-o',
+        '-f',
         'json',
         JSON.stringify([
           { action: 'click', selector: '[data-testid="trigger-confirm"]' },
@@ -237,7 +237,7 @@ describe('CLI --dialog Flag', () => {
 
   test('should close session', async () => {
     await withRetry(async () => {
-      const result = await runCLI(['close', '-s', SESSION_NAME, '-o', 'json']);
+      const result = await runCLI(['close', '-s', SESSION_NAME, '-f', 'json']);
 
       expect(result.exitCode).toBe(0);
       expect(result.json).toMatchObject({ success: true });

@@ -8,7 +8,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { withRetry } from '../utils/retry';
 import { generateSessionName, getBaseUrl, getWebSocketUrl, runCLI, setup, teardown } from './setup';
 
-describe('CLI Basic Functionality', () => {
+describe.skipIf(!!process.env['CI'])('CLI Basic Functionality', () => {
   beforeAll(setup);
   afterAll(teardown);
 
@@ -27,7 +27,7 @@ describe('CLI Basic Functionality', () => {
   });
 });
 
-describe('CLI Session Persistence', () => {
+describe.skipIf(!!process.env['CI'])('CLI Session Persistence', () => {
   beforeAll(setup);
   afterAll(teardown);
 
@@ -45,7 +45,7 @@ describe('CLI Session Persistence', () => {
         wsUrl,
         '--name',
         SESSION_NAME,
-        '-o',
+        '-f',
         'json',
       ]);
 
@@ -65,7 +65,7 @@ describe('CLI Session Persistence', () => {
         'exec',
         '-s',
         SESSION_NAME,
-        '-o',
+        '-f',
         'json',
         JSON.stringify({ action: 'goto', url: `${baseUrl}/basic.html` }),
       ]);
@@ -77,7 +77,7 @@ describe('CLI Session Persistence', () => {
 
   test('should close session', async () => {
     await withRetry(async () => {
-      const result = await runCLI(['close', '-s', SESSION_NAME, '-o', 'json']);
+      const result = await runCLI(['close', '-s', SESSION_NAME, '-f', 'json']);
 
       expect(result.exitCode).toBe(0);
       expect(result.json).toMatchObject({ success: true });

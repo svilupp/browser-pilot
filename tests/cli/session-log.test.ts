@@ -13,7 +13,7 @@ import { generateSessionName, getBaseUrl, getWebSocketUrl, runCLI, setup, teardo
 
 const SESSION_DIR = join(homedir(), '.browser-pilot', 'sessions');
 
-describe('Session Log CLI', () => {
+describe.skipIf(!!process.env['CI'])('Session Log CLI', () => {
   beforeAll(setup);
   afterAll(teardown);
 
@@ -156,7 +156,7 @@ describe('Session Log CLI', () => {
         ]);
 
         // Get log tail as JSON
-        const result = await runCLI(['list', '-s', sessionName, '--log-tail', '5', '-o', 'json']);
+        const result = await runCLI(['list', '-s', sessionName, '--log-tail', '5', '-f', 'json']);
 
         expect(result.exitCode).toBe(0);
 

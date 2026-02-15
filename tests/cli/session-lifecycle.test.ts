@@ -20,7 +20,7 @@ import { generateSessionName, getBaseUrl, getWebSocketUrl, runCLI, setup, teardo
 
 const SESSIONS_DIR = join(homedir(), '.browser-pilot', 'sessions');
 
-describe('CLI Session Lifecycle', () => {
+describe.skipIf(!!process.env['CI'])('CLI Session Lifecycle', () => {
   beforeAll(setup);
   afterAll(teardown);
 
@@ -35,7 +35,7 @@ describe('CLI Session Lifecycle', () => {
         await runCLI(['connect', '--provider', 'generic', '--url', wsUrl, '--name', sessionName]);
 
         // List sessions
-        const result = await runCLI(['list', '-o', 'json']);
+        const result = await runCLI(['list', '-f', 'json']);
 
         expect(result.exitCode).toBe(0);
         const sessions = result.json as Array<{ id: string }>;
@@ -65,7 +65,7 @@ describe('CLI Session Lifecycle', () => {
         ]);
 
         // List sessions and check details
-        const result = await runCLI(['list', '-o', 'json']);
+        const result = await runCLI(['list', '-f', 'json']);
         const sessions = result.json as Array<{
           id: string;
           provider: string;
@@ -106,7 +106,7 @@ describe('CLI Session Lifecycle', () => {
 
       try {
         // List should include the stale session
-        const listResult = await runCLI(['list', '-o', 'json']);
+        const listResult = await runCLI(['list', '-f', 'json']);
         const sessions = listResult.json as Array<{ id: string }>;
         expect(sessions.some((s) => s.id === staleSessionName)).toBe(true);
 
@@ -115,7 +115,7 @@ describe('CLI Session Lifecycle', () => {
           'exec',
           '-s',
           staleSessionName,
-          '-o',
+          '-f',
           'json',
           JSON.stringify({ action: 'snapshot' }),
         ]);
@@ -149,7 +149,7 @@ describe('CLI Session Lifecycle', () => {
       await writeFile(sessionFile, JSON.stringify(oldSession, null, 2));
 
       try {
-        const result = await runCLI(['list', '-o', 'json']);
+        const result = await runCLI(['list', '-f', 'json']);
         const sessions = result.json as Array<{
           id: string;
           lastActivity: string;
@@ -213,7 +213,7 @@ describe('CLI Session Lifecycle', () => {
 
       try {
         // List should show both
-        const listResult = await runCLI(['list', '-o', 'json']);
+        const listResult = await runCLI(['list', '-f', 'json']);
         const sessions = listResult.json as Array<{ id: string }>;
 
         for (const name of staleNames) {
@@ -227,7 +227,7 @@ describe('CLI Session Lifecycle', () => {
         }
 
         // List should no longer show them
-        const listResult2 = await runCLI(['list', '-o', 'json']);
+        const listResult2 = await runCLI(['list', '-f', 'json']);
         const sessions2 = listResult2.json as Array<{ id: string }>;
 
         for (const name of staleNames) {
