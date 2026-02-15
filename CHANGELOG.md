@@ -4,9 +4,9 @@
 
 ### Added
 
-- **Audio I/O** — `page.setupAudio()`, `page.audioRoundTrip()` for voice agent testing via JS injection (fake mic input + output capture), with `bp audio` CLI command and optional Whisper transcription (requires `OPENAI_API_KEY` env var)
-- `validateSteps()` — pre-flight validation for batch steps with fuzzy action/property matching and actionable error messages
-- Improved executor error on unknown actions: suggests aliases and lists valid actions
+- **Voice agent testing** — `bp audio` CLI for end-to-end voice agent automation: inject audio into the fake mic, capture the agent's response, and optionally transcribe with Whisper (`bp audio roundtrip -i prompt.wav --transcribe`). Also available programmatically via `page.setupAudio()` / `page.audioRoundTrip()`. Updated Claude Code skill with a voice agent testing guide (`docs/skill/SKILL.md`).
+- `bp eval` command — evaluate JS in the browser without JSON escaping (`bp eval 'document.title'`), with file and stdin support
+- CLI polish: per-command `--help`, file input (`-f`), stdin piping, `validateSteps()` pre-flight checks, and better error messages across all commands
 
 ## [0.0.8] - 2025-02-01
 
