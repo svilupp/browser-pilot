@@ -3,6 +3,9 @@
  */
 
 import { BatchExecutor, type BatchOptions, type BatchResult, type Step } from '../actions/index.ts';
+import { AudioInput } from '../audio/input.ts';
+import { AudioOutput } from '../audio/output.ts';
+import type { CaptureResult, RoundTripOptions, RoundTripResult } from '../audio/types.ts';
 import type { CDPClient } from '../cdp/client.ts';
 import type { BoxModel, RemoteObject } from '../cdp/protocol.ts';
 import type { DeviceDescriptor } from '../emulation/index.ts';
@@ -80,6 +83,10 @@ export class Page {
   private currentFrameContextId: number | null = null;
   /** Last matched selector from findElement (for selectorUsed tracking) */
   private _lastMatchedSelector: string | undefined;
+  /** Audio input controller (lazy-initialized) */
+  private _audioInput?: AudioInput;
+  /** Audio output controller (lazy-initialized) */
+  private _audioOutput?: AudioOutput;
 
   constructor(cdp: CDPClient, targetId: string) {
     this.cdp = cdp;
@@ -2186,6 +2193,99 @@ export class Page {
       button: 'left',
       clickCount: 1,
     });
+  }
+
+  // ============ Audio I/O ============
+
+  /**
+   * Audio input controller (fake microphone).
+   * Lazy-initialized on first access.
+   */
+  get audioInput(): AudioInput {
+    if (!this._audioInput) {
+      this._audioInput = new AudioInput(this.cdp);
+    }
+    return this._audioInput;
+  }
+
+  /**
+   * Audio output capture controller.
+   * Lazy-initialized on first access.
+   */
+  get audioOutput(): AudioOutput {
+    if (!this._audioOutput) {
+      this._audioOutput = new AudioOutput(this.cdp);
+    }
+    return this._audioOutput;
+  }
+
+  /**
+   * Set up both audio input (fake microphone) and output (capture).
+   * Must be called before navigating to the page that will use audio.
+   */
+  async setupAudio(): Promise<void> {
+    await this.audioInput.setup();
+    await this.audioOutput.setup();
+  }
+
+  /**
+   * Full audio round-trip: feed input audio, capture the response.
+   *
+   * 1. Starts capturing output
+   * 2. Feeds input audio as microphone data
+   * 3. Waits for the page to respond and then go silent
+   * 4. Returns the captured response audio with latency metrics
+   *
+   * @example
+   * ```typescript
+   * await page.setupAudio();
+   * await page.goto('https://voice-agent.example.com');
+   * const result = await page.audioRoundTrip({
+   *   input: wavFileBytes,
+   *   silenceTimeout: 3000,
+   * });
+   * console.log(`Response: ${result.audio.durationMs}ms, latency: ${result.latencyMs}ms`);
+   * ```
+   */
+  async audioRoundTrip(options: RoundTripOptions): Promise<RoundTripResult> {
+    // Ensure audio is set up
+    if (!this.audioInput.isSetup || !this.audioOutput.isSetup) {
+      await this.setupAudio();
+    }
+
+    const start = Date.now();
+
+    // Start capturing output first
+    await this.audioOutput.start();
+
+    // Optional delay for page initialization
+    if (options.preDelay && options.preDelay > 0) {
+      await sleep(options.preDelay);
+    }
+
+    // Feed input audio (don't wait for completion — agent may start
+    // responding before input finishes)
+    const inputDone = this.audioInput.play(options.input, { waitForEnd: false });
+
+    // Wait for agent response + silence
+    const audio: CaptureResult = await this.audioOutput.captureUntilSilence({
+      silenceTimeout: options.silenceTimeout ?? 3000,
+      silenceThreshold: options.silenceThreshold ?? 0.01,
+      maxDuration: options.timeout ?? 120000,
+    });
+
+    // Ensure input playback is cleaned up
+    await this.audioInput.stop();
+    // Await the fire-and-forget play to avoid unhandled rejections
+    await inputDone.catch(() => {});
+
+    const firstChunkTime = this.audioOutput.firstChunkTime;
+
+    return {
+      audio,
+      latencyMs: firstChunkTime !== null ? firstChunkTime - start : -1,
+      totalMs: Date.now() - start,
+    };
   }
 }
 

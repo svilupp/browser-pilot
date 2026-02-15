@@ -15,6 +15,27 @@ export {
   type Step,
   type StepResult,
 } from './actions/index.ts';
+// Audio I/O
+export {
+  type AudioChunk,
+  type AudioFlagOptions,
+  AudioInput,
+  type AudioInputState,
+  AudioOutput,
+  bufferToBase64,
+  type CaptureOptions,
+  type CaptureResult,
+  calculateRMS,
+  generateSilence,
+  generateTone,
+  getAudioChromeFlags,
+  grantAudioPermissions,
+  type PlayOptions,
+  parseWavHeader,
+  pcmToWav,
+  type RoundTripOptions,
+  type RoundTripResult,
+} from './audio/index.ts';
 // Browser & Page
 export {
   type ActionOptions,
