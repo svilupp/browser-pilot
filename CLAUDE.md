@@ -86,7 +86,38 @@ Complex patterns (custom dropdowns, multi-step forms) are composed from primitiv
 | Device presets | `src/emulation/devices.ts` |
 | Request interceptor | `src/network/interceptor.ts` |
 | Cookie/storage types | `src/storage/types.ts` |
+| Audio I/O module | `src/audio/` (input, output, encoding, permissions, transcribe) |
+| Audio input (mic override) | `src/audio/input.ts` |
+| Audio output (capture) | `src/audio/output.ts` |
+| Transcription (Whisper) | `src/audio/transcribe.ts` |
 | CLI | `src/cli/index.ts` |
+| CLI audio command | `src/cli/commands/audio.ts` |
+
+## Audio I/O Pattern
+
+Voice agent testing via JS injection (works on already-running browsers, no special launch flags required):
+
+```
+Page.setupAudio()
+  ├── AudioInput: getUserMedia monkey-patch → fake MediaStream via AudioContext
+  │   └── play(bytes) → decodeAudioData → AudioBufferSourceNode → destination
+  └── AudioOutput: AudioNode.connect + HTMLMediaElement.play interception
+      └── ScriptProcessorNode taps PCM → Runtime.addBinding → Node.js
+
+Page.audioRoundTrip()
+  1. Start output capture
+  2. Play input audio into fake mic
+  3. captureUntilSilence (RMS-based, configurable timeout)
+  4. Return { audio, latencyMs, totalMs }
+
+Transcription: transcribe(CaptureResult) → pcmToWav → fetch(Whisper API)
+  - Zero dependencies, manual multipart/form-data
+  - Gated on OPENAI_API_KEY (validated immediately)
+```
+
+- Data transfer: base64-encoded Float32Array via `Runtime.addBinding`, flushed ~1s
+- Audio encoding: `src/audio/encoding.ts` (WAV encode/decode, RMS, tone/silence generation)
+- Permissions: CDP `Browser.grantPermissions` + JS `navigator.permissions.query` override
 
 ## CDP Client Pattern
 

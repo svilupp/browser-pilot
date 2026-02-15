@@ -472,6 +472,60 @@ When using `bp exec --json`, hints appear in failed step results:
 
 3. **Verify before using:** For medium/low confidence hints, take a snapshot to confirm the element is correct
 
+## Voice Agent Testing
+
+Use `bp audio` to test audio-based AI apps. The typical pattern: navigate to the voice agent page, send an audio prompt, wait for the response, and transcribe it.
+
+### Full Round-Trip
+
+```bash
+# Send audio prompt, capture and transcribe the response
+bp audio roundtrip -i question.wav --transcribe --silence-timeout 5000
+```
+
+Output (with `--json`):
+```json
+{
+  "success": true,
+  "latencyMs": 1200,
+  "totalMs": 5800,
+  "audio": { "durationMs": 3200, "sampleRate": 48000, "samples": 153600, "chunks": 4 },
+  "transcript": "The answer is forty-two"
+}
+```
+
+### Multi-Turn Conversation
+
+```bash
+# Turn 1
+bp audio roundtrip -i turn1.wav --transcribe --silence-timeout 5000
+# Turn 2
+bp audio roundtrip -i turn2.wav --transcribe --silence-timeout 5000
+# Turn 3 (just capture what the agent says next)
+bp audio capture --transcribe --silence-timeout 8000
+```
+
+### Silence Timeout Tuning
+
+Voice agents take varying time to respond. The `--silence-timeout` flag controls how long to wait after the last audio before assuming the response is complete.
+
+| Agent Type | Recommended `--silence-timeout` |
+|------------|--------------------------------|
+| Fast voice bot | 2000-3000ms |
+| LLM-based voice agent | 4000-6000ms |
+| Complex reasoning agent | 6000-10000ms |
+
+### Transcription Setup
+
+`--transcribe` requires `OPENAI_API_KEY`. It's validated **immediately** when the flag is used — you'll get a clear error before any audio processing starts.
+
+```bash
+export OPENAI_API_KEY=sk-...  # Get at https://platform.openai.com/api-keys
+bp audio roundtrip -i prompt.wav --transcribe --silence-timeout 5000
+```
+
+Transcription adds ~1-2s overhead (Whisper API). Safe to use in hot loops and CI.
+
 ## Troubleshooting
 
 ### "Element not found" for Shadow DOM

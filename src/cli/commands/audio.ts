@@ -20,20 +20,25 @@ import {
 } from '../session.ts';
 
 const AUDIO_HELP = `
-bp audio - Audio I/O for voice agent testing
+bp audio - Test voice/audio AI agents in the browser
+
+Feed audio as microphone input, capture the agent's spoken response,
+and optionally transcribe it. Designed for AI apps that respond with
+audio (voice assistants, phone agents, audio chatbots).
 
 Usage:
   bp audio <subcommand> [options]
 
 Subcommands:
+  roundtrip   Play input + capture response (full voice round-trip)
   play        Feed audio file into the page's fake microphone
   capture     Capture audio output from the page
-  roundtrip   Play input + capture response (full voice round-trip)
   setup       Set up audio I/O on the session (auto-runs if needed)
 
 Common Options:
   -s, --session [id]     Session to use (omit: auto-connect, -s: latest, -s <id>: specific)
-  --transcribe           Transcribe captured audio via OpenAI Whisper (requires OPENAI_API_KEY)
+  --transcribe           Transcribe captured audio via OpenAI Whisper
+                         Requires OPENAI_API_KEY env var (validated immediately)
   --language <lang>      Language hint for transcription (e.g. 'en', 'es')
   -h, --help             Show this help
 
@@ -55,16 +60,33 @@ Roundtrip Options:
   --pre-delay <ms>       Wait before playing input (default: 0)
   --timeout <ms>         Max total round-trip time (default: 120000)
 
-Examples:
-  bp audio setup -s mysession
-  bp audio play -i prompt.wav
-  bp audio capture -o response.wav --silence-timeout 5000
-  bp audio capture --transcribe
+Voice Agent Testing (typical workflow):
+  # 1. Connect to browser running your voice agent
+  bp connect --provider generic --name voice-test
+
+  # 2. Navigate to the voice agent page
+  bp exec '{"action":"goto","url":"https://my-voice-app.com"}'
+
+  # 3. Full round-trip: send audio prompt, wait for response, transcribe
+  bp audio roundtrip -i question.wav --transcribe --silence-timeout 5000
+  # Output: { "transcript": "The answer is 42", "latencyMs": 1200, ... }
+
+  # 4. Capture-only (agent already speaking)
+  bp audio capture --transcribe --silence-timeout 8000
+
+  # 5. Save response audio for inspection
   bp audio roundtrip -i prompt.wav -o response.wav --transcribe
-  bp audio roundtrip -i prompt.wav --transcribe --language en
+
+Tips:
+  - Voice agents often take 2-8s to respond. Use --silence-timeout 5000
+    or higher to avoid cutting off responses.
+  - Use --pre-delay if the page needs time after audio injection.
+  - --transcribe adds ~1-2s (Whisper is fast). Safe in hot loop.
+  - Use --json for structured output in CI/scripting.
 
 Environment:
-  OPENAI_API_KEY    Required for --transcribe flag
+  OPENAI_API_KEY    Required for --transcribe. Validated immediately on use.
+                    Get one at: https://platform.openai.com/api-keys
 `;
 
 interface AudioOptions {

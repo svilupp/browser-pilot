@@ -81,15 +81,15 @@ describe('audio CLI command', () => {
 
   test('--transcribe without OPENAI_API_KEY throws early', async () => {
     const { audioCommand } = await import('../../src/cli/commands/audio.ts');
-    const original = process.env.OPENAI_API_KEY;
-    process.env.OPENAI_API_KEY = undefined;
+    const original = process.env['OPENAI_API_KEY'];
+    process.env['OPENAI_API_KEY'] = undefined;
 
     try {
       await expect(audioCommand(['capture', '--transcribe'], { output: 'pretty' })).rejects.toThrow(
         'OPENAI_API_KEY'
       );
     } finally {
-      if (original) process.env.OPENAI_API_KEY = original;
+      if (original) process.env['OPENAI_API_KEY'] = original;
     }
   });
 });

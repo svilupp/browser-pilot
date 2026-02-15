@@ -265,6 +265,60 @@ bp exec --file recording.json
 - Selectors are multi-selector arrays ordered by reliability
 - Press Ctrl+C to stop recording and save
 
+### audio
+
+Test voice/audio AI agents. Feed audio as microphone input, capture spoken responses, and optionally transcribe via OpenAI Whisper.
+
+```bash
+bp audio <subcommand> [options]
+```
+
+**Subcommands:**
+- `roundtrip` - Play input + capture response (full voice round-trip)
+- `play` - Feed audio file into the page's fake microphone
+- `capture` - Capture audio output from the page
+- `setup` - Set up audio I/O on the session (auto-runs if needed)
+
+**Common Options:**
+- `-s, --session [id]` - Session to use (omit: auto-connect, `-s`: latest, `-s <id>`: specific)
+- `--transcribe` - Transcribe captured audio via OpenAI Whisper. **Requires `OPENAI_API_KEY`** env var (validated immediately)
+- `--language <lang>` - Language hint for transcription (e.g. `en`, `es`)
+- `-i, --input <file>` - Audio file to play (WAV, MP3, OGG)
+- `-o, --out <file>` - Save captured audio to WAV file
+- `--silence-timeout <ms>` - Stop after N ms of silence (default: 3000)
+- `--silence-threshold <n>` - RMS threshold for silence (default: 0.01)
+- `--max-duration <ms>` - Maximum capture time (default: 300000)
+- `--pre-delay <ms>` - Wait before playing input (default: 0)
+- `--timeout <ms>` - Max total round-trip time (default: 120000)
+- `--no-wait` - Don't wait for playback to finish (play only)
+- `--duration <ms>` - Fixed-duration capture (capture only)
+
+**Examples:**
+
+```bash
+# Full voice agent test: send prompt, capture response, transcribe
+bp audio roundtrip -i question.wav --transcribe --silence-timeout 5000
+# Output: { "transcript": "The answer is 42", "latencyMs": 1200, ... }
+
+# Capture audio output and transcribe (agent already speaking)
+bp audio capture --transcribe --silence-timeout 8000
+
+# Save response audio for manual review
+bp audio roundtrip -i prompt.wav -o response.wav --transcribe
+
+# Just play audio into the microphone
+bp audio play -i greeting.wav
+
+# Set up audio I/O explicitly (usually auto-runs)
+bp audio setup -s mysession
+```
+
+**Notes:**
+- Voice agents typically take 2-8s to respond. Use `--silence-timeout 5000` or higher.
+- `--transcribe` adds ~1-2s overhead (Whisper API). Safe to use in hot loops.
+- `OPENAI_API_KEY` is validated immediately when `--transcribe` is used — fails fast with a helpful error.
+- Use `--json` for structured output in CI/scripting.
+
 ### close
 
 Close a session.

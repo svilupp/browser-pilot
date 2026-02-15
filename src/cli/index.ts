@@ -67,14 +67,14 @@ Options:
 
 Examples:
   bp connect --provider generic --name dev
-  bp connect -s test --export-log ./logs/test.jsonl
   bp exec '{"action":"goto","url":"https://example.com"}'
   bp snapshot --format text
-  bp list --json                   # JSON output
   bp exec '{"action":"click","selector":"ref:e3"}'
+  bp audio roundtrip -i prompt.wav --transcribe --silence-timeout 5000
 
 Run 'bp quickstart' for CLI workflow guide.
 Run 'bp actions' for complete action reference.
+Run 'bp audio --help' for voice agent testing guide.
 `;
 
 interface GlobalOptions {

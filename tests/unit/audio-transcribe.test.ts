@@ -47,13 +47,13 @@ describe('transcribe', () => {
 
   test('throws without API key', async () => {
     // Temporarily ensure OPENAI_API_KEY is not set for this test
-    const original = process.env.OPENAI_API_KEY;
-    process.env.OPENAI_API_KEY = undefined;
+    const original = process.env['OPENAI_API_KEY'];
+    process.env['OPENAI_API_KEY'] = undefined;
 
     try {
       await expect(transcribe(fakeCaptureResult())).rejects.toThrow('API key required');
     } finally {
-      if (original) process.env.OPENAI_API_KEY = original;
+      if (original) process.env['OPENAI_API_KEY'] = original;
     }
   });
 

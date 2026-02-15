@@ -179,6 +179,57 @@ When an element isn't found, errors include suggested alternatives:
 
 Hints are action-aware—`click` suggests buttons/links, `fill` suggests inputs. Use the suggested selector in your next attempt.
 
+## Voice Agent Testing
+
+Test audio-based AI apps (voice assistants, phone agents, audio chatbots) by injecting microphone input and capturing spoken responses.
+
+**Requires:** `OPENAI_API_KEY` env var for `--transcribe` (validated immediately — fails fast with helpful error if missing).
+
+### Typical Workflow
+
+```bash
+# 1. Connect to browser
+bp connect --provider generic --name voice-test
+
+# 2. Navigate to the voice agent page
+bp exec '[{"action":"goto","url":"https://my-voice-app.com"},{"action":"snapshot"}]'
+
+# 3. Click "start call" or similar button if needed
+bp exec '{"action":"click","selector":"ref:e4"}'
+
+# 4. Full round-trip: send audio → wait for response → transcribe
+bp audio roundtrip -i question.wav --transcribe --silence-timeout 5000
+# Output: { "transcript": "The answer is 42", "latencyMs": 1200, ... }
+
+# 5. Multiple turns in conversation
+bp audio roundtrip -i followup.wav --transcribe --silence-timeout 5000
+
+# 6. Capture-only (agent already speaking)
+bp audio capture --transcribe --silence-timeout 8000
+
+# 7. Save response audio for manual review
+bp audio roundtrip -i prompt.wav -o response.wav --transcribe
+```
+
+### Key Options
+
+- **`--silence-timeout 5000`** — Voice agents take 2-8s to respond. Default 3s may cut off responses. Increase for slower agents.
+- **`--transcribe`** — Adds ~1-2s (Whisper API is fast). Requires `OPENAI_API_KEY`.
+- **`--pre-delay`** — Wait before playing input if the page needs setup time.
+- **`--json`** — Structured output for CI/scripting.
+
+### Environment Setup
+
+```bash
+# Required for transcription
+export OPENAI_API_KEY=sk-...
+
+# Optional: Chrome with fake media device support
+chrome --remote-debugging-port=9222 \
+  --use-fake-device-for-media-stream \
+  --use-fake-ui-for-media-stream
+```
+
 ## Tips
 
 1. **Take a snapshot before using refs** - Populates the ref cache
@@ -189,6 +240,7 @@ Hints are action-aware—`click` suggests buttons/links, `fill` suggests inputs.
 6. **Run `bp actions`** for complete action reference
 7. **Use `--json` for scripting** - Cleaner than `-o json`
 8. **Use `--export-log` for debugging** - Keeps local copy of session logs
+9. **Voice agents: increase `--silence-timeout`** - Default 3s is often too short
 
 ---
 
