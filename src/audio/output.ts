@@ -72,6 +72,19 @@ const AUDIO_OUTPUT_SCRIPT = `
     window.AudioContext = function() {
       var ctx = new (Function.prototype.bind.apply(OrigAudioContext, [null].concat(Array.prototype.slice.call(arguments))))();
       allAudioContexts.push(ctx);
+      // Auto-resume suspended contexts — CDP automation has no user gesture,
+      // so Chrome suspends new AudioContexts by default. Without this, voice
+      // agents' ScriptProcessorNodes never fire and no audio flows.
+      if (ctx.state === 'suspended') {
+        console.log('[bp:output] AudioContext created suspended (' + ctx.sampleRate + 'Hz), auto-resuming...');
+        ctx.resume().then(function() {
+          console.log('[bp:output] AudioContext resumed successfully (' + ctx.sampleRate + 'Hz, state: ' + ctx.state + ')');
+        }).catch(function(e) {
+          console.warn('[bp:output] AudioContext resume failed (' + ctx.sampleRate + 'Hz):', e);
+        });
+      } else {
+        console.log('[bp:output] AudioContext created (' + ctx.sampleRate + 'Hz, state: ' + ctx.state + ')');
+      }
       return ctx;
     };
     window.AudioContext.prototype = OrigAudioContext.prototype;
@@ -438,6 +451,7 @@ export class AudioOutput {
     await this.cdp.send('Runtime.evaluate', {
       expression: AUDIO_OUTPUT_SCRIPT,
       awaitPromise: false,
+      userGesture: true,
     });
 
     this.injected = true;

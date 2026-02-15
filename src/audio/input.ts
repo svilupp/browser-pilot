@@ -235,6 +235,7 @@ export class AudioInput {
     await this.cdp.send('Runtime.evaluate', {
       expression: AUDIO_INPUT_SCRIPT,
       awaitPromise: false,
+      userGesture: true,
     });
 
     this.injected = true;

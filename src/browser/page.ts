@@ -2224,6 +2224,28 @@ export class Page {
    * Must be called before navigating to the page that will use audio.
    */
   async setupAudio(): Promise<void> {
+    // Dispatch a synthetic click to establish a user gesture context.
+    // Chrome suspends AudioContexts created without a user gesture;
+    // this click makes subsequent AudioContext.resume() calls succeed.
+    try {
+      await this.cdp.send('Input.dispatchMouseEvent', {
+        type: 'mousePressed',
+        x: 0,
+        y: 0,
+        button: 'left',
+        clickCount: 1,
+      });
+      await this.cdp.send('Input.dispatchMouseEvent', {
+        type: 'mouseReleased',
+        x: 0,
+        y: 0,
+        button: 'left',
+        clickCount: 1,
+      });
+    } catch {
+      // Non-fatal — some targets don't support Input domain
+    }
+
     await this.audioInput.setup();
     await this.audioOutput.setup();
   }
