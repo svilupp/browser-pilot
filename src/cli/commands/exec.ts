@@ -13,6 +13,33 @@ import {
 } from '../session.ts';
 import { getSessionLogger } from '../session-logger.ts';
 
+const EXEC_HELP = `
+bp exec - Execute browser actions on current session
+
+Usage:
+  bp exec '<json>'              Execute action(s) from inline JSON
+  bp exec -f <file>             Execute action(s) from a JSON file
+  echo '<json>' | bp exec       Execute action(s) from stdin
+
+Options:
+  -f, --file <path>    Read actions from a JSON file
+  --dialog <mode>      Handle native dialogs: accept | dismiss
+  -s, --session <id>   Session to use (default: most recent)
+  -o, --output <fmt>   Output format: json | pretty (default: pretty)
+  --json               Alias for -o json
+  --trace              Enable debug tracing
+  -h, --help           Show this help
+
+Examples:
+  bp exec '{"action":"goto","url":"https://example.com"}'
+  bp exec '[{"action":"fill","selector":"#email","value":"me@test.com"},{"action":"submit","selector":"form"}]'
+  bp exec --dialog accept '{"action":"click","selector":"#delete-btn"}'
+  bp exec -f login-steps.json
+
+Run 'bp actions' for the complete action reference.
+Run 'bp quickstart' for getting started guide.
+`.trimEnd();
+
 /**
  * Validate that a session's browser is still alive
  * Tries to reach the browser's /json/version endpoint
@@ -64,8 +91,13 @@ function parseExecArgs(args: string[]): {
 
 export async function execCommand(
   args: string[],
-  globalOptions: { session?: string; output?: 'json' | 'pretty'; trace?: boolean }
+  globalOptions: { session?: string; output?: 'json' | 'pretty'; trace?: boolean; help?: boolean }
 ): Promise<void> {
+  if (globalOptions.help) {
+    console.log(EXEC_HELP);
+    return;
+  }
+
   // Parse exec-specific options
   let { actionsJson, options: execOptions } = parseExecArgs(args);
 
@@ -96,10 +128,14 @@ export async function execCommand(
     actions = JSON.parse(actionsJson);
   } catch {
     const snippet = actionsJson!.substring(0, 80);
+    const looksLikeEvaluate = /evaluate/i.test(actionsJson!);
+    const evalTip = looksLikeEvaluate
+      ? "\n\nTip: For JavaScript evaluation, use 'bp eval' instead — no JSON wrapping needed:\n  bp eval 'your.expression.here'"
+      : '';
     throw new Error(
       `Invalid JSON: ${snippet}${actionsJson!.length > 80 ? '...' : ''}\n\n` +
         "Actions must be valid JSON. Tip: use 'bp exec -f actions.json' for complex steps.\n" +
-        "Run 'bp actions' for complete action reference."
+        `Run 'bp actions' for complete action reference.${evalTip}`
     );
   }
 

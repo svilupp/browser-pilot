@@ -46,6 +46,7 @@ const AUDIO_INPUT_SCRIPT = `
     silenceOsc.start();
 
     fakeStream = destinationNode.stream;
+    console.log('[bp:input] Fake mic stream created (48kHz, ' + fakeStream.getAudioTracks().length + ' tracks)');
     return fakeStream;
   }
 
@@ -68,6 +69,7 @@ const AUDIO_INPUT_SCRIPT = `
       for (var i = 0; i < binaryStr.length; i++) {
         bytes[i] = binaryStr.charCodeAt(i);
       }
+      console.log('[bp:input] Decoding audio (' + bytes.length + ' bytes)...');
 
       return audioCtx.decodeAudioData(bytes.buffer.slice(0));
     }).then(function(audioBuffer) {
@@ -75,9 +77,13 @@ const AUDIO_INPUT_SCRIPT = `
       sourceNode.buffer = audioBuffer;
       sourceNode.connect(destinationNode);
 
+      var durationMs = Math.round(audioBuffer.duration * 1000);
+      console.log('[bp:input] Playing ' + durationMs + 'ms audio (' + audioBuffer.sampleRate + 'Hz, ' + audioBuffer.numberOfChannels + 'ch)');
+
       return new Promise(function(resolve) {
         sourceNode.onended = function() {
           isPlaying = false;
+          console.log('[bp:input] Playback ended');
           resolve(true);
           try {
             if (typeof window.__bpAudioInputDone === 'function') {
@@ -98,6 +104,7 @@ const AUDIO_INPUT_SCRIPT = `
       sourceNode = null;
     }
     isPlaying = false;
+    console.log('[bp:input] Stopped');
   }
 
   var origGetUserMedia = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
@@ -105,6 +112,7 @@ const AUDIO_INPUT_SCRIPT = `
   navigator.mediaDevices.getUserMedia = function(constraints) {
     if (constraints && constraints.audio) {
       var stream = ensureFakeStream();
+      console.log('[bp:input] getUserMedia intercepted — returning fake mic' + (constraints.video ? ' + real video' : ''));
 
       if (constraints.video) {
         // Get real video + our fake audio
@@ -153,6 +161,8 @@ const AUDIO_INPUT_SCRIPT = `
       };
     }
   };
+
+  console.log('[bp:input] Audio input override installed (getUserMedia + enumerateDevices)');
 })();
 `;
 

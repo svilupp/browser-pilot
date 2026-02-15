@@ -2,8 +2,10 @@
  * AudioOutput — capture audio that a page plays
  *
  * Intercepts audio at multiple levels:
- * 1. AudioContext.destination connections (Web Audio API)
- * 2. HTMLMediaElement.play (audio/video elements via captureStream)
+ * 1. AudioContext constructor tracking + per-context ScriptProcessorNode taps
+ * 2. AudioNode.connect override to tap connections to AudioDestinationNode
+ * 3. HTMLMediaElement.play interception via captureStream
+ * 4. RTCPeerConnection override to capture WebRTC audio tracks
  *
  * Uses ScriptProcessorNode to tap PCM data, transfers to Node.js
  * via Runtime.addBinding.
@@ -18,34 +20,110 @@ const OUTPUT_BINDING = '__bpAudioOutputData';
 
 /**
  * JS script injected into the page to capture audio output.
+ *
+ * Key design: creates a ScriptProcessorNode tap **inside each AudioContext**
+ * that the page creates, so cross-context connections never occur.
+ * This handles voice agents that create their own AudioContext (e.g. at 16kHz)
+ * and play audio via AudioBufferSourceNode → ctx.destination.
  */
 const AUDIO_OUTPUT_SCRIPT = `
 (function() {
-  if (window.__bpAudioOutput) return;
+  // If already installed, stop any active capture but allow re-initialization
+  // so that updated scripts (e.g. with new capture strategies) take effect.
+  if (window.__bpAudioOutput) {
+    if (window.__bpAudioOutput.isCapturing()) window.__bpAudioOutput.stop();
+    // Keep existing allAudioContexts if available (preserves pre-override tracking)
+  }
 
   var BUFFER_SIZE = 4096;
-  var FLUSH_SAMPLES = 48000; // flush every ~1 second at 48kHz
-  var captureCtx = null;
-  var processor = null;
+  var FLUSH_SAMPLES = 48000; // flush every ~1s at 48kHz (scales with sample rate)
   var capturing = false;
   var capturedChunks = [];
   var totalSamples = 0;
+  var flushCount = 0;
   var pendingTracks = [];
   var tappedTrackIds = {};
+
+  // --- Per-context tap infrastructure ---
+  // Preserve any AudioContexts tracked by a previous script version
+  var allAudioContexts = window.__bpTrackedAudioContexts || [];
+  var contextTaps = {};
+  var contextIdCounter = 0;
 
   var OrigAudioContext = window.AudioContext || window.webkitAudioContext;
   var origConnect = AudioNode.prototype.connect;
 
+  // Our own capture context (48kHz) for WebRTC tracks and media elements
+  var captureCtx = null;
+  var captureProcessor = null;
+
+  // Override AudioContext constructor to track all instances (skip if already overridden)
+  if (OrigAudioContext && !window.__bpAudioContextOverridden) {
+    window.__bpAudioContextOverridden = true;
+    window.AudioContext = function() {
+      var ctx = new (Function.prototype.bind.apply(OrigAudioContext, [null].concat(Array.prototype.slice.call(arguments))))();
+      allAudioContexts.push(ctx);
+      return ctx;
+    };
+    window.AudioContext.prototype = OrigAudioContext.prototype;
+    Object.keys(OrigAudioContext).forEach(function(k) {
+      try { window.AudioContext[k] = OrigAudioContext[k]; } catch(e) {}
+    });
+    if (window.webkitAudioContext) {
+      window.webkitAudioContext = window.AudioContext;
+    }
+  }
+
+  // Expose tracked contexts on window so re-injections preserve them
+  window.__bpTrackedAudioContexts = allAudioContexts;
+
+  // Create or retrieve a ScriptProcessorNode tap for a specific AudioContext.
+  // The tap lives in the SAME context as the source, avoiding cross-context errors.
+  function getOrCreateTap(ctx) {
+    if (!ctx.__bpTapId) {
+      ctx.__bpTapId = '__bp_tap_' + (++contextIdCounter);
+    }
+    if (contextTaps[ctx.__bpTapId]) return contextTaps[ctx.__bpTapId];
+
+    try {
+      if (ctx.state === 'closed') return null;
+      var channels = Math.min(ctx.destination.channelCount || 2, 2);
+      if (channels < 1) channels = 1;
+      var proc = ctx.createScriptProcessor(BUFFER_SIZE, channels, channels);
+      proc.onaudioprocess = function(e) {
+        if (!capturing) return;
+        var left = new Float32Array(e.inputBuffer.getChannelData(0));
+        var right = e.inputBuffer.numberOfChannels > 1
+          ? new Float32Array(e.inputBuffer.getChannelData(1))
+          : new Float32Array(left.length);
+        capturedChunks.push({ left: left, right: right, sampleRate: ctx.sampleRate });
+        totalSamples += left.length;
+        if (totalSamples >= FLUSH_SAMPLES) {
+          flushToNodeJs();
+        }
+      };
+      // Must connect to destination to keep ScriptProcessorNode alive
+      origConnect.call(proc, ctx.destination);
+      contextTaps[ctx.__bpTapId] = proc;
+      console.log('[bp:output] Created tap for AudioContext (sampleRate=' + ctx.sampleRate + ', id=' + ctx.__bpTapId + ')');
+      return proc;
+    } catch(e) {
+      return null;
+    }
+  }
+
+  // Override AudioNode.prototype.connect to tap connections to any AudioDestinationNode
   AudioNode.prototype.connect = function(destination) {
     var result = origConnect.apply(this, arguments);
 
-    // If connecting to a destination node and we're capturing, also tap it
-    if (capturing && processor && destination instanceof AudioDestinationNode) {
+    if (capturing && destination instanceof AudioDestinationNode) {
       try {
-        origConnect.call(this, processor);
-      } catch(e) {
-        // Ignore — may already be connected or incompatible
-      }
+        var tap = getOrCreateTap(destination.context);
+        // Don't connect the tap to itself
+        if (tap && tap !== this) {
+          origConnect.call(this, tap);
+        }
+      } catch(e) {}
     }
     return result;
   };
@@ -55,42 +133,39 @@ const AUDIO_OUTPUT_SCRIPT = `
     if (capturing && !this.__bpCaptured) {
       this.__bpCaptured = true;
       try {
-        if (!captureCtx) initCapture();
+        if (!captureCtx) initCaptureCtx();
         var stream = this.captureStream ? this.captureStream() : null;
         if (stream && captureCtx) {
           var source = captureCtx.createMediaStreamSource(stream);
-          origConnect.call(source, processor);
+          origConnect.call(source, captureProcessor);
         }
-      } catch(e) {
-        // captureStream may not be available in all contexts
-      }
+      } catch(e) {}
     }
     return origPlay.apply(this, arguments);
   };
 
-  function initCapture() {
+  // Initialize our own 48kHz capture context for WebRTC and media element tapping
+  function initCaptureCtx() {
     captureCtx = new OrigAudioContext({ sampleRate: 48000 });
-    processor = captureCtx.createScriptProcessor(BUFFER_SIZE, 2, 2);
-
-    processor.onaudioprocess = function(e) {
+    captureProcessor = captureCtx.createScriptProcessor(BUFFER_SIZE, 2, 2);
+    captureProcessor.onaudioprocess = function(e) {
       if (!capturing) return;
       var left = new Float32Array(e.inputBuffer.getChannelData(0));
       var right = new Float32Array(e.inputBuffer.getChannelData(1));
-      capturedChunks.push({ left: left, right: right });
+      capturedChunks.push({ left: left, right: right, sampleRate: 48000 });
       totalSamples += left.length;
-
       if (totalSamples >= FLUSH_SAMPLES) {
         flushToNodeJs();
       }
     };
-
-    // Must be connected to destination to keep ScriptProcessorNode running
-    origConnect.call(processor, captureCtx.destination);
+    origConnect.call(captureProcessor, captureCtx.destination);
   }
 
   function flushToNodeJs() {
     if (capturedChunks.length === 0) return;
 
+    // Determine sample rate from chunks (use first chunk's rate)
+    var sampleRate = capturedChunks[0].sampleRate || 48000;
     var totalLen = 0;
     for (var i = 0; i < capturedChunks.length; i++) {
       totalLen += capturedChunks[i].left.length;
@@ -107,7 +182,6 @@ const AUDIO_OUTPUT_SCRIPT = `
     var leftBytes = new Uint8Array(left.buffer);
     var rightBytes = new Uint8Array(right.buffer);
 
-    // Use a chunked approach for btoa to avoid call stack limits
     function uint8ToBase64(bytes) {
       var CHUNK = 8192;
       var parts = [];
@@ -125,12 +199,14 @@ const AUDIO_OUTPUT_SCRIPT = `
     var leftB64 = uint8ToBase64(leftBytes);
     var rightB64 = uint8ToBase64(rightBytes);
 
+    flushCount++;
+
     try {
       if (typeof window.__bpAudioOutputData === 'function') {
         window.__bpAudioOutputData(JSON.stringify({
           left: leftB64,
           right: rightB64,
-          sampleRate: captureCtx.sampleRate,
+          sampleRate: sampleRate,
           samples: totalLen
         }));
       }
@@ -140,7 +216,7 @@ const AUDIO_OUTPUT_SCRIPT = `
     totalSamples = 0;
   }
 
-  // WebRTC interception — capture remote audio tracks
+  // --- WebRTC interception (for apps that use RTCPeerConnection) ---
   var rtcTrackedStreams = [];
   var rtcPeerConnections = [];
 
@@ -148,10 +224,10 @@ const AUDIO_OUTPUT_SCRIPT = `
     try {
       if (tappedTrackIds[track.id]) return;
       tappedTrackIds[track.id] = true;
-      if (!captureCtx) initCapture();
+      if (!captureCtx) initCaptureCtx();
       var stream = new MediaStream([track]);
       var source = captureCtx.createMediaStreamSource(stream);
-      origConnect.call(source, processor);
+      origConnect.call(source, captureProcessor);
       rtcTrackedStreams.push(source);
     } catch(e) {}
   }
@@ -170,15 +246,17 @@ const AUDIO_OUTPUT_SCRIPT = `
   if (typeof RTCPeerConnection !== 'undefined') {
     var OrigRTC = RTCPeerConnection;
 
-    // Override constructor to track all instances
     window.RTCPeerConnection = function() {
       var pc = new (Function.prototype.bind.apply(OrigRTC, [null].concat(Array.prototype.slice.call(arguments))))();
       rtcPeerConnections.push(pc);
 
-      // Listen for new audio tracks
       pc.addEventListener('track', function(event) {
         if (event.track && event.track.kind === 'audio') {
-          pendingTracks.push(event.track);
+          if (capturing) {
+            tapAudioTrack(event.track);
+          } else {
+            pendingTracks.push(event.track);
+          }
         }
       });
 
@@ -189,26 +267,37 @@ const AUDIO_OUTPUT_SCRIPT = `
       try { window.RTCPeerConnection[k] = OrigRTC[k]; } catch(e) {}
     });
 
-    // Expose tracked PCs for debugging
     window.__bpTrackedPCs = rtcPeerConnections;
   }
 
   window.__bpAudioOutput = {
     start: function() {
-      if (!captureCtx) initCapture();
-      if (captureCtx.state === 'suspended') captureCtx.resume();
       capturing = true;
       capturedChunks = [];
       totalSamples = 0;
+      flushCount = 0;
       tappedTrackIds = {};
-      // Drain pending tracks
-      for (var i = 0; i < pendingTracks.length; i++) {
-        tapAudioTrack(pendingTracks[i]);
+
+      // Resume any suspended capture context
+      if (captureCtx && captureCtx.state === 'suspended') captureCtx.resume();
+
+      // Create taps for all tracked AudioContexts (catches contexts created before capture)
+      for (var i = 0; i < allAudioContexts.length; i++) {
+        var ctx = allAudioContexts[i];
+        if (ctx.state !== 'closed') {
+          getOrCreateTap(ctx);
+        }
+      }
+
+      // Drain pending WebRTC tracks
+      for (var j = 0; j < pendingTracks.length; j++) {
+        tapAudioTrack(pendingTracks[j]);
       }
       pendingTracks = [];
+
       // Tap existing peer connections
-      for (var j = 0; j < rtcPeerConnections.length; j++) {
-        tapExistingPeerConnection(rtcPeerConnections[j]);
+      for (var k = 0; k < rtcPeerConnections.length; k++) {
+        tapExistingPeerConnection(rtcPeerConnections[k]);
       }
     },
     stop: function() {
@@ -217,8 +306,29 @@ const AUDIO_OUTPUT_SCRIPT = `
     },
     isCapturing: function() { return capturing; },
     getBufferedSamples: function() { return totalSamples; },
+    tapPC: function(pc) {
+      if (!pc || typeof pc.getReceivers !== 'function') return false;
+      if (rtcPeerConnections.indexOf(pc) === -1) {
+        rtcPeerConnections.push(pc);
+      }
+      if (capturing) {
+        tapExistingPeerConnection(pc);
+      }
+      pc.addEventListener('track', function(event) {
+        if (event.track && event.track.kind === 'audio') {
+          if (capturing) {
+            tapAudioTrack(event.track);
+          } else {
+            pendingTracks.push(event.track);
+          }
+        }
+      });
+      return true;
+    },
     getStats: function() {
       return {
+        audioContexts: allAudioContexts.filter(function(c) { return c.state !== 'closed'; }).length,
+        contextTaps: Object.keys(contextTaps).length,
         audioNodes: captureCtx ? captureCtx.destination.numberOfInputs : 0,
         rtcConnections: rtcPeerConnections.length,
         mediaElements: document.querySelectorAll('audio, video').length,
@@ -260,7 +370,6 @@ export class AudioOutput {
   /**
    * Set up audio output capture.
    * Registers bindings and injects the capture script.
-   * Must be called before navigating to the page that produces audio.
    */
   async setup(): Promise<void> {
     if (this.injected) return;
@@ -302,6 +411,9 @@ export class AudioOutput {
       awaitPromise: false,
     });
 
+    // Retroactively discover existing RTCPeerConnection instances via CDP heap query
+    await this.discoverExistingPeerConnections();
+
     // Emit diagnostics if handler is attached
     if (this.onDiagHandler) {
       try {
@@ -315,7 +427,7 @@ export class AudioOutput {
         const stats = statsResult.result.value;
         if (stats) {
           this.onDiagHandler(
-            `started — ${stats['audioNodes']} AudioNodes, ${stats['rtcConnections']} RTCPeerConnections, ${stats['mediaElements']} MediaElements, ${stats['tappedTracks']} tapped tracks`
+            `started — ${stats['audioContexts']} AudioContexts, ${stats['contextTaps']} taps, ${stats['rtcConnections']} RTCPeerConnections, ${stats['mediaElements']} MediaElements, ${stats['tappedTracks']} tapped tracks`
           );
         }
       } catch {}
@@ -412,6 +524,64 @@ export class AudioOutput {
     this.onChunkHandler = undefined;
     this.onDiagHandler = undefined;
     this.injected = false;
+  }
+
+  /**
+   * Use CDP Runtime.queryObjects to find RTCPeerConnection instances
+   * that were created before our override was injected, and tap their audio tracks.
+   */
+  private async discoverExistingPeerConnections(): Promise<void> {
+    try {
+      const protoResult = await this.cdp.send<{
+        result: { objectId?: string };
+      }>('Runtime.evaluate', {
+        expression: 'typeof RTCPeerConnection !== "undefined" ? RTCPeerConnection.prototype : null',
+        returnByValue: false,
+      });
+
+      const protoId = protoResult.result.objectId;
+      if (!protoId) return;
+
+      const queryResult = await this.cdp.send<{
+        objects: { objectId: string };
+      }>('Runtime.queryObjects', {
+        prototypeObjectId: protoId,
+      });
+
+      const arrayId = queryResult.objects.objectId;
+      if (!arrayId) return;
+
+      const propsResult = await this.cdp.send<{
+        result: Array<{ name: string; value?: { objectId?: string } }>;
+      }>('Runtime.getProperties', {
+        objectId: arrayId,
+        ownProperties: true,
+      });
+
+      let tapped = 0;
+      for (const prop of propsResult.result) {
+        if (prop.name === 'length' || prop.name === '__proto__') continue;
+        const pcObjectId = prop.value?.objectId;
+        if (!pcObjectId) continue;
+
+        await this.cdp.send('Runtime.callFunctionOn', {
+          objectId: pcObjectId,
+          functionDeclaration:
+            'function() { if (window.__bpAudioOutput && window.__bpAudioOutput.tapPC) { return window.__bpAudioOutput.tapPC(this); } return false; }',
+          returnByValue: true,
+        });
+        tapped++;
+      }
+
+      if (tapped > 0) {
+        this.onDiagHandler?.(`retroactively discovered ${tapped} existing RTCPeerConnection(s)`);
+      }
+
+      await this.cdp.send('Runtime.releaseObject', { objectId: arrayId });
+      await this.cdp.send('Runtime.releaseObject', { objectId: protoId });
+    } catch {
+      // Non-critical — if queryObjects isn't supported or fails, continue without it
+    }
   }
 
   private handleAudioData(payload: string): void {

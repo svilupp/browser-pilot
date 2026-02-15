@@ -116,6 +116,8 @@ The last form is a simple delay in milliseconds.
 {"action": "evaluate", "value": "document.title"}
 ```
 
+> **Tip:** For JavaScript evaluation, prefer `bp eval 'document.title'` — no JSON escaping needed.
+
 ### Iframe Navigation
 
 ```json
@@ -142,8 +144,11 @@ Note: Cross-origin iframes cannot be accessed due to browser security.
 Refs are the most reliable way to target elements. They work inside Shadow DOM at any depth.
 
 ```bash
-# Take snapshot to populate ref cache
-bp exec '[{"action":"goto","url":"https://example.com"},{"action":"snapshot"}]'
+# Navigate to the page
+bp exec '{"action":"goto","url":"https://example.com"}'
+
+# Get interactive elements with refs (recommended)
+bp snapshot -i
 # Output:
 #   button "Submit" [ref=e4]
 #   textbox "Email" [ref=e5]
@@ -525,6 +530,8 @@ bp audio roundtrip -i prompt.wav --transcribe --silence-timeout 5000
 ```
 
 Transcription adds ~1-2s overhead (Whisper API). Safe to use in hot loops and CI.
+
+Use `--language <lang>` (e.g. `en`, `es`, `ja`) to improve accuracy for non-English audio.
 
 ## Troubleshooting
 

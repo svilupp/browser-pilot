@@ -14,12 +14,16 @@ STEP 2: NAVIGATE
   bp exec '{"action":"goto","url":"https://example.com"}'
 
 STEP 3: GET PAGE SNAPSHOT
-  bp snapshot --format text
+  bp snapshot -i
 
-  Output shows the page as an accessibility tree with element refs:
-    - heading "Welcome" [ref=e1]
-    - button "Sign In" [ref=e2]
-    - textbox "Email" [ref=e3]
+  Shows only interactive elements (buttons, inputs, links) with refs:
+    button "Sign In" [ref=e2]
+    textbox "Email" [ref=e3]
+    link "Forgot password?" [ref=e6]
+
+  Other formats:
+    bp snapshot --format text    # Full accessibility tree (all elements)
+    bp snapshot                  # Full snapshot as JSON
 
 STEP 4: INTERACT USING REFS
   bp exec '{"action":"fill","selector":"ref:e3","value":"test@example.com"}'
@@ -33,8 +37,9 @@ STEP 5: BATCH MULTIPLE ACTIONS
   ]'
 
 FOR AI AGENTS
-  Use --json for machine-readable output:
-    bp snapshot --format text --json
+  Use bp snapshot -i for most workflows - shows only actionable elements.
+  Add --json for machine-readable output:
+    bp snapshot -i --json
     bp exec '{"action":"click","selector":"ref:e3"}' --json
 
 TIPS

@@ -514,6 +514,23 @@ export function validateSteps(steps: unknown[]): ValidationResult {
           lines.push(`    Got: ${JSON.stringify(step)}`);
         }
       }
+      // Suggest bp eval when evaluate action has errors
+      const hasEvaluateError = errors.some((err) => {
+        const step = steps[err.stepIndex];
+        return (
+          step &&
+          typeof step === 'object' &&
+          (step as Record<string, unknown>)['action'] === 'evaluate'
+        );
+      });
+      if (hasEvaluateError) {
+        lines.push('');
+        lines.push(
+          "Tip: For JavaScript evaluation, use 'bp eval' instead — no JSON wrapping needed:"
+        );
+        lines.push("  bp eval 'your.expression.here'");
+      }
+
       lines.push('');
       lines.push(`Valid actions: ${VALID_ACTIONS_LIST}`);
       return lines.join('\n');

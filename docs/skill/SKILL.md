@@ -239,6 +239,7 @@ bp audio capture --verbose --transcribe --silence-timeout 5000
 
 - **`--silence-timeout 5000`** — Voice agents take 2-8s to respond. Default 3s may cut off responses. Increase for slower agents.
 - **`--transcribe`** — Adds ~1-2s (Whisper API is fast). Requires `OPENAI_API_KEY`.
+- **`--language <lang>`** — Language hint for transcription (e.g. `en`, `es`, `ja`). Improves accuracy for non-English audio.
 - **`--pre-delay`** — Wait before playing input if the page needs setup time.
 - **`--send-selector`** — Click a button after input finishes (push-to-talk UIs).
 - **`--verbose`** — Show detailed capture diagnostics (chunk RMS, connection counts).
@@ -288,6 +289,7 @@ chrome --remote-debugging-port=9222 \
 9. **Use `--export-log` for debugging** - Keeps local copy of session logs
 10. **Voice agents: increase `--silence-timeout`** - Default 3s is often too short
 11. **Voice transcript is silence?** - Use `--verbose` to diagnose capture issues
+12. **Debug a past session** - `bp list -s <name> --log-tail 50` shows recent actions; `cat $(bp list -s <name> --log-path)` dumps the full JSONL execution log
 
 ---
 

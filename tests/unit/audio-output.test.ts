@@ -273,4 +273,152 @@ describe('AudioOutput', () => {
     const result = await output.stop();
     expect(result.chunkCount).toBe(0);
   });
+
+  test('injected script overrides AudioContext constructor', async () => {
+    const cdp = createMockCDPClient();
+    const output = new AudioOutput(cdp as unknown as CDPClient);
+    await output.setup();
+
+    const scriptCall = cdp
+      .findAllCalls('Page.addScriptToEvaluateOnNewDocument')
+      .find((c) => (c.params!['source'] as string).includes('__bpAudioOutput'));
+    const source = scriptCall!.params!['source'] as string;
+
+    expect(source).toContain('window.AudioContext = function()');
+    expect(source).toContain('allAudioContexts.push(ctx)');
+  });
+
+  test('injected script creates per-context taps via getOrCreateTap', async () => {
+    const cdp = createMockCDPClient();
+    const output = new AudioOutput(cdp as unknown as CDPClient);
+    await output.setup();
+
+    const scriptCall = cdp
+      .findAllCalls('Page.addScriptToEvaluateOnNewDocument')
+      .find((c) => (c.params!['source'] as string).includes('__bpAudioOutput'));
+    const source = scriptCall!.params!['source'] as string;
+
+    // Per-context tap function exists
+    expect(source).toContain('function getOrCreateTap(ctx)');
+    // Taps use the source context's sample rate, not a hardcoded one
+    expect(source).toContain('sampleRate: ctx.sampleRate');
+    // Connect override taps via destination.context
+    expect(source).toContain('getOrCreateTap(destination.context)');
+  });
+
+  test('injected script taps all tracked AudioContexts on start', async () => {
+    const cdp = createMockCDPClient();
+    const output = new AudioOutput(cdp as unknown as CDPClient);
+    await output.setup();
+
+    const scriptCall = cdp
+      .findAllCalls('Page.addScriptToEvaluateOnNewDocument')
+      .find((c) => (c.params!['source'] as string).includes('__bpAudioOutput'));
+    const source = scriptCall!.params!['source'] as string;
+
+    // start() iterates allAudioContexts and creates taps
+    expect(source).toContain('allAudioContexts.length');
+    expect(source).toContain('getOrCreateTap(ctx)');
+  });
+
+  test('injected script reports audioContexts and contextTaps in stats', async () => {
+    const cdp = createMockCDPClient();
+    const output = new AudioOutput(cdp as unknown as CDPClient);
+    await output.setup();
+
+    const scriptCall = cdp
+      .findAllCalls('Page.addScriptToEvaluateOnNewDocument')
+      .find((c) => (c.params!['source'] as string).includes('__bpAudioOutput'));
+    const source = scriptCall!.params!['source'] as string;
+
+    expect(source).toContain('audioContexts:');
+    expect(source).toContain('contextTaps:');
+  });
+
+  test('handles audio data at non-48kHz sample rates', async () => {
+    const cdp = createMockCDPClient();
+    const output = new AudioOutput(cdp as unknown as CDPClient);
+    await output.setup();
+    await output.start();
+
+    // Simulate a 16kHz voice agent context sending audio
+    const samples = 1600; // 100ms at 16kHz
+    const left = new Float32Array(samples);
+    const right = new Float32Array(samples);
+    for (let i = 0; i < samples; i++) {
+      left[i] = 0.5 * Math.sin((2 * Math.PI * 440 * i) / 16000);
+      right[i] = 0.5 * Math.sin((2 * Math.PI * 440 * i) / 16000);
+    }
+
+    const payload = JSON.stringify({
+      left: bufferToBase64(new Uint8Array(left.buffer)),
+      right: bufferToBase64(new Uint8Array(right.buffer)),
+      sampleRate: 16000,
+      samples,
+    });
+
+    cdp.emit('Runtime.bindingCalled', {
+      name: '__bpAudioOutputData',
+      payload,
+    });
+
+    const result = await output.stop();
+    expect(result.chunkCount).toBe(1);
+    expect(result.sampleRate).toBe(16000);
+    expect(result.left.length).toBe(1600);
+    expect(result.durationMs).toBe(100);
+  });
+
+  test('diagnostics include AudioContext and tap counts', async () => {
+    const cdp = createMockCDPClient();
+    cdp.send = async (method: string, params?: Record<string, unknown>) => {
+      cdp.sent.push({ method, params });
+      if (
+        method === 'Runtime.evaluate' &&
+        params?.['expression']?.toString().includes('getStats()')
+      ) {
+        return {
+          result: {
+            value: {
+              audioContexts: 2,
+              contextTaps: 1,
+              rtcConnections: 0,
+              mediaElements: 0,
+              tappedTracks: 0,
+            },
+          },
+        };
+      }
+      return {};
+    };
+
+    const output = new AudioOutput(cdp as unknown as CDPClient);
+    await output.setup();
+
+    const diagMessages: string[] = [];
+    output.onDiag((msg) => diagMessages.push(msg));
+    await output.start();
+
+    const startMsg = diagMessages.find((m) => m.includes('started'));
+    expect(startMsg).toBeDefined();
+    expect(startMsg).toContain('2 AudioContexts');
+    expect(startMsg).toContain('1 taps');
+  });
+
+  test('injected script keeps WebRTC interception alongside AudioContext tracking', async () => {
+    const cdp = createMockCDPClient();
+    const output = new AudioOutput(cdp as unknown as CDPClient);
+    await output.setup();
+
+    const scriptCall = cdp
+      .findAllCalls('Page.addScriptToEvaluateOnNewDocument')
+      .find((c) => (c.params!['source'] as string).includes('__bpAudioOutput'));
+    const source = scriptCall!.params!['source'] as string;
+
+    // WebRTC interception still present
+    expect(source).toContain('RTCPeerConnection');
+    expect(source).toContain('tapAudioTrack');
+    expect(source).toContain('tapExistingPeerConnection');
+    expect(source).toContain('__bpTrackedPCs');
+  });
 });

@@ -15,6 +15,31 @@ import {
   updateSession,
 } from '../session.ts';
 
+const EVAL_HELP = `
+bp eval - Evaluate JavaScript in the browser
+
+Convenience wrapper around exec's evaluate action.
+No JSON escaping needed -- just pass a JS expression directly.
+
+Usage:
+  bp eval '<expression>'        Evaluate inline JavaScript
+  bp eval -f <file>             Evaluate JavaScript from a file
+  echo '<expr>' | bp eval       Evaluate from stdin
+
+Options:
+  -f, --file <path>    Read JavaScript from a file
+  -s, --session <id>   Session to use (default: most recent)
+  -o, --output <fmt>   Output format: json | pretty (default: pretty)
+  --json               Alias for -o json
+  --trace              Enable debug tracing
+  -h, --help           Show this help
+
+Examples:
+  bp eval 'document.title'
+  bp eval 'document.querySelectorAll("a").length'
+  bp eval -f scrape.js
+`.trimEnd();
+
 async function validateSession(session: SessionData): Promise<boolean> {
   try {
     const wsUrl = new URL(session.wsUrl);
@@ -49,8 +74,13 @@ function parseEvalArgs(args: string[]): { expression: string | undefined; option
 
 export async function evalCommand(
   args: string[],
-  globalOptions: { session?: string; output?: 'json' | 'pretty'; trace?: boolean }
+  globalOptions: { session?: string; output?: 'json' | 'pretty'; trace?: boolean; help?: boolean }
 ): Promise<void> {
+  if (globalOptions.help) {
+    console.log(EVAL_HELP);
+    return;
+  }
+
   const { expression: argExpression, options: evalOptions } = parseEvalArgs(args);
 
   let expression: string | undefined = argExpression;

@@ -6,8 +6,29 @@ import { connect } from '../../index.ts';
 import { output } from '../index.ts';
 import { getDefaultSession, loadSession, type SessionData, updateSession } from '../session.ts';
 
+const TEXT_HELP = `
+bp text - Extract text content from the current page
+
+Usage:
+  bp text [options]
+
+Options:
+  --selector <sel>     Extract text from a specific element (default: entire page)
+  -s, --session <id>   Session to use (default: most recent)
+  -o, --output <fmt>   Output format: json | pretty (default: pretty)
+  --json               Alias for -o json
+  --trace              Enable debug tracing
+  -h, --help           Show this help
+
+Examples:
+  bp text                          # Extract all text from the page
+  bp text --selector '#main'       # Extract text from #main element only
+  bp text --json                   # Output as JSON with URL and selector info
+`.trimEnd();
+
 interface TextOptions {
   selector?: string;
+  help?: boolean;
 }
 
 function parseTextArgs(args: string[]): TextOptions {
@@ -18,6 +39,8 @@ function parseTextArgs(args: string[]): TextOptions {
 
     if (arg === '--selector' || arg === '-s') {
       options.selector = args[++i];
+    } else if (arg === '-h' || arg === '--help') {
+      options.help = true;
     }
   }
 
@@ -26,9 +49,14 @@ function parseTextArgs(args: string[]): TextOptions {
 
 export async function textCommand(
   args: string[],
-  globalOptions: { session?: string; output?: 'json' | 'pretty'; trace?: boolean }
+  globalOptions: { session?: string; output?: 'json' | 'pretty'; trace?: boolean; help?: boolean }
 ): Promise<void> {
   const options = parseTextArgs(args);
+
+  if (options.help || globalOptions.help) {
+    console.log(TEXT_HELP);
+    return;
+  }
 
   // Get session
   let session: SessionData | null;
