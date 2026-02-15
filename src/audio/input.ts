@@ -34,7 +34,18 @@ const AUDIO_INPUT_SCRIPT = `
 
   function ensureFakeStream() {
     if (fakeStream) return fakeStream;
-    audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000 });
+    // Use the original AudioContext to avoid being tracked by our output override
+    var CtorToUse = window.__bpOrigAudioContext || window.AudioContext || window.webkitAudioContext;
+    audioCtx = new CtorToUse({ sampleRate: 48000 });
+    // Auto-resume if suspended (CDP automation has no user gesture)
+    if (audioCtx.state === 'suspended') {
+      console.log('[bp:input] AudioContext suspended, auto-resuming...');
+      audioCtx.resume().then(function() {
+        console.log('[bp:input] AudioContext resumed (' + audioCtx.state + ')');
+      }).catch(function(e) {
+        console.warn('[bp:input] AudioContext resume failed:', e);
+      });
+    }
     destinationNode = audioCtx.createMediaStreamDestination();
 
     // Start with silence so the stream always has active tracks
@@ -159,7 +170,8 @@ const AUDIO_INPUT_SCRIPT = `
         isPlaying: isPlaying,
         sampleRate: audioCtx ? audioCtx.sampleRate : 0
       };
-    }
+    },
+    getContext: function() { return audioCtx; }
   };
 
   console.log('[bp:input] Audio input override installed (getUserMedia + enumerateDevices)');
@@ -252,6 +264,36 @@ export class AudioInput {
     if (!this.injected) {
       await this.setup();
     }
+
+    // Resume all suspended AudioContexts before playing — this runs
+    // via CDP Runtime.evaluate with userGesture:true, which Chrome
+    // treats as a user activation, allowing resume() to succeed.
+    await this.cdp.send('Runtime.evaluate', {
+      expression: `(function() {
+        var resumed = [];
+        (window.__bpTrackedAudioContexts || []).forEach(function(ctx) {
+          if (ctx.state === 'suspended') {
+            ctx.resume().then(function() {
+              console.log('[bp:input] Resumed suspended AudioContext (' + ctx.sampleRate + 'Hz)');
+            });
+            resumed.push(ctx.sampleRate);
+          }
+        });
+        // Also resume the input context itself
+        if (window.__bpAudioInput && window.__bpAudioInput.getContext) {
+          var inputCtx = window.__bpAudioInput.getContext();
+          if (inputCtx && inputCtx.state === 'suspended') {
+            inputCtx.resume().then(function() {
+              console.log('[bp:input] Resumed input AudioContext (' + inputCtx.sampleRate + 'Hz)');
+            });
+            resumed.push('input-' + inputCtx.sampleRate);
+          }
+        }
+        return resumed.length > 0 ? 'resumed: ' + resumed.join(',') : 'all running';
+      })()`,
+      awaitPromise: false,
+      userGesture: true,
+    });
 
     const base64 = bufferToBase64(audioData);
     const waitForEnd = options?.waitForEnd ?? true;

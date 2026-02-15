@@ -468,6 +468,32 @@ export class AudioOutput {
     this.firstChunkTime = null;
     this.capturing = true;
 
+    // Resume any suspended AudioContexts before starting capture.
+    // Uses userGesture:true so Chrome treats this as a user activation.
+    await this.cdp.send('Runtime.evaluate', {
+      expression: `(function() {
+        var resumed = [];
+        (window.__bpTrackedAudioContexts || []).forEach(function(ctx) {
+          if (ctx.state === 'suspended') {
+            ctx.resume().then(function() {
+              console.log('[bp:output] Resumed AudioContext (' + ctx.sampleRate + 'Hz) before capture');
+            });
+            resumed.push(ctx.sampleRate);
+          }
+        });
+        if (window.__bpAudioInput && window.__bpAudioInput.getContext) {
+          var inputCtx = window.__bpAudioInput.getContext();
+          if (inputCtx && inputCtx.state === 'suspended') {
+            inputCtx.resume();
+            resumed.push('input-' + inputCtx.sampleRate);
+          }
+        }
+        if (resumed.length) console.log('[bp:output] Resumed ' + resumed.length + ' contexts: ' + resumed.join(', '));
+      })()`,
+      awaitPromise: false,
+      userGesture: true,
+    });
+
     await this.cdp.send('Runtime.evaluate', {
       expression: 'window.__bpAudioOutput && window.__bpAudioOutput.start()',
       awaitPromise: false,
