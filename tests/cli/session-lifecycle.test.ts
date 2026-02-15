@@ -129,18 +129,20 @@ describe('CLI Session Lifecycle', () => {
     });
 
     test('should detect old sessions by lastActivity', async () => {
-      // Create an old session file
+      // Create a session that's old but within the 2-day auto-clean window
+      // (bp list auto-deletes sessions older than 2 days)
       const oldSessionName = `old-${Date.now()}`;
       const sessionFile = join(SESSIONS_DIR, `${oldSessionName}.json`);
 
       await mkdir(SESSIONS_DIR, { recursive: true });
 
+      const ageMs = 1.5 * 86400000; // 1.5 days ago (under 2-day cleanup threshold)
       const oldSession = {
         id: oldSessionName,
         provider: 'generic',
         wsUrl: 'ws://localhost:99999/devtools/browser/fake',
-        createdAt: new Date(Date.now() - 7 * 86400000).toISOString(), // 7 days ago
-        lastActivity: new Date(Date.now() - 7 * 86400000).toISOString(),
+        createdAt: new Date(Date.now() - ageMs).toISOString(),
+        lastActivity: new Date(Date.now() - ageMs).toISOString(),
         currentUrl: 'about:blank',
       };
 
@@ -158,10 +160,9 @@ describe('CLI Session Lifecycle', () => {
 
         // Calculate age
         const lastActivity = new Date(session!.lastActivity);
-        const ageMs = Date.now() - lastActivity.getTime();
-        const ageDays = ageMs / (1000 * 60 * 60 * 24);
+        const ageDays = (Date.now() - lastActivity.getTime()) / (1000 * 60 * 60 * 24);
 
-        expect(ageDays).toBeGreaterThan(6);
+        expect(ageDays).toBeGreaterThan(1);
       } finally {
         await rm(sessionFile, { force: true });
       }

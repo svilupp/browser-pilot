@@ -47,15 +47,24 @@ const AUDIO_OUTPUT_SCRIPT = `
   // --- Per-context tap infrastructure ---
   // Preserve any AudioContexts tracked by a previous script version
   var allAudioContexts = window.__bpTrackedAudioContexts || [];
-  var contextTaps = {};
-  var contextIdCounter = 0;
+  // Use a WeakMap to associate taps with AudioContext instances
+  // (native objects like AudioContext may not support custom properties)
+  var contextTapMap = typeof WeakMap !== 'undefined' ? new WeakMap() : null;
+  var contextTapList = []; // fallback: [{ctx, proc}]
 
-  var OrigAudioContext = window.AudioContext || window.webkitAudioContext;
-  var origConnect = AudioNode.prototype.connect;
+  var OrigAudioContext = window.__bpOrigAudioContext || window.AudioContext || window.webkitAudioContext;
+  // Save the native connect function once; on re-injection, reuse it to avoid double-wrapping
+  var origConnect = window.__bpOrigConnect || AudioNode.prototype.connect;
+  window.__bpOrigConnect = origConnect;
 
   // Our own capture context (48kHz) for WebRTC tracks and media elements
   var captureCtx = null;
   var captureProcessor = null;
+
+  // Save original AudioContext constructor once
+  if (!window.__bpOrigAudioContext) {
+    window.__bpOrigAudioContext = OrigAudioContext;
+  }
 
   // Override AudioContext constructor to track all instances (skip if already overridden)
   if (OrigAudioContext && !window.__bpAudioContextOverridden) {
@@ -77,13 +86,38 @@ const AUDIO_OUTPUT_SCRIPT = `
   // Expose tracked contexts on window so re-injections preserve them
   window.__bpTrackedAudioContexts = allAudioContexts;
 
+  // Look up an existing tap for a given AudioContext
+  function findTap(ctx) {
+    if (contextTapMap) return contextTapMap.get(ctx) || null;
+    for (var i = 0; i < contextTapList.length; i++) {
+      if (contextTapList[i].ctx === ctx) return contextTapList[i].proc;
+    }
+    return null;
+  }
+
+  // Store a tap for a given AudioContext
+  function storeTap(ctx, proc) {
+    if (contextTapMap) { contextTapMap.set(ctx, proc); }
+    else { contextTapList.push({ ctx: ctx, proc: proc }); }
+  }
+
+  // Count stored taps
+  function tapCount() {
+    if (contextTapMap) {
+      var count = 0;
+      for (var i = 0; i < allAudioContexts.length; i++) {
+        if (contextTapMap.has(allAudioContexts[i])) count++;
+      }
+      return count;
+    }
+    return contextTapList.length;
+  }
+
   // Create or retrieve a ScriptProcessorNode tap for a specific AudioContext.
   // The tap lives in the SAME context as the source, avoiding cross-context errors.
   function getOrCreateTap(ctx) {
-    if (!ctx.__bpTapId) {
-      ctx.__bpTapId = '__bp_tap_' + (++contextIdCounter);
-    }
-    if (contextTaps[ctx.__bpTapId]) return contextTaps[ctx.__bpTapId];
+    var existing = findTap(ctx);
+    if (existing) return existing;
 
     try {
       if (ctx.state === 'closed') return null;
@@ -104,8 +138,7 @@ const AUDIO_OUTPUT_SCRIPT = `
       };
       // Must connect to destination to keep ScriptProcessorNode alive
       origConnect.call(proc, ctx.destination);
-      contextTaps[ctx.__bpTapId] = proc;
-      console.log('[bp:output] Created tap for AudioContext (sampleRate=' + ctx.sampleRate + ', id=' + ctx.__bpTapId + ')');
+      storeTap(ctx, proc);
       return proc;
     } catch(e) {
       return null;
@@ -128,7 +161,8 @@ const AUDIO_OUTPUT_SCRIPT = `
     return result;
   };
 
-  var origPlay = HTMLMediaElement.prototype.play;
+  var origPlay = window.__bpOrigPlay || HTMLMediaElement.prototype.play;
+  window.__bpOrigPlay = origPlay;
   HTMLMediaElement.prototype.play = function() {
     if (capturing && !this.__bpCaptured) {
       this.__bpCaptured = true;
@@ -328,7 +362,7 @@ const AUDIO_OUTPUT_SCRIPT = `
     getStats: function() {
       return {
         audioContexts: allAudioContexts.filter(function(c) { return c.state !== 'closed'; }).length,
-        contextTaps: Object.keys(contextTaps).length,
+        contextTaps: tapCount(),
         audioNodes: captureCtx ? captureCtx.destination.numberOfInputs : 0,
         rtcConnections: rtcPeerConnections.length,
         mediaElements: document.querySelectorAll('audio, video').length,
