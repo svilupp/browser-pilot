@@ -34,8 +34,7 @@
     },
     "./cli": {
       "types": "./dist/cli.d.ts",
-      "import": "./dist/cli.mjs",
-      "require": "./dist/cli.cjs"
+      "import": "./dist/cli.mjs"
     }
   },
   "bin": {
