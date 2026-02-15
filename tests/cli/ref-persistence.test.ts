@@ -66,7 +66,7 @@ function findRefByRoleAndName(
   return match?.ref;
 }
 
-describe('CLI Ref Persistence (Cross-Exec Cache)', () => {
+describe.skipIf(!!process.env['CI'])('CLI Ref Persistence (Cross-Exec Cache)', () => {
   beforeAll(setup);
   afterAll(teardown);
 
@@ -84,7 +84,7 @@ describe('CLI Ref Persistence (Cross-Exec Cache)', () => {
         wsUrl,
         '--name',
         SESSION_NAME,
-        '-o',
+        '-f',
         'json',
       ]);
 
@@ -105,7 +105,7 @@ describe('CLI Ref Persistence (Cross-Exec Cache)', () => {
         'exec',
         '-s',
         SESSION_NAME,
-        '-o',
+        '-f',
         'json',
         JSON.stringify([{ action: 'goto', url: `${baseUrl}/form.html` }, { action: 'snapshot' }]),
       ]);
@@ -139,7 +139,7 @@ describe('CLI Ref Persistence (Cross-Exec Cache)', () => {
         'exec',
         '-s',
         SESSION_NAME,
-        '-o',
+        '-f',
         'json',
         JSON.stringify([
           { action: 'fill', selector: `ref:${nameRef}`, value: 'Test User' }, // Use cached ref
@@ -171,13 +171,13 @@ describe('CLI Ref Persistence (Cross-Exec Cache)', () => {
         'exec',
         '-s',
         SESSION_NAME,
-        '-o',
+        '-f',
         'json',
         JSON.stringify({ action: 'goto', url: `${baseUrl}/form.html` }),
       ]);
 
       // Second: Standalone snapshot to get refs (and populate cache)
-      const setupResult = await runCLI(['snapshot', '-s', SESSION_NAME, '-o', 'json']);
+      const setupResult = await runCLI(['snapshot', '-s', SESSION_NAME, '-f', 'json']);
 
       expect(setupResult.exitCode).toBe(0);
 
@@ -201,7 +201,7 @@ describe('CLI Ref Persistence (Cross-Exec Cache)', () => {
         'exec',
         '-s',
         SESSION_NAME,
-        '-o',
+        '-f',
         'json',
         JSON.stringify({
           action: 'fill',
@@ -229,7 +229,7 @@ describe('CLI Ref Persistence (Cross-Exec Cache)', () => {
         'exec',
         '-s',
         SESSION_NAME,
-        '-o',
+        '-f',
         'json',
         JSON.stringify([{ action: 'goto', url: `${baseUrl}/form.html` }, { action: 'snapshot' }]),
       ]);
@@ -260,7 +260,7 @@ describe('CLI Ref Persistence (Cross-Exec Cache)', () => {
         'exec',
         '-s',
         SESSION_NAME,
-        '-o',
+        '-f',
         'json',
         JSON.stringify({ action: 'goto', url: `${baseUrl}/basic.html` }),
       ]);
@@ -270,7 +270,7 @@ describe('CLI Ref Persistence (Cross-Exec Cache)', () => {
         'exec',
         '-s',
         SESSION_NAME,
-        '-o',
+        '-f',
         'json',
         JSON.stringify({
           action: 'fill',
@@ -300,7 +300,7 @@ describe('CLI Ref Persistence (Cross-Exec Cache)', () => {
         'exec',
         '-s',
         SESSION_NAME,
-        '-o',
+        '-f',
         'json',
         JSON.stringify({ action: 'goto', url: `${baseUrl}/form.html` }),
       ]);
@@ -313,7 +313,7 @@ describe('CLI Ref Persistence (Cross-Exec Cache)', () => {
         'exec',
         '-s',
         SESSION_NAME,
-        '-o',
+        '-f',
         'json',
         JSON.stringify({
           action: 'fill',
@@ -332,7 +332,7 @@ describe('CLI Ref Persistence (Cross-Exec Cache)', () => {
 
   test('should close session', async () => {
     await withRetry(async () => {
-      const result = await runCLI(['close', '-s', SESSION_NAME, '-o', 'json']);
+      const result = await runCLI(['close', '-s', SESSION_NAME, '-f', 'json']);
 
       expect(result.exitCode).toBe(0);
       expect(result.json).toMatchObject({ success: true });

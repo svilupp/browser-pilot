@@ -6,11 +6,34 @@ import { connect } from '../../index.ts';
 import { output } from '../index.ts';
 import { getDefaultSession, loadSession, type SessionData } from '../session.ts';
 
+const SCREENSHOT_HELP = `
+bp screenshot - Take a screenshot of the current page
+
+Usage:
+  bp screenshot [options]
+
+Options:
+  -o, --output <path>    Save screenshot to file (default: print base64 to stdout)
+  -f, --format <type>    Image format: png | jpeg | webp (default: png)
+  -q, --quality <n>      Image quality 0-100 (jpeg/webp only)
+  --full-page            Capture the full scrollable page
+  -s, --session <id>     Session to use (default: most recent)
+  --json                 Output as JSON (base64 data + metadata)
+  --trace                Enable debug tracing
+  -h, --help             Show this help
+
+Examples:
+  bp screenshot -o page.png               # Save screenshot to file
+  bp screenshot --full-page -o full.png    # Capture full scrollable page
+  bp screenshot -f jpeg -q 80 -o page.jpg  # JPEG with 80% quality
+`.trimEnd();
+
 interface ScreenshotOptions {
   outputPath?: string;
   format?: 'png' | 'jpeg' | 'webp';
   quality?: number;
   fullPage?: boolean;
+  help?: boolean;
 }
 
 function parseScreenshotArgs(args: string[]): ScreenshotOptions {
@@ -27,6 +50,8 @@ function parseScreenshotArgs(args: string[]): ScreenshotOptions {
       options.quality = parseInt(args[++i]!, 10);
     } else if (arg === '--full-page' || arg === '--fullpage') {
       options.fullPage = true;
+    } else if (arg === '-h' || arg === '--help') {
+      options.help = true;
     }
   }
 
@@ -35,9 +60,14 @@ function parseScreenshotArgs(args: string[]): ScreenshotOptions {
 
 export async function screenshotCommand(
   args: string[],
-  globalOptions: { session?: string; output?: 'json' | 'pretty'; trace?: boolean }
+  globalOptions: { session?: string; format?: 'json' | 'pretty'; trace?: boolean; help?: boolean }
 ): Promise<void> {
   const options = parseScreenshotArgs(args);
+
+  if (options.help || globalOptions.help) {
+    console.log(SCREENSHOT_HELP);
+    return;
+  }
 
   // Get session
   let session: SessionData | null;
@@ -76,11 +106,11 @@ export async function screenshotCommand(
           size: buffer.length,
           format: options.format ?? 'png',
         },
-        globalOptions.output
+        globalOptions.format
       );
     } else {
       // Output base64 data
-      if (globalOptions.output === 'json') {
+      if (globalOptions.format === 'json') {
         output({ data: screenshotData, format: options.format ?? 'png' }, 'json');
       } else {
         console.log(screenshotData);

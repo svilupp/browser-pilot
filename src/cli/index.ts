@@ -3,13 +3,14 @@
  * browser-pilot CLI - Browser automation for AI agents
  *
  * Key workflow:
- *   1. bp snapshot --format text    → Get page with element refs [ref=e4]
+ *   1. bp snapshot -i               → Get interactive elements with refs [ref=e4]
  *   2. bp exec '{"selector":"ref:e4",...}'  → Use refs for reliable targeting
  *
  * Commands:
  *   quickstart  Getting started guide
  *   connect     Create browser session
  *   exec        Execute actions (supports --dialog accept|dismiss)
+ *   audio       Audio I/O for voice agent testing
  *   snapshot    Get page snapshot with element refs
  *   text        Extract text content
  *   screenshot  Take screenshot
@@ -22,10 +23,12 @@
  */
 
 import { actionsCommand } from './commands/actions.ts';
+import { audioCommand } from './commands/audio.ts';
 import { cleanCommand } from './commands/clean.ts';
 import { closeCommand } from './commands/close.ts';
 import { connectCommand } from './commands/connect.ts';
 import { diagnoseCommand } from './commands/diagnose.ts';
+import { evalCommand } from './commands/eval.ts';
 import { execCommand } from './commands/exec.ts';
 import { listCommand } from './commands/list.ts';
 import { quickstartCommand } from './commands/quickstart.ts';
@@ -44,7 +47,9 @@ Commands:
   quickstart  Getting started guide (start here!)
   connect     Create browser session
   exec        Execute actions
+  eval        Evaluate JavaScript expression
   record      Record browser actions to JSON
+  audio       Audio I/O for voice agent testing
   snapshot    Get page with element refs
   diagnose    Debug element selection issues
   text        Extract text content
@@ -56,34 +61,38 @@ Commands:
 
 Options:
   -s, --session <id>    Session ID
-  -o, --output <fmt>    json | pretty (default: pretty)
-  --json                Alias for -o json
+  -f, --format <fmt>    json | pretty (default: pretty)
+  --json                Alias for -f json
   --trace               Enable debug tracing
   --dialog <mode>       Handle dialogs: accept | dismiss
   -h, --help            Show help
 
 Examples:
   bp connect --provider generic --name dev
-  bp connect -s test --export-log ./logs/test.jsonl
   bp exec '{"action":"goto","url":"https://example.com"}'
-  bp snapshot --format text
-  bp list --json                   # JSON output
+  bp snapshot -i
   bp exec '{"action":"click","selector":"ref:e3"}'
+  bp eval 'document.title'
+  bp audio roundtrip -i prompt.wav --transcribe --silence-timeout 5000
 
 Run 'bp quickstart' for CLI workflow guide.
 Run 'bp actions' for complete action reference.
+Run 'bp audio --help' for voice agent testing guide.
 `;
 
 interface GlobalOptions {
   session?: string;
-  output?: 'json' | 'pretty';
+  format?: 'json' | 'pretty';
   trace?: boolean;
   help?: boolean;
 }
 
-function parseGlobalOptions(args: string[]): { options: GlobalOptions; remaining: string[] } {
+export function parseGlobalOptions(args: string[]): {
+  options: GlobalOptions;
+  remaining: string[];
+} {
   const options: GlobalOptions = {
-    output: 'pretty',
+    format: 'pretty',
   };
   const remaining: string[] = [];
 
@@ -92,12 +101,19 @@ function parseGlobalOptions(args: string[]): { options: GlobalOptions; remaining
 
     if (arg === '-s' || arg === '--session') {
       options.session = args[++i];
-    } else if (arg === '-o' || arg === '--output') {
-      options.output = args[++i] as 'json' | 'pretty';
+    } else if (arg === '-f' || arg === '--format') {
+      const nextVal = args[i + 1];
+      if (nextVal === 'json' || nextVal === 'pretty') {
+        options.format = args[++i] as 'json' | 'pretty';
+      } else {
+        // Not a known format — pass through as command-specific arg
+        // (e.g. `bp snapshot -f interactive`)
+        remaining.push(arg);
+      }
     } else if (arg === '--json') {
-      options.output = 'json';
+      options.format = 'json';
     } else if (arg === '--pretty') {
-      options.output = 'pretty';
+      options.format = 'pretty';
     } else if (arg === '--trace') {
       options.trace = true;
     } else if (arg === '-h' || arg === '--help') {
@@ -178,6 +194,10 @@ async function main(): Promise<void> {
         await execCommand(remaining, options);
         break;
 
+      case 'eval':
+        await evalCommand(remaining, options);
+        break;
+
       case 'snapshot':
         await snapshotCommand(remaining, options);
         break;
@@ -214,6 +234,10 @@ async function main(): Promise<void> {
         await recordCommand(remaining, options);
         break;
 
+      case 'audio':
+        await audioCommand(remaining, options);
+        break;
+
       case 'help':
       case '--help':
       case '-h':
@@ -232,4 +256,7 @@ async function main(): Promise<void> {
   }
 }
 
-main();
+// Only run when executed directly (not when imported for testing)
+if (import.meta.main) {
+  main();
+}

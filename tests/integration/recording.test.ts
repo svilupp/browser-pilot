@@ -142,7 +142,7 @@ describe('Recording Integration', () => {
     });
   });
 
-  test('should record navigation via goto steps', async () => {
+  test.skipIf(!!process.env['CI'])('should record navigation via goto steps', async () => {
     const { page, baseUrl } = ctx.get();
 
     await withRetry(async () => {

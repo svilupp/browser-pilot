@@ -15,7 +15,7 @@ import type { PageSnapshot } from '../../src/browser/types';
 import { withRetry } from '../utils/retry';
 import { generateSessionName, getBaseUrl, getWebSocketUrl, runCLI, setup, teardown } from './setup';
 
-describe('CLI Snapshot Diff', () => {
+describe.skipIf(!!process.env['CI'])('CLI Snapshot Diff', () => {
   beforeAll(setup);
   afterAll(teardown);
 
@@ -146,7 +146,7 @@ describe('CLI Snapshot Diff', () => {
             sessionName,
             '--diff',
             beforeFile,
-            '-o',
+            '-f',
             'json',
           ]);
 

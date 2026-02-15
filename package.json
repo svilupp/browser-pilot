@@ -1,6 +1,6 @@
 {
   "name": "browser-pilot",
-  "version": "0.0.8",
+  "version": "0.0.9",
   "description": "Lightweight CDP-based browser automation for Node.js, Bun, and Cloudflare Workers",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -62,6 +62,7 @@
     "check": "bun run typecheck && bun run lint",
     "prepublishOnly": "bun run build",
     "bp": "bun ./src/cli/index.ts",
+    "dev:bp": "bun ./src/cli/index.ts",
     "browser-pilot": "bun ./src/cli/index.ts",
     "fixtures:serve": "bun tests/fixtures/server.ts"
   },

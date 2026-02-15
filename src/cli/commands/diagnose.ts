@@ -139,7 +139,7 @@ function formatFuzzyResult(result: DiagnoseResult & { matched: false }): string 
 
 export async function diagnoseCommand(
   args: string[],
-  globalOptions: { session?: string; output?: 'json' | 'pretty'; trace?: boolean }
+  globalOptions: { session?: string; format?: 'json' | 'pretty'; trace?: boolean }
 ): Promise<void> {
   const { selector, options } = parseDiagnoseArgs(args);
 
@@ -188,7 +188,7 @@ export async function diagnoseCommand(
     });
 
     // Output
-    if (globalOptions.output === 'json') {
+    if (globalOptions.format === 'json') {
       output(result, 'json');
     } else {
       if (result.matched) {

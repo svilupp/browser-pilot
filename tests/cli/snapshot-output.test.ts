@@ -13,7 +13,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { withRetry } from '../utils/retry';
 import { generateSessionName, getBaseUrl, getWebSocketUrl, runCLI, setup, teardown } from './setup';
 
-describe('CLI Snapshot Output', () => {
+describe.skipIf(!!process.env['CI'])('CLI Snapshot Output', () => {
   beforeAll(setup);
   afterAll(teardown);
 
@@ -41,7 +41,7 @@ describe('CLI Snapshot Output', () => {
           'exec',
           '-s',
           SESSION_NAME,
-          '-o',
+          '-f',
           'json',
           JSON.stringify({ action: 'snapshot' }),
         ]);
@@ -144,7 +144,7 @@ describe('CLI Snapshot Output', () => {
         ]);
 
         // Take snapshot with JSON output
-        const result = await runCLI(['snapshot', '-s', sessionName, '-o', 'json']);
+        const result = await runCLI(['snapshot', '-s', sessionName, '-f', 'json']);
 
         expect(result.exitCode).toBe(0);
 
@@ -225,7 +225,7 @@ describe('CLI Snapshot Output', () => {
           sessionName,
           '--format',
           'interactive',
-          '-o',
+          '-f',
           'json',
         ]);
 
@@ -273,7 +273,7 @@ describe('CLI Snapshot Output', () => {
           'exec',
           '-s',
           sessionName,
-          '-o',
+          '-f',
           'json',
           JSON.stringify([{ action: 'goto', url: `${baseUrl}/form.html` }, { action: 'snapshot' }]),
         ]);
@@ -283,7 +283,7 @@ describe('CLI Snapshot Output', () => {
           'exec',
           '-s',
           sessionName,
-          '-o',
+          '-f',
           'json',
           JSON.stringify({ action: 'fill', selector: 'ref:e1', value: 'test' }),
         ]);

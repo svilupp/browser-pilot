@@ -1,0 +1,170 @@
+/**
+ * Eval command - Evaluate JavaScript in the browser
+ *
+ * Convenience wrapper around exec's evaluate action.
+ * Eliminates JSON-in-JSON escaping nightmare.
+ */
+
+import { addBatchToPage, connect, type Step } from '../../index.ts';
+import { output } from '../index.ts';
+import {
+  deleteSession,
+  getDefaultSession,
+  loadSession,
+  type SessionData,
+  updateSession,
+} from '../session.ts';
+
+const EVAL_HELP = `
+bp eval - Evaluate JavaScript in the browser
+
+Convenience wrapper around exec's evaluate action.
+No JSON escaping needed -- just pass a JS expression directly.
+
+Usage:
+  bp eval '<expression>'        Evaluate inline JavaScript
+  bp eval -f <file>             Evaluate JavaScript from a file
+  echo '<expr>' | bp eval       Evaluate from stdin
+
+Options:
+  -f, --file <path>    Read JavaScript from a file
+  -s, --session <id>   Session to use (default: most recent)
+  -f, --format <fmt>   Output format: json | pretty (default: pretty)
+  --json               Alias for -f json
+  --trace              Enable debug tracing
+  -h, --help           Show this help
+
+Examples:
+  bp eval 'document.title'
+  bp eval 'document.querySelectorAll("a").length'
+  bp eval -f scrape.js
+`.trimEnd();
+
+async function validateSession(session: SessionData): Promise<boolean> {
+  try {
+    const wsUrl = new URL(session.wsUrl);
+    const protocol = wsUrl.protocol === 'wss:' ? 'https:' : 'http:';
+    const httpUrl = `${protocol}//${wsUrl.host}/json/version`;
+    const response = await fetch(httpUrl, { signal: AbortSignal.timeout(3000) });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+interface EvalOptions {
+  file?: string;
+}
+
+function parseEvalArgs(args: string[]): { expression: string | undefined; options: EvalOptions } {
+  const options: EvalOptions = {};
+  let expression: string | undefined;
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]!;
+    if (arg === '-f' || arg === '--file') {
+      options.file = args[++i];
+    } else if (!expression && !arg.startsWith('-')) {
+      expression = arg;
+    }
+  }
+
+  return { expression, options };
+}
+
+export async function evalCommand(
+  args: string[],
+  globalOptions: { session?: string; format?: 'json' | 'pretty'; trace?: boolean; help?: boolean }
+): Promise<void> {
+  if (globalOptions.help) {
+    console.log(EVAL_HELP);
+    return;
+  }
+
+  const { expression: argExpression, options: evalOptions } = parseEvalArgs(args);
+
+  let expression: string | undefined = argExpression;
+
+  // Read from file if -f specified
+  if (evalOptions.file) {
+    const fs = await import('node:fs/promises');
+    expression = await fs.readFile(evalOptions.file, 'utf-8');
+  }
+
+  // Read from stdin if no expression and stdin is piped
+  if (!expression && !process.stdin.isTTY) {
+    const chunks: Buffer[] = [];
+    for await (const chunk of process.stdin) {
+      chunks.push(chunk as Buffer);
+    }
+    expression = Buffer.concat(chunks).toString('utf-8').trim();
+  }
+
+  if (!expression) {
+    throw new Error(
+      'No expression provided.\n\n' +
+        'Usage:\n' +
+        "  bp eval 'document.title'\n" +
+        '  bp eval -f script.js\n' +
+        "  echo 'document.title' | bp eval"
+    );
+  }
+
+  // Get session
+  let session: SessionData | null;
+  if (globalOptions.session) {
+    session = await loadSession(globalOptions.session);
+  } else {
+    session = await getDefaultSession();
+    if (!session) {
+      throw new Error('No session found. Run "bp connect" first.');
+    }
+  }
+
+  // Validate session
+  const isValid = await validateSession(session);
+  if (!isValid) {
+    await deleteSession(session.id);
+    throw new Error(
+      `Session "${session.id}" is no longer valid (browser may have closed).\n` +
+        'Session file has been cleaned up. Run "bp connect" to create a new session.'
+    );
+  }
+
+  const browser = await connect({
+    provider: session.provider,
+    wsUrl: session.wsUrl,
+    debug: globalOptions.trace,
+  });
+
+  try {
+    const page = addBatchToPage(await browser.page(undefined, { targetId: session.targetId }));
+
+    // Hydrate ref map from session cache if URL matches
+    const currentUrlForCache = await page.url();
+    const refCache = session.metadata?.refCache;
+    if (refCache && refCache.url === currentUrlForCache) {
+      page.importRefMap(refCache.refMap);
+    }
+
+    const step: Step = { action: 'evaluate', value: expression };
+    const result = await page.batch([step]);
+    const stepResult = result.steps[0]!;
+
+    if (!stepResult.success) {
+      throw new Error(stepResult.error ?? 'Evaluation failed');
+    }
+
+    // Output the result
+    output(
+      globalOptions.format === 'json'
+        ? { success: true, result: stepResult.result }
+        : stepResult.result,
+      globalOptions.format
+    );
+
+    await updateSession(session.id, { currentUrl: await page.url() });
+  } finally {
+    await browser.disconnect();
+  }
+}

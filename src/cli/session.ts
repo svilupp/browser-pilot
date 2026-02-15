@@ -127,6 +127,33 @@ export async function deleteSession(id: string): Promise<void> {
 }
 
 /**
+ * Delete a session and its log directory
+ */
+export async function deleteSessionFull(id: string): Promise<void> {
+  const fs = await import('node:fs/promises');
+
+  // Delete session JSON
+  const filePath = join(SESSION_DIR, `${id}.json`);
+  try {
+    await fs.unlink(filePath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      throw error;
+    }
+  }
+
+  // Delete session log directory
+  const dirPath = join(SESSION_DIR, id);
+  try {
+    await fs.rm(dirPath, { recursive: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      throw error;
+    }
+  }
+}
+
+/**
  * List all sessions
  */
 export async function listSessions(): Promise<SessionData[]> {

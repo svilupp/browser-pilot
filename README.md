@@ -34,6 +34,7 @@ await browser.close();
 | Single-selector API (fragile) | Multi-selector by default: `['#primary', '.fallback']` |
 | No action batching (high latency) | Batch DSL: one call for entire sequences |
 | No AI-optimized snapshots | Built-in accessibility tree extraction |
+| No audio I/O for voice agents | Mic injection + output capture + Whisper transcription |
 
 ## Installation
 
@@ -246,6 +247,26 @@ await page.setLocale('fr-FR');
 
 Devices: `iPhone 14`, `iPhone 14 Pro Max`, `Pixel 7`, `iPad Pro 11`, `Desktop Chrome`, `Desktop Firefox`
 
+### Audio I/O
+
+```typescript
+// Set up audio input/output interception
+await page.setupAudio();
+
+// Play audio into the page's fake microphone
+await page.audioInput.play(wavBytes, { waitForEnd: true });
+
+// Capture audio output until silence
+const capture = await page.audioOutput.captureUntilSilence({ silenceTimeout: 5000 });
+
+// Full round-trip: play input → capture response
+const result = await page.audioRoundTrip({ input: wavBytes, silenceTimeout: 5000 });
+
+// Transcribe captured audio (requires OPENAI_API_KEY)
+import { transcribe } from 'browser-pilot';
+const { text } = await transcribe(capture);
+```
+
 ### Request Interception
 
 ```typescript
@@ -378,7 +399,7 @@ bp exec '[
   {"action":"fill","selector":"ref:e5","value":"laptop"},
   {"action":"click","selector":"ref:e12"},
   {"action":"snapshot"}
-]' --output json
+]' --format json
 ```
 
 Multi-selector fallbacks for robustness:
@@ -402,6 +423,44 @@ Output:
 ```
 
 Run `bp actions` for complete action reference.
+
+### Voice Agent Testing
+
+Test audio-based AI apps (voice assistants, phone agents) by injecting microphone input and capturing spoken responses.
+
+> **Full guide:** [Voice Agent Testing Guide](./docs/guides/voice-agent-testing.md)
+
+```bash
+export OPENAI_API_KEY=sk-...  # Required for --transcribe
+
+# Validate audio pipeline
+bp audio check -s my-session
+# Output: "READY for roundtrip" with agent AudioContext detected
+
+# Full round-trip: send audio prompt → wait for response → transcribe
+bp audio roundtrip -i prompt.wav --transcribe --silence-timeout 1500
+# Output: { "transcript": "Welcome! I'd be happy to help...", "latencyMs": 5200, ... }
+
+# Save response audio for manual review
+bp audio roundtrip -i prompt.wav -o response.wav --transcribe
+```
+
+**Important:** Audio overrides must be injected before the voice agent initializes. Use `bp audio check` to validate the pipeline. See the [full guide](./docs/guides/voice-agent-testing.md) for setup order and troubleshooting.
+
+Programmatic API:
+
+```typescript
+await page.setupAudio();
+
+const result = await page.audioRoundTrip({
+  input: audioBytes,
+  silenceTimeout: 1500,
+});
+
+import { transcribe } from 'browser-pilot';
+const { text } = await transcribe(result.audio);
+console.log(text); // "Welcome! I'd be happy to help..."
+```
 
 ### Recording Browser Actions
 
@@ -573,6 +632,7 @@ See the [docs](./docs) folder for detailed documentation:
 - [Multi-Selector Guide](./docs/guides/multi-selector.md)
 - [Batch Actions](./docs/guides/batch-actions.md)
 - [Snapshots](./docs/guides/snapshots.md)
+- [Voice Agent Testing](./docs/guides/voice-agent-testing.md)
 - [CLI Reference](./docs/cli.md)
 - [API Reference](./docs/api/page.md)
 

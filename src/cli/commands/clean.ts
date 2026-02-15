@@ -3,12 +3,34 @@
  */
 
 import { output } from '../index.ts';
-import { deleteSession, listSessions } from '../session.ts';
+import { deleteSessionFull, listSessions } from '../session.ts';
+
+const CLEAN_HELP = `
+bp clean - Remove stale browser sessions
+
+Usage:
+  bp clean [options]
+
+Options:
+  --max-age <hours>    Remove sessions older than N hours (default: 24)
+  --dry-run            Show what would be removed without deleting
+  --all                Remove all sessions regardless of age
+  -f, --format <fmt>   Output format: json | pretty (default: pretty)
+  --json               Alias for -f json
+  -h, --help           Show this help
+
+Examples:
+  bp clean                # Remove sessions older than 24 hours
+  bp clean --max-age 4    # Remove sessions older than 4 hours
+  bp clean --dry-run      # Preview what would be cleaned
+  bp clean --all          # Remove all sessions
+`.trimEnd();
 
 interface CleanOptions {
   maxAge?: number; // hours
   dryRun?: boolean;
   all?: boolean;
+  help?: boolean;
 }
 
 function parseCleanArgs(args: string[]): CleanOptions {
@@ -23,6 +45,8 @@ function parseCleanArgs(args: string[]): CleanOptions {
       options.dryRun = true;
     } else if (arg === '--all') {
       options.all = true;
+    } else if (arg === '-h' || arg === '--help') {
+      options.help = true;
     }
   }
 
@@ -31,9 +55,15 @@ function parseCleanArgs(args: string[]): CleanOptions {
 
 export async function cleanCommand(
   args: string[],
-  globalOptions: { output?: 'json' | 'pretty' }
+  globalOptions: { format?: 'json' | 'pretty'; help?: boolean }
 ): Promise<void> {
   const options = parseCleanArgs(args);
+
+  if (options.help || globalOptions.help) {
+    console.log(CLEAN_HELP);
+    return;
+  }
+
   const maxAgeMs = (options.maxAge ?? 24) * 60 * 60 * 1000; // Default 24 hours
   const now = Date.now();
 
@@ -45,7 +75,7 @@ export async function cleanCommand(
   });
 
   if (stale.length === 0) {
-    output({ message: 'No stale sessions found', cleaned: 0 }, globalOptions.output);
+    output({ message: 'No stale sessions found', cleaned: 0 }, globalOptions.format);
     return;
   }
 
@@ -56,13 +86,13 @@ export async function cleanCommand(
         sessions: stale.map((s) => s.id),
         dryRun: true,
       },
-      globalOptions.output
+      globalOptions.format
     );
     return;
   }
 
   for (const session of stale) {
-    await deleteSession(session.id);
+    await deleteSessionFull(session.id);
   }
 
   output(
@@ -71,6 +101,6 @@ export async function cleanCommand(
       cleaned: stale.length,
       sessions: stale.map((s) => s.id),
     },
-    globalOptions.output
+    globalOptions.format
   );
 }

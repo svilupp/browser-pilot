@@ -14,7 +14,35 @@ export {
   type BatchResult,
   type Step,
   type StepResult,
+  type ValidationError,
+  type ValidationResult,
+  validateSteps,
 } from './actions/index.ts';
+// Audio I/O
+export {
+  type AudioChunk,
+  type AudioFlagOptions,
+  AudioInput,
+  type AudioInputState,
+  AudioOutput,
+  bufferToBase64,
+  type CaptureOptions,
+  type CaptureResult,
+  calculateRMS,
+  generateSilence,
+  generateTone,
+  getAudioChromeFlags,
+  grantAudioPermissions,
+  isTranscriptionAvailable,
+  type PlayOptions,
+  parseWavHeader,
+  pcmToWav,
+  type RoundTripOptions,
+  type RoundTripResult,
+  type TranscribeOptions,
+  type TranscribeResult,
+  transcribe,
+} from './audio/index.ts';
 // Browser & Page
 export {
   type ActionOptions,

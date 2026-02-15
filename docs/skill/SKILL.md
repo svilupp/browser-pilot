@@ -1,5 +1,5 @@
 ---
-name: browser-pilot
+name: automate-browser-actions-and-testing
 description: Browser automation skill using browser-pilot CLI. Use this when you need to control a web browser - navigate to URLs, fill forms, click buttons, extract page content, or take screenshots. Works with local Chrome, BrowserBase, and Browserless providers.
 compatibility: Requires browser-pilot CLI (bp). Install with `bun add browser-pilot` or `npm install browser-pilot`. For local browser, Chrome must be running with --remote-debugging-port=9222.
 ---
@@ -15,21 +15,26 @@ Control web browsers via the `bp` CLI. Execute actions, extract content, and aut
 **Always use refs from snapshots for reliable element targeting.** Refs work even inside Shadow DOM.
 
 ```bash
-# Step 1: Navigate and see what's on the page
-bp exec '[{"action":"goto","url":"https://example.com"},{"action":"snapshot"}]'
-# Output shows refs:
-#   button "Submit" [ref=e4]
-#   textbox "Email" [ref=e5]
+# Step 1: Navigate to the page
+bp exec '{"action":"goto","url":"https://example.com"}'
 
-# Step 2: Use refs (cached for this session+URL)
+# Step 2: See interactive elements (buttons, inputs, links)
+bp snapshot -i
+# Output:
+#   ref: e4, role: button, name: Submit
+#   ref: e5, role: textbox, name: Email
+
+# Step 3: Use refs (cached for this session+URL)
 bp exec '[
   {"action":"fill","selector":"ref:e5","value":"user@example.com"},
   {"action":"click","selector":"ref:e4"}
 ]'
 
-# Step 3: After navigation, snapshot again
-bp exec '{"action":"snapshot"}'
+# Step 4: After navigation, snapshot again
+bp snapshot -i
 ```
+
+**Use `bp snapshot -i` (not full snapshot) for most workflows.** It shows only actionable elements — buttons, links, inputs — so you find what to click/fill immediately without wading through layout nodes.
 
 **Why refs?** Work in Shadow DOM, no CSS guessing, stable within page load, cached across CLI calls.
 
@@ -41,9 +46,19 @@ bp connect --provider generic              # Local Chrome (auto-discovers)
 bp connect --provider generic --export-log ./logs/session.jsonl  # With local logs
 bp connect --provider browserbase --name s # Cloud browser
 
+# Snapshot
+bp snapshot -i                         # Interactive elements only (recommended)
+bp snapshot --format text              # Full accessibility tree
+
 # Execute actions
-bp exec '[{"action":"goto","url":"..."},{"action":"snapshot"}]'
+bp exec '[{"action":"goto","url":"..."}]'
 bp exec '[{"action":"click","selector":"ref:e4"}]'
+bp exec -f actions.json               # Read actions from file
+echo '{"action":"snapshot"}' | bp exec # Pipe from stdin
+
+# Evaluate JavaScript (no JSON wrapping needed)
+bp eval 'document.title'
+bp eval 'document.querySelectorAll("audio").length'
 
 # Handle dialogs (CRITICAL - blocks without this)
 bp exec --dialog accept '{"action":"click","selector":"#delete-btn"}'
@@ -79,9 +94,12 @@ bp exec -s dev '[
 ### 3. Read Page State
 
 ```bash
-bp snapshot -s dev --format text        # Accessibility tree
-bp snapshot -s dev --format interactive # Interactive elements only
+bp snapshot -i                          # Interactive elements only (recommended)
+bp snapshot --format text               # Full accessibility tree
+bp snapshot                             # Full snapshot (JSON)
 ```
+
+**Use `bp snapshot -i` by default.** It returns only clickable/fillable elements with their refs — much faster to scan than the full tree. Use `--format text` only when you need to read non-interactive content (headings, paragraphs, labels).
 
 ### 4. Close When Done
 
@@ -124,7 +142,7 @@ browser-pilot operates at the DOM level and cannot directly access framework sta
 
 **Check state via evaluate:**
 ```bash
-bp exec '{"action":"evaluate","expression":"window.__REACT_STATE__ || window.__VUEX_STATE__"}'
+bp eval 'window.__REACT_STATE__ || window.__VUEX_STATE__'
 ```
 
 **Trigger blur manually for validation:**
@@ -137,7 +155,7 @@ bp exec '{"action":"evaluate","expression":"window.__REACT_STATE__ || window.__V
 
 **Check dataLayer for analytics:**
 ```bash
-bp exec '{"action":"evaluate","expression":"window.dataLayer"}'
+bp eval 'window.dataLayer'
 ```
 
 ## Debugging
@@ -179,16 +197,101 @@ When an element isn't found, errors include suggested alternatives:
 
 Hints are action-aware—`click` suggests buttons/links, `fill` suggests inputs. Use the suggested selector in your next attempt.
 
+## Voice Agent Testing
+
+Test audio-based AI agents (voice assistants, phone agents, audio chatbots) by injecting microphone input and capturing spoken responses.
+
+> **Full guide:** [VOICE_AGENT_TESTING.md](./VOICE_AGENT_TESTING.md) — setup patterns, troubleshooting decision tree, validation, multi-turn testing.
+
+**Requires:** `OPENAI_API_KEY` env var for `--transcribe`. Chrome with `--remote-debugging-port=9222`.
+
+### Critical Rule
+
+Audio overrides MUST be injected BEFORE the voice agent creates its `AudioContext`. Always: **setup → navigate → (click if needed) → check → roundtrip**.
+
+### Click-to-Start Agent (most common)
+
+```bash
+bp connect --provider generic --name vt
+bp audio setup -s vt
+bp exec -s vt '{"action":"goto","url":"https://my-voice-app.com"}'
+sleep 2
+bp snapshot -s vt -i                                          # find the start button
+bp exec -s vt '{"action":"click","selector":"ref:e4"}'        # click it
+sleep 3
+bp audio check -s vt                                          # expect READY
+bp audio roundtrip -s vt -i prompt.wav --transcribe -o response.wav
+```
+
+### Auto-Start Agent
+
+```bash
+bp connect --provider generic --name vt
+bp audio setup -s vt
+bp exec -s vt '{"action":"goto","url":"https://my-voice-app.com"}'
+sleep 3
+bp audio check -s vt                                          # expect READY
+bp audio roundtrip -s vt -i prompt.wav --transcribe -o response.wav
+```
+
+If `bp audio check` shows 0 AudioContexts or NOT READY — the agent initialized before overrides. Re-run the same steps.
+
+### Key Options
+
+| Option | Default | Use |
+|--------|---------|-----|
+| `--silence-timeout` | 1500ms | Increase for agents with long pauses |
+| `--transcribe` | off | Transcribe response via Whisper |
+| `--verbose` | off | Debug: per-chunk RMS, silence detection |
+| `-o response.wav` | none | Save response audio |
+| `--send-selector` | none | Push-to-talk UIs (click after speaking) |
+| `--pre-delay` | 0 | Wait before playing input |
+| `--json` | off | CI/scripting output |
+
+### Common Patterns
+
+```bash
+# Push-to-talk
+bp audio roundtrip -i prompt.wav --send-selector "#send-btn" --transcribe
+
+# Capture-only (agent already speaking)
+bp audio capture --transcribe --silence-timeout 1500
+
+# Generate test audio from text
+uv run docs/skill/generate-audio.py "Hello, what can you help me with?" -o prompt.wav
+
+# Multi-turn conversation
+bp audio roundtrip -s vt -i greeting.wav --transcribe --silence-timeout 1500
+bp audio roundtrip -s vt -i question.wav --transcribe --silence-timeout 1500
+```
+
+### Diagnosing Issues
+
+Run `bp audio check` first. Then see [VOICE_AGENT_TESTING.md](./VOICE_AGENT_TESTING.md) for the full troubleshooting decision tree.
+
+| Symptom | Quick Fix |
+|---------|-----------|
+| 0 AudioContexts | Agent not initialized — wait, interact, or reload |
+| `NOT READY` | Overrides missing — `bp audio setup`, then reload |
+| `latencyMs: -1` | Agent didn't respond — check `bp audio check` |
+| Garbage transcript | Sample rate issue — use `--verbose` to check |
+| Capture runs forever | No audio arriving — 15s `noAudioTimeout` should trigger |
+
 ## Tips
 
-1. **Take a snapshot before using refs** - Populates the ref cache
+1. **Use `bp snapshot -i`** - Shows only actionable elements, faster to scan than full tree
 2. **Refs solve Shadow DOM** - If CSS selector fails, use ref from snapshot
 3. **Always use `--dialog`** when actions might trigger native dialogs
 4. **Use `blur: true` for React/Vue forms** - Ensures state sync on controlled inputs
 5. **Use `bp diagnose`** when selectors fail - Shows why and suggests alternatives
-6. **Run `bp actions`** for complete action reference
-7. **Use `--json` for scripting** - Cleaner than `-o json`
-8. **Use `--export-log` for debugging** - Keeps local copy of session logs
+6. **Use `bp eval`** for quick JS checks - No JSON wrapping needed
+7. **Use `bp exec -f`** for complex multi-step actions - Avoids shell escaping
+8. **Use `--json` for scripting** - Cleaner than `-f json`
+9. **Use `--export-log` for debugging** - Keeps local copy of session logs
+10. **Voice agents: setup order matters** - Inject audio overrides BEFORE activating the voice agent, or capture returns empty
+11. **Voice transcript is silence?** - Run `bp audio check` first, then use `--verbose` to diagnose capture issues
+12. **Validate audio pipeline** - `bp audio check` shows overrides, AudioContexts, taps, and fake mic status
+13. **Debug a past session** - `bp list -s <name> --log-tail 50` shows recent actions; `cat $(bp list -s <name> --log-path)` dumps the full JSONL execution log
 
 ---
 

@@ -37,8 +37,8 @@ describe('CLI Help Completeness', () => {
 
     expect(result.stdout).toContain('-s');
     expect(result.stdout).toContain('--session');
-    expect(result.stdout).toContain('-o');
-    expect(result.stdout).toContain('--output');
+    expect(result.stdout).toContain('-f');
+    expect(result.stdout).toContain('--format');
     expect(result.stdout).toContain('--trace');
   });
 

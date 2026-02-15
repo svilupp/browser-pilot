@@ -12,6 +12,31 @@ import {
   saveSession,
 } from '../session.ts';
 
+const CONNECT_HELP = `
+bp connect - Create or resume a browser session
+
+Usage:
+  bp connect [options]
+
+Options:
+  -p, --provider <type>   Provider: generic | browserbase | browserless (default: generic)
+  --url <ws-url>          WebSocket URL (auto-discovered for generic provider)
+  -n, --name <id>         Custom session name (default: auto-generated)
+  -r, --resume <id>       Resume an existing session by ID
+  --api-key <key>         API key for cloud providers
+  --project-id <id>       Project ID for BrowserBase provider
+  --export-log <path>     Export session log to file on close
+  -s, --session <id>      Alias for --resume
+  --trace                 Enable debug tracing
+  -h, --help              Show this help
+
+Examples:
+  bp connect                                    # Auto-connect to local Chrome (port 9222)
+  bp connect --provider generic --name dev      # Connect with custom session name
+  bp connect --url ws://localhost:9222/devtools  # Explicit WebSocket URL
+  bp connect --resume dev                       # Resume a previous session
+`.trimEnd();
+
 interface ConnectOptions {
   provider?: ProviderType;
   url?: string;
@@ -50,8 +75,13 @@ function parseConnectArgs(args: string[]): ConnectOptions {
 
 export async function connectCommand(
   args: string[],
-  globalOptions: { session?: string; output?: 'json' | 'pretty'; trace?: boolean }
+  globalOptions: { session?: string; format?: 'json' | 'pretty'; trace?: boolean; help?: boolean }
 ): Promise<void> {
+  if (globalOptions.help) {
+    console.log(CONNECT_HELP);
+    return;
+  }
+
   const options = parseConnectArgs(args);
 
   // Resume existing session
@@ -67,7 +97,7 @@ export async function connectCommand(
         provider: session.provider,
         currentUrl: session.currentUrl,
       },
-      globalOptions.output
+      globalOptions.format
     );
     return;
   }
@@ -131,6 +161,6 @@ export async function connectCommand(
       currentUrl,
       metadata: browser.metadata,
     },
-    globalOptions.output
+    globalOptions.format
   );
 }

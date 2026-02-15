@@ -10,11 +10,38 @@ import { connect } from '../../index.ts';
 import { output } from '../index.ts';
 import { getDefaultSession, loadSession, type SessionData, updateSession } from '../session.ts';
 
+const SNAPSHOT_HELP = `
+bp snapshot - Get page accessibility snapshot with element refs
+
+Usage:
+  bp snapshot [options]
+
+Options:
+  -i, --interactive      Show only interactive elements (buttons, inputs, links)
+  -f, --format <type>    Output format: full | interactive | text (default: full)
+  -d, --diff <file>      Compare current page against a saved snapshot JSON
+  --inspect              Inject visual ref labels onto the page (auto-removes after 10s)
+  --keep                 Keep visual ref labels visible (use with --inspect)
+  -s, --session <id>     Session to use (default: most recent)
+  -f, --format <fmt>     Output format: json | pretty (default: pretty)
+  --json                 Alias for -f json
+  --trace                Enable debug tracing
+  -h, --help             Show this help
+
+Examples:
+  bp snapshot -i                    # Interactive elements only (best for AI agents)
+  bp snapshot --format text         # Full accessibility tree as text
+  bp snapshot --json > page.json    # Save full snapshot to file
+  bp snapshot --diff before.json    # Show what changed since before.json
+  bp snapshot --inspect             # Visual ref labels on the page
+`.trimEnd();
+
 interface SnapshotOptions {
   format?: 'full' | 'interactive' | 'text';
   diffFile?: string;
   inspect?: boolean;
   keep?: boolean;
+  help?: boolean;
 }
 
 function parseSnapshotArgs(args: string[]): SnapshotOptions {
@@ -27,10 +54,14 @@ function parseSnapshotArgs(args: string[]): SnapshotOptions {
       options.format = args[++i] as SnapshotOptions['format'];
     } else if (arg === '--diff' || arg === '-d') {
       options.diffFile = args[++i];
+    } else if (arg === '--interactive' || arg === '-i') {
+      options.format = 'interactive';
     } else if (arg === '--inspect') {
       options.inspect = true;
     } else if (arg === '--keep') {
       options.keep = true;
+    } else if (arg === '-h' || arg === '--help') {
+      options.help = true;
     }
   }
 
@@ -46,9 +77,14 @@ function sleep(ms: number): Promise<void> {
 
 export async function snapshotCommand(
   args: string[],
-  globalOptions: { session?: string; output?: 'json' | 'pretty'; trace?: boolean }
+  globalOptions: { session?: string; format?: 'json' | 'pretty'; trace?: boolean; help?: boolean }
 ): Promise<void> {
   const options = parseSnapshotArgs(args);
+
+  if (options.help || globalOptions.help) {
+    console.log(SNAPSHOT_HELP);
+    return;
+  }
 
   // Get session
   let session: SessionData | null;
@@ -94,7 +130,7 @@ export async function snapshotCommand(
       const beforeSnapshot: PageSnapshot = JSON.parse(beforeContent);
       const diff = diffSnapshots(beforeSnapshot, snapshot);
 
-      if (globalOptions.output === 'json') {
+      if (globalOptions.format === 'json') {
         output(diff, 'json');
       } else {
         console.log(formatDiffPretty(diff));
@@ -122,7 +158,7 @@ export async function snapshotCommand(
     // Output based on format
     switch (options.format) {
       case 'interactive':
-        output(snapshot.interactiveElements, globalOptions.output);
+        output(snapshot.interactiveElements, globalOptions.format);
         break;
 
       case 'text':
@@ -130,7 +166,7 @@ export async function snapshotCommand(
         console.log(snapshot.text);
         break;
       default:
-        output(snapshot, globalOptions.output);
+        output(snapshot, globalOptions.format);
         break;
     }
   } finally {

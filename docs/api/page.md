@@ -664,6 +664,121 @@ interface PageSnapshot {
 }
 ```
 
+## Audio I/O
+
+Test voice/audio AI agents by injecting microphone input and capturing audio output. Designed for apps that take several seconds to respond with audio.
+
+### setupAudio()
+
+Set up audio input and output interception. Called automatically by other audio methods if needed.
+
+```typescript
+await page.setupAudio();
+```
+
+Grants microphone permissions, injects `getUserMedia` override, and sets up audio output capture hooks.
+
+### audioInput
+
+Lazy getter for the `AudioInput` controller. Controls the fake microphone stream.
+
+```typescript
+// Play audio into the page's microphone
+const audioData = await fs.readFile('question.wav');
+await page.audioInput.play(new Uint8Array(audioData), { waitForEnd: true });
+```
+
+**Methods:**
+- `setup()` - Initialize microphone override (called by `setupAudio()`)
+- `play(data, options?)` - Feed audio bytes into the fake microphone
+- `stop()` - Stop current playback
+- `getState()` - Get current state (`idle`, `playing`, `setup`)
+- `teardown()` - Remove all hooks
+
+### audioOutput
+
+Lazy getter for the `AudioOutput` controller. Captures audio coming from the page.
+
+```typescript
+// Start/stop manual capture
+await page.audioOutput.start();
+// ... wait for audio ...
+const capture = await page.audioOutput.stop();
+console.log(`Captured ${capture.durationMs}ms of audio`);
+
+// Capture until silence (typical for voice agents)
+const capture = await page.audioOutput.captureUntilSilence({
+  silenceTimeout: 5000,   // Wait 5s of silence (voice agents are slow)
+  silenceThreshold: 0.01, // RMS threshold
+  maxDuration: 300000,    // Safety cap
+});
+```
+
+**Methods:**
+- `setup()` - Initialize output capture hooks (called by `setupAudio()`)
+- `start()` - Begin capturing audio output
+- `stop()` - Stop capturing, return `CaptureResult`
+- `captureUntilSilence(options)` - Capture until silence detected
+- `teardown()` - Remove all hooks
+
+**`CaptureResult`:**
+- `left: Float32Array` - Left channel PCM data
+- `right: Float32Array` - Right channel PCM data
+- `sampleRate: number` - Sample rate (typically 48000)
+- `durationMs: number` - Duration in milliseconds
+- `chunkCount: number` - Number of chunks received
+
+### audioRoundTrip(options)
+
+Full voice round-trip: play input audio, then capture the response until silence.
+
+```typescript
+const audioData = await fs.readFile('question.wav');
+const result = await page.audioRoundTrip({
+  input: new Uint8Array(audioData),
+  silenceTimeout: 5000,   // Voice agents take 2-8s to respond
+  timeout: 120000,        // Max total time
+  preDelay: 500,          // Wait 500ms before playing
+});
+
+console.log(`Latency: ${result.latencyMs}ms`);
+console.log(`Response: ${result.audio.durationMs}ms of audio`);
+```
+
+**Options:**
+- `input: Uint8Array` - Audio bytes to play as microphone input
+- `silenceTimeout?: number` - Stop after N ms of silence (default: 3000)
+- `silenceThreshold?: number` - RMS threshold for silence (default: 0.01)
+- `timeout?: number` - Max total time (default: 120000)
+- `preDelay?: number` - Wait before playing input (default: 0)
+
+**Returns:** `RoundTripResult`
+- `audio: CaptureResult` - Captured response audio
+- `latencyMs: number` - Time from input start to first audio response
+- `totalMs: number` - Total round-trip time
+
+### Transcription
+
+Transcribe captured audio via OpenAI Whisper (requires `OPENAI_API_KEY`).
+
+```typescript
+import { transcribe } from 'browser-pilot';
+
+const capture = await page.audioOutput.captureUntilSilence({
+  silenceTimeout: 5000,
+});
+
+const result = await transcribe(capture, { language: 'en' });
+console.log(result.text);        // "The answer is forty-two"
+console.log(result.apiDurationMs); // ~1200 (Whisper is fast)
+```
+
+**Options:**
+- `apiKey?: string` - OpenAI API key (defaults to `OPENAI_API_KEY` env var)
+- `model?: string` - Whisper model (default: `whisper-1`)
+- `language?: string` - Language hint (BCP-47, e.g. `en`)
+- `responseFormat?: string` - Response format (default: `text`)
+
 ## Errors
 
 ```typescript
