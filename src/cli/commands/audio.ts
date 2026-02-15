@@ -316,7 +316,9 @@ const CHECK_DIAGNOSTICS_EXPRESSION = `
     },
     contexts: contexts,
     input: input,
-    output: outputStats
+    output: outputStats,
+    rtcDetails: outputStats ? outputStats.rtcDetails : [],
+    mediaElementDetails: outputStats ? outputStats.mediaElementDetails : []
   });
 })()
 `;
@@ -340,6 +342,19 @@ interface CheckDiagnostics {
     capturing: boolean;
     bufferedSamples: number;
   } | null;
+  rtcDetails: Array<{
+    state: string;
+    audioReceivers: number;
+    audioSenders: number;
+    tapped: boolean;
+  }>;
+  mediaElementDetails: Array<{
+    tag: string;
+    hasSrcObject: boolean;
+    hasSrc: boolean;
+    audioTracks: number;
+    tapped: boolean;
+  }>;
 }
 
 function classifyContextRole(
@@ -427,6 +442,37 @@ function formatCheckPretty(diag: CheckDiagnostics): string {
     lines.push('  Output (capture):  not set up');
   }
 
+  // WebRTC section
+  if (diag.rtcDetails && diag.rtcDetails.length > 0) {
+    lines.push('');
+    lines.push('  RTCPeerConnections:');
+    for (let i = 0; i < diag.rtcDetails.length; i++) {
+      const pc = diag.rtcDetails[i]!;
+      const tappedLabel = pc.tapped ? ', tapped' : '';
+      lines.push(
+        `    PC #${i + 1}: ${pc.state}, ${pc.audioReceivers} audio receiver${pc.audioReceivers !== 1 ? 's' : ''}${tappedLabel}, ${pc.audioSenders} audio sender${pc.audioSenders !== 1 ? 's' : ''}`
+      );
+    }
+  }
+
+  // Media elements section
+  if (diag.mediaElementDetails && diag.mediaElementDetails.length > 0) {
+    lines.push('');
+    lines.push('  MediaElements:');
+    for (let i = 0; i < diag.mediaElementDetails.length; i++) {
+      const el = diag.mediaElementDetails[i]!;
+      const parts: string[] = [`<${el.tag}>`];
+      if (el.hasSrcObject) {
+        parts.push(
+          `srcObject (${el.audioTracks} audio track${el.audioTracks !== 1 ? 's' : ''}${el.tapped ? ', tapped' : ''})`
+        );
+      } else if (el.hasSrc) {
+        parts.push('src attribute');
+      }
+      lines.push(`    ${parts.join(' ')}`);
+    }
+  }
+
   // Overall status
   lines.push('');
   const allOverrides =
@@ -461,6 +507,19 @@ interface CheckJsonResult {
     isPlaying: boolean;
   } | null;
   output: { ready: boolean; taps: number; capturing: boolean } | null;
+  rtcPeerConnections: Array<{
+    state: string;
+    audioReceivers: number;
+    audioSenders: number;
+    tapped: boolean;
+  }>;
+  mediaElements: Array<{
+    tag: string;
+    hasSrcObject: boolean;
+    hasSrc: boolean;
+    audioTracks: number;
+    tapped: boolean;
+  }>;
   agentDetected: boolean;
   agentSampleRate: number | null;
 }
@@ -498,6 +557,8 @@ function buildCheckJson(diag: CheckDiagnostics): CheckJsonResult {
           capturing: diag.output.capturing,
         }
       : null,
+    rtcPeerConnections: diag.rtcDetails ?? [],
+    mediaElements: diag.mediaElementDetails ?? [],
     agentDetected: agentCtx !== undefined,
     agentSampleRate: agentCtx?.sampleRate ?? null,
   };

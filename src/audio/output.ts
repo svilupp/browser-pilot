@@ -5,7 +5,9 @@
  * 1. AudioContext constructor tracking + per-context ScriptProcessorNode taps
  * 2. AudioNode.connect override to tap connections to AudioDestinationNode
  * 3. HTMLMediaElement.play interception via captureStream
+ * 3b. HTMLMediaElement.srcObject setter override for WebRTC MediaStreams
  * 4. RTCPeerConnection override to capture WebRTC audio tracks
+ * 5. MutationObserver for dynamically created media elements
  *
  * Uses ScriptProcessorNode to tap PCM data, transfers to Node.js
  * via Runtime.addBinding.
@@ -191,6 +193,28 @@ const AUDIO_OUTPUT_SCRIPT = `
     return origPlay.apply(this, arguments);
   };
 
+  // Intercept srcObject assignment to catch WebRTC streams attached to media elements
+  var origSrcObjectDesc = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'srcObject');
+  if (origSrcObjectDesc && origSrcObjectDesc.set) {
+    Object.defineProperty(HTMLMediaElement.prototype, 'srcObject', {
+      set: function(stream) {
+        origSrcObjectDesc.set.call(this, stream);
+        if (stream && stream.getAudioTracks) {
+          var tracks = stream.getAudioTracks();
+          for (var i = 0; i < tracks.length; i++) {
+            if (capturing) {
+              tapAudioTrack(tracks[i]);
+            } else {
+              pendingTracks.push(tracks[i]);
+            }
+          }
+        }
+      },
+      get: origSrcObjectDesc.get,
+      configurable: true
+    });
+  }
+
   // Initialize our own 48kHz capture context for WebRTC and media element tapping
   function initCaptureCtx() {
     captureCtx = new OrigAudioContext({ sampleRate: 48000 });
@@ -360,10 +384,59 @@ const AUDIO_OUTPUT_SCRIPT = `
       for (var k = 0; k < rtcPeerConnections.length; k++) {
         tapExistingPeerConnection(rtcPeerConnections[k]);
       }
+
+      // Scan existing media elements for srcObject with audio tracks
+      var mediaEls = document.querySelectorAll('audio, video');
+      for (var i = 0; i < mediaEls.length; i++) {
+        var el = mediaEls[i];
+        if (el.srcObject && el.srcObject.getAudioTracks && !el.__bpCaptured) {
+          el.__bpCaptured = true;
+          var tracks = el.srcObject.getAudioTracks();
+          for (var j = 0; j < tracks.length; j++) {
+            tapAudioTrack(tracks[j]);
+          }
+        }
+      }
+
+      // Watch for dynamically added media elements with srcObject
+      if (typeof MutationObserver !== 'undefined') {
+        if (window.__bpMediaObserver) {
+          window.__bpMediaObserver.disconnect();
+        }
+        window.__bpMediaObserver = new MutationObserver(function(mutations) {
+          for (var i = 0; i < mutations.length; i++) {
+            var added = mutations[i].addedNodes;
+            for (var j = 0; j < added.length; j++) {
+              var node = added[j];
+              if (node.nodeType !== 1) continue;
+              var els = [];
+              if (node.tagName === 'AUDIO' || node.tagName === 'VIDEO') els.push(node);
+              else if (node.querySelectorAll) {
+                var nested = node.querySelectorAll('audio, video');
+                for (var k = 0; k < nested.length; k++) els.push(nested[k]);
+              }
+              for (var m = 0; m < els.length; m++) {
+                var el = els[m];
+                if (el.srcObject && el.srcObject.getAudioTracks && !el.__bpCaptured) {
+                  el.__bpCaptured = true;
+                  var tracks = el.srcObject.getAudioTracks();
+                  for (var t = 0; t < tracks.length; t++) tapAudioTrack(tracks[t]);
+                }
+              }
+            }
+          }
+        });
+        window.__bpMediaObserver.observe(document, { childList: true, subtree: true });
+      }
     },
     stop: function() {
       capturing = false;
       flushToNodeJs();
+      // Disconnect MutationObserver
+      if (window.__bpMediaObserver) {
+        window.__bpMediaObserver.disconnect();
+        window.__bpMediaObserver = null;
+      }
     },
     isCapturing: function() { return capturing; },
     getBufferedSamples: function() { return totalSamples; },
@@ -396,7 +469,43 @@ const AUDIO_OUTPUT_SCRIPT = `
         pendingTracks: pendingTracks.length,
         tappedTracks: Object.keys(tappedTrackIds).length,
         capturing: capturing,
-        bufferedSamples: totalSamples
+        bufferedSamples: totalSamples,
+        rtcDetails: rtcPeerConnections.map(function(pc) {
+          try {
+            var receivers = pc.getReceivers ? pc.getReceivers() : [];
+            var senders = pc.getSenders ? pc.getSenders() : [];
+            var audioReceivers = receivers.filter(function(r) { return r.track && r.track.kind === 'audio'; }).length;
+            var audioSenders = senders.filter(function(s) { return s.track && s.track.kind === 'audio'; }).length;
+            return {
+              state: pc.connectionState || pc.iceConnectionState || 'unknown',
+              audioReceivers: audioReceivers,
+              audioSenders: audioSenders,
+              tapped: receivers.some(function(r) { return r.track && tappedTrackIds[r.track.id]; })
+            };
+          } catch(e) { return { state: 'error', audioReceivers: 0, audioSenders: 0, tapped: false }; }
+        }),
+        mediaElementDetails: (function() {
+          try {
+            var els = document.querySelectorAll('audio, video');
+            var details = [];
+            for (var i = 0; i < els.length; i++) {
+              var el = els[i];
+              var hasSrcObject = !!(el.srcObject);
+              var audioTracks = 0;
+              if (el.srcObject && el.srcObject.getAudioTracks) {
+                audioTracks = el.srcObject.getAudioTracks().length;
+              }
+              details.push({
+                tag: el.tagName.toLowerCase(),
+                hasSrcObject: hasSrcObject,
+                hasSrc: !!(el.src || el.currentSrc),
+                audioTracks: audioTracks,
+                tapped: !!(el.__bpCaptured)
+              });
+            }
+            return details;
+          } catch(e) { return []; }
+        })()
       };
     }
   };

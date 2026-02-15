@@ -421,4 +421,102 @@ describe('AudioOutput', () => {
     expect(source).toContain('tapExistingPeerConnection');
     expect(source).toContain('__bpTrackedPCs');
   });
+
+  test('injected script overrides HTMLMediaElement.srcObject setter', async () => {
+    const cdp = createMockCDPClient();
+    const output = new AudioOutput(cdp as unknown as CDPClient);
+    await output.setup();
+
+    const scriptCall = cdp
+      .findAllCalls('Page.addScriptToEvaluateOnNewDocument')
+      .find((c) => (c.params!['source'] as string).includes('__bpAudioOutput'));
+    const source = scriptCall!.params!['source'] as string;
+
+    expect(source).toContain('srcObject');
+    expect(source).toContain('origSrcObjectDesc');
+    expect(source).toContain('Object.defineProperty(HTMLMediaElement.prototype');
+    expect(source).toContain('getAudioTracks');
+  });
+
+  test('srcObject override queues pending tracks when not capturing', async () => {
+    const cdp = createMockCDPClient();
+    const output = new AudioOutput(cdp as unknown as CDPClient);
+    await output.setup();
+
+    const scriptCall = cdp
+      .findAllCalls('Page.addScriptToEvaluateOnNewDocument')
+      .find((c) => (c.params!['source'] as string).includes('__bpAudioOutput'));
+    const source = scriptCall!.params!['source'] as string;
+
+    // When not capturing, tracks should be pushed to pendingTracks
+    expect(source).toContain('pendingTracks.push');
+    // When capturing, tracks should be tapped immediately
+    expect(source).toContain('tapAudioTrack(tracks[i])');
+  });
+
+  test('start handler scans existing media elements for srcObject', async () => {
+    const cdp = createMockCDPClient();
+    const output = new AudioOutput(cdp as unknown as CDPClient);
+    await output.setup();
+
+    const scriptCall = cdp
+      .findAllCalls('Page.addScriptToEvaluateOnNewDocument')
+      .find((c) => (c.params!['source'] as string).includes('__bpAudioOutput'));
+    const source = scriptCall!.params!['source'] as string;
+
+    // start() should query for existing audio/video elements
+    expect(source).toContain("querySelectorAll('audio, video')");
+    expect(source).toContain('el.srcObject');
+    expect(source).toContain('__bpCaptured');
+  });
+
+  test('start handler sets up MutationObserver for dynamic media elements', async () => {
+    const cdp = createMockCDPClient();
+    const output = new AudioOutput(cdp as unknown as CDPClient);
+    await output.setup();
+
+    const scriptCall = cdp
+      .findAllCalls('Page.addScriptToEvaluateOnNewDocument')
+      .find((c) => (c.params!['source'] as string).includes('__bpAudioOutput'));
+    const source = scriptCall!.params!['source'] as string;
+
+    // MutationObserver setup in start
+    expect(source).toContain('MutationObserver');
+    expect(source).toContain('__bpMediaObserver');
+    expect(source).toContain('observe(document');
+    expect(source).toContain('childList: true');
+    expect(source).toContain('subtree: true');
+  });
+
+  test('stop handler disconnects MutationObserver', async () => {
+    const cdp = createMockCDPClient();
+    const output = new AudioOutput(cdp as unknown as CDPClient);
+    await output.setup();
+
+    const scriptCall = cdp
+      .findAllCalls('Page.addScriptToEvaluateOnNewDocument')
+      .find((c) => (c.params!['source'] as string).includes('__bpAudioOutput'));
+    const source = scriptCall!.params!['source'] as string;
+
+    // stop() should disconnect the observer
+    expect(source).toContain('__bpMediaObserver');
+    expect(source).toContain('.disconnect()');
+  });
+
+  test('getStats includes rtcDetails and mediaElementDetails', async () => {
+    const cdp = createMockCDPClient();
+    const output = new AudioOutput(cdp as unknown as CDPClient);
+    await output.setup();
+
+    const scriptCall = cdp
+      .findAllCalls('Page.addScriptToEvaluateOnNewDocument')
+      .find((c) => (c.params!['source'] as string).includes('__bpAudioOutput'));
+    const source = scriptCall!.params!['source'] as string;
+
+    expect(source).toContain('rtcDetails');
+    expect(source).toContain('mediaElementDetails');
+    expect(source).toContain('connectionState');
+    expect(source).toContain('audioReceivers');
+    expect(source).toContain('audioSenders');
+  });
 });
