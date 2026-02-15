@@ -201,32 +201,40 @@ Hints are action-aware—`click` suggests buttons/links, `fill` suggests inputs.
 
 Test audio-based AI agents (voice assistants, phone agents, audio chatbots) by injecting microphone input and capturing spoken responses.
 
-> **Full guide:** [VOICE_AGENT_TESTING.md](./VOICE_AGENT_TESTING.md) — setup, troubleshooting decision tree, validation checklist, multi-turn patterns.
+> **Full guide:** [VOICE_AGENT_TESTING.md](./VOICE_AGENT_TESTING.md) — setup patterns, troubleshooting decision tree, validation, multi-turn testing.
 
 **Requires:** `OPENAI_API_KEY` env var for `--transcribe`. Chrome with `--remote-debugging-port=9222`.
 
-### Quick Start
+### Critical Rule
+
+Audio overrides MUST be injected BEFORE the voice agent creates its `AudioContext`. Always: **setup → navigate → (click if needed) → check → roundtrip**.
+
+### Click-to-Start Agent (most common)
 
 ```bash
 bp connect --provider generic --name vt
+bp audio setup -s vt
 bp exec -s vt '{"action":"goto","url":"https://my-voice-app.com"}'
+sleep 2
+bp snapshot -s vt -i                                          # find the start button
+bp exec -s vt '{"action":"click","selector":"ref:e4"}'        # click it
 sleep 3
-bp audio check -s vt                # auto-sets up + validates pipeline
-bp audio roundtrip -s vt -i prompt.wav --transcribe --silence-timeout 1500
+bp audio check -s vt                                          # expect READY
+bp audio roundtrip -s vt -i prompt.wav --transcribe -o response.wav
 ```
 
-### Critical: Setup Order
-
-Audio overrides MUST exist BEFORE the voice agent creates its AudioContext. If the agent auto-starts on page load, reload after setup:
+### Auto-Start Agent
 
 ```bash
+bp connect --provider generic --name vt
 bp audio setup -s vt
 bp exec -s vt '{"action":"goto","url":"https://my-voice-app.com"}'
 sleep 3
-bp audio check -s vt   # expect "READY for roundtrip"
+bp audio check -s vt                                          # expect READY
+bp audio roundtrip -s vt -i prompt.wav --transcribe -o response.wav
 ```
 
-If `bp audio check` shows 0 AudioContexts or `NOT READY` — the agent initialized before overrides. Reload the page.
+If `bp audio check` shows 0 AudioContexts or NOT READY — the agent initialized before overrides. Re-run the same steps.
 
 ### Key Options
 
@@ -236,7 +244,7 @@ If `bp audio check` shows 0 AudioContexts or `NOT READY` — the agent initializ
 | `--transcribe` | off | Transcribe response via Whisper |
 | `--verbose` | off | Debug: per-chunk RMS, silence detection |
 | `-o response.wav` | none | Save response audio |
-| `--send-selector` | none | Push-to-talk UIs |
+| `--send-selector` | none | Push-to-talk UIs (click after speaking) |
 | `--pre-delay` | 0 | Wait before playing input |
 | `--json` | off | CI/scripting output |
 
