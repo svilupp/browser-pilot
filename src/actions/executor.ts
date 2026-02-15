@@ -278,10 +278,31 @@ export class BatchExecutor {
         return {};
       }
 
-      default:
-        throw new Error(
-          `Unknown action: ${(step as Step).action}. Run 'bp actions' for available actions.`
-        );
+      default: {
+        const action = (step as Step).action;
+        const aliases: Record<string, string> = {
+          execute: 'evaluate',
+          navigate: 'goto',
+          input: 'fill',
+          tap: 'click',
+          go: 'goto',
+          run: 'evaluate',
+          capture: 'screenshot',
+          inspect: 'snapshot',
+          enter: 'press',
+          open: 'goto',
+          visit: 'goto',
+          eval: 'evaluate',
+          js: 'evaluate',
+          snap: 'snapshot',
+          frame: 'switchFrame',
+        };
+        const suggestion = aliases[action.toLowerCase()];
+        const hint = suggestion ? ` Did you mean "${suggestion}"?` : '';
+        const valid =
+          'goto, click, fill, type, select, check, uncheck, submit, press, focus, hover, scroll, wait, snapshot, screenshot, evaluate, text, switchFrame, switchToMain';
+        throw new Error(`Unknown action "${action}".${hint}\n\nValid actions: ${valid}`);
+      }
     }
   }
 

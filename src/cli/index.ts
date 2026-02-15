@@ -3,13 +3,14 @@
  * browser-pilot CLI - Browser automation for AI agents
  *
  * Key workflow:
- *   1. bp snapshot --format text    → Get page with element refs [ref=e4]
+ *   1. bp snapshot -i               → Get interactive elements with refs [ref=e4]
  *   2. bp exec '{"selector":"ref:e4",...}'  → Use refs for reliable targeting
  *
  * Commands:
  *   quickstart  Getting started guide
  *   connect     Create browser session
  *   exec        Execute actions (supports --dialog accept|dismiss)
+ *   audio       Audio I/O for voice agent testing
  *   snapshot    Get page snapshot with element refs
  *   text        Extract text content
  *   screenshot  Take screenshot
@@ -22,10 +23,12 @@
  */
 
 import { actionsCommand } from './commands/actions.ts';
+import { audioCommand } from './commands/audio.ts';
 import { cleanCommand } from './commands/clean.ts';
 import { closeCommand } from './commands/close.ts';
 import { connectCommand } from './commands/connect.ts';
 import { diagnoseCommand } from './commands/diagnose.ts';
+import { evalCommand } from './commands/eval.ts';
 import { execCommand } from './commands/exec.ts';
 import { listCommand } from './commands/list.ts';
 import { quickstartCommand } from './commands/quickstart.ts';
@@ -44,7 +47,9 @@ Commands:
   quickstart  Getting started guide (start here!)
   connect     Create browser session
   exec        Execute actions
+  eval        Evaluate JavaScript expression
   record      Record browser actions to JSON
+  audio       Audio I/O for voice agent testing
   snapshot    Get page with element refs
   diagnose    Debug element selection issues
   text        Extract text content
@@ -64,14 +69,15 @@ Options:
 
 Examples:
   bp connect --provider generic --name dev
-  bp connect -s test --export-log ./logs/test.jsonl
   bp exec '{"action":"goto","url":"https://example.com"}'
-  bp snapshot --format text
-  bp list --json                   # JSON output
+  bp snapshot -i
   bp exec '{"action":"click","selector":"ref:e3"}'
+  bp eval 'document.title'
+  bp audio roundtrip -i prompt.wav --transcribe --silence-timeout 5000
 
 Run 'bp quickstart' for CLI workflow guide.
 Run 'bp actions' for complete action reference.
+Run 'bp audio --help' for voice agent testing guide.
 `;
 
 interface GlobalOptions {
@@ -178,6 +184,10 @@ async function main(): Promise<void> {
         await execCommand(remaining, options);
         break;
 
+      case 'eval':
+        await evalCommand(remaining, options);
+        break;
+
       case 'snapshot':
         await snapshotCommand(remaining, options);
         break;
@@ -212,6 +222,10 @@ async function main(): Promise<void> {
 
       case 'record':
         await recordCommand(remaining, options);
+        break;
+
+      case 'audio':
+        await audioCommand(remaining, options);
         break;
 
       case 'help':

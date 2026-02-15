@@ -34,6 +34,7 @@ await browser.close();
 | Single-selector API (fragile) | Multi-selector by default: `['#primary', '.fallback']` |
 | No action batching (high latency) | Batch DSL: one call for entire sequences |
 | No AI-optimized snapshots | Built-in accessibility tree extraction |
+| No audio I/O for voice agents | Mic injection + output capture + Whisper transcription |
 
 ## Installation
 
@@ -246,6 +247,26 @@ await page.setLocale('fr-FR');
 
 Devices: `iPhone 14`, `iPhone 14 Pro Max`, `Pixel 7`, `iPad Pro 11`, `Desktop Chrome`, `Desktop Firefox`
 
+### Audio I/O
+
+```typescript
+// Set up audio input/output interception
+await page.setupAudio();
+
+// Play audio into the page's fake microphone
+await page.audioInput.play(wavBytes, { waitForEnd: true });
+
+// Capture audio output until silence
+const capture = await page.audioOutput.captureUntilSilence({ silenceTimeout: 5000 });
+
+// Full round-trip: play input → capture response
+const result = await page.audioRoundTrip({ input: wavBytes, silenceTimeout: 5000 });
+
+// Transcribe captured audio (requires OPENAI_API_KEY)
+import { transcribe } from 'browser-pilot';
+const { text } = await transcribe(capture);
+```
+
 ### Request Interception
 
 ```typescript
@@ -402,6 +423,40 @@ Output:
 ```
 
 Run `bp actions` for complete action reference.
+
+### Voice Agent Testing
+
+Test audio-based AI apps (voice assistants, phone agents) by injecting microphone input and capturing spoken responses:
+
+```bash
+# Full round-trip: send audio prompt → wait for response → transcribe
+export OPENAI_API_KEY=sk-...  # Required for --transcribe
+bp audio roundtrip -i question.wav --transcribe --silence-timeout 5000
+# Output: { "transcript": "The answer is 42", "latencyMs": 1200, ... }
+
+# Capture audio output and transcribe
+bp audio capture --transcribe --silence-timeout 8000
+
+# Save response audio for manual review
+bp audio roundtrip -i prompt.wav -o response.wav --transcribe
+```
+
+Programmatic API:
+
+```typescript
+await page.setupAudio();
+
+// Play audio into the page's fake microphone, capture response
+const result = await page.audioRoundTrip({
+  input: audioBytes,
+  silenceTimeout: 5000, // Voice agents take 2-8s to respond
+});
+
+// Transcribe the response
+import { transcribe } from 'browser-pilot';
+const { text } = await transcribe(result.audio);
+console.log(text); // "The answer is forty-two"
+```
 
 ### Recording Browser Actions
 

@@ -27,6 +27,8 @@ function parseSnapshotArgs(args: string[]): SnapshotOptions {
       options.format = args[++i] as SnapshotOptions['format'];
     } else if (arg === '--diff' || arg === '-d') {
       options.diffFile = args[++i];
+    } else if (arg === '--interactive' || arg === '-i') {
+      options.format = 'interactive';
     } else if (arg === '--inspect') {
       options.inspect = true;
     } else if (arg === '--keep') {

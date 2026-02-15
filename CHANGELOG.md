@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.0.9] - 2025-02-15
+
+### Added
+
+- **Audio I/O** — `page.setupAudio()`, `page.audioRoundTrip()` for voice agent testing via JS injection (fake mic input + output capture), with `bp audio` CLI command and optional Whisper transcription (requires `OPENAI_API_KEY` env var)
+- `validateSteps()` — pre-flight validation for batch steps with fuzzy action/property matching and actionable error messages
+- Improved executor error on unknown actions: suggests aliases and lists valid actions
+
 ## [0.0.8] - 2025-02-01
 
 ### Added

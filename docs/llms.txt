@@ -17,8 +17,8 @@ bp exec '{"action":"goto","url":"https://example.com"}'
 bp exec '[{"action":"fill","selector":"#q","value":"test"},{"action":"submit","selector":"form"}]' --json
 
 # Get page state
-bp snapshot --format text          # Accessibility tree
-bp snapshot --format interactive   # Clickable elements only
+bp snapshot -i                     # Interactive elements only (recommended)
+bp snapshot --format text          # Full accessibility tree
 
 # Session management
 bp list                            # List sessions

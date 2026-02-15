@@ -352,13 +352,13 @@ describe('Iframe Actions', () => {
 });
 
 describe('Error Messages', () => {
-  test('should reference bp actions on unknown action', async () => {
+  test('should reference valid actions on unknown action', async () => {
     const page = createMockPage();
     const executor = new BatchExecutor(page as unknown as Page);
 
     const result = await executor.execute([{ action: 'unknownAction' as ActionType }]);
 
     expect(result.success).toBe(false);
-    expect(result.steps[0]?.error).toContain('bp actions');
+    expect(result.steps[0]?.error).toContain('Valid actions:');
   });
 });

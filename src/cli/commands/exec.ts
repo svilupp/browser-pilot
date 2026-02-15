@@ -2,7 +2,7 @@
  * Exec command - Execute actions on current session
  */
 
-import { addBatchToPage, connect, type Step } from '../../index.ts';
+import { addBatchToPage, connect, type Step, validateSteps } from '../../index.ts';
 import { output } from '../index.ts';
 import {
   deleteSession,
@@ -36,8 +36,11 @@ interface ExecOptions {
   dialog?: 'accept' | 'dismiss';
 }
 
-function parseExecArgs(args: string[]): { actionsJson: string | undefined; options: ExecOptions } {
-  const options: ExecOptions = {};
+function parseExecArgs(args: string[]): {
+  actionsJson: string | undefined;
+  options: ExecOptions & { file?: string };
+} {
+  const options: ExecOptions & { file?: string } = {};
   let actionsJson: string | undefined;
 
   for (let i = 0; i < args.length; i++) {
@@ -49,6 +52,8 @@ function parseExecArgs(args: string[]): { actionsJson: string | undefined; optio
       } else {
         throw new Error('--dialog must be "accept" or "dismiss"');
       }
+    } else if (arg === '-f' || arg === '--file') {
+      options.file = args[++i];
     } else if (!actionsJson && !arg.startsWith('-')) {
       actionsJson = arg;
     }
@@ -62,7 +67,22 @@ export async function execCommand(
   globalOptions: { session?: string; output?: 'json' | 'pretty'; trace?: boolean }
 ): Promise<void> {
   // Parse exec-specific options
-  const { actionsJson, options: execOptions } = parseExecArgs(args);
+  let { actionsJson, options: execOptions } = parseExecArgs(args);
+
+  // Read actions from file if -f specified
+  if (execOptions.file) {
+    const fs = await import('node:fs/promises');
+    actionsJson = await fs.readFile(execOptions.file, 'utf-8');
+  }
+
+  // Read from stdin if no actions and stdin is piped
+  if (!actionsJson && !process.stdin.isTTY) {
+    const chunks: Buffer[] = [];
+    for await (const chunk of process.stdin) {
+      chunks.push(chunk as Buffer);
+    }
+    actionsJson = Buffer.concat(chunks).toString('utf-8').trim();
+  }
 
   // Validate actions first (doesn't require session - better error message)
   if (!actionsJson) {
@@ -75,9 +95,19 @@ export async function execCommand(
   try {
     actions = JSON.parse(actionsJson);
   } catch {
+    const snippet = actionsJson!.substring(0, 80);
     throw new Error(
-      "Invalid JSON. Actions must be valid JSON.\n\nRun 'bp actions' for complete action reference."
+      `Invalid JSON: ${snippet}${actionsJson!.length > 80 ? '...' : ''}\n\n` +
+        "Actions must be valid JSON. Tip: use 'bp exec -f actions.json' for complex steps.\n" +
+        "Run 'bp actions' for complete action reference."
     );
+  }
+
+  // Validate step structure before connecting to browser
+  const stepsToValidate = Array.isArray(actions) ? actions : [actions];
+  const validation = validateSteps(stepsToValidate);
+  if (!validation.valid) {
+    throw new Error(validation.formatted());
   }
 
   // Get session (only after actions are validated)
@@ -183,24 +213,34 @@ export async function execCommand(
     }
 
     // Output result
+    const outputSteps = result.steps.map((s) => ({
+      action: s.action,
+      success: s.success,
+      durationMs: s.durationMs,
+      selectorUsed: s.selectorUsed,
+      error: s.error,
+      text: s.text,
+      result: s.result,
+    }));
+
     output(
       {
         success: result.success,
         stoppedAtIndex: result.stoppedAtIndex,
-        steps: result.steps.map((s) => ({
-          action: s.action,
-          success: s.success,
-          durationMs: s.durationMs,
-          selectorUsed: s.selectorUsed,
-          error: s.error,
-          text: s.text,
-          result: s.result,
-        })),
+        steps: outputSteps,
         totalDurationMs: result.totalDurationMs,
         currentUrl,
       },
       globalOptions.output
     );
+
+    // Tip: suggest bp eval when an evaluate action fails
+    const failedEval = result.steps.find((s) => s.action === 'evaluate' && !s.success);
+    if (failedEval) {
+      console.error(
+        '\nTip: Use "bp eval \'expression\'" for simpler JavaScript evaluation (no JSON escaping needed).'
+      );
+    }
   } finally {
     await browser.disconnect();
   }
