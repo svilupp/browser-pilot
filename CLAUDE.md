@@ -95,6 +95,7 @@ Complex patterns (custom dropdowns, multi-step forms) are composed from primitiv
 | Transcription (Whisper) | `src/audio/transcribe.ts` |
 | CLI | `src/cli/index.ts` |
 | CLI audio command | `src/cli/commands/audio.ts` (subcommands: setup, play, capture, roundtrip, check) |
+| CLI listen command | `src/cli/commands/listen.ts` (network traffic monitor: ws, http, all) |
 
 ## Audio I/O Pattern
 

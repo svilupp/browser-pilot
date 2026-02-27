@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.0.10] - 2026-02-27
+
+### Added
+
+- `bp listen` command — monitor WebSocket and HTTP traffic via CDP, output as structured JSONL. Supports mode filtering (`ws`, `http`, `all`), URL glob matching (`-m`), file output (`-o`), and auto-stop timeout. Pipeable to `jq` for live filtering.
+
 ## [0.0.9] - 2025-02-15
 
 ### Added

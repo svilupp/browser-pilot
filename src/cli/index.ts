@@ -31,6 +31,7 @@ import { diagnoseCommand } from './commands/diagnose.ts';
 import { evalCommand } from './commands/eval.ts';
 import { execCommand } from './commands/exec.ts';
 import { listCommand } from './commands/list.ts';
+import { listenCommand } from './commands/listen.ts';
 import { quickstartCommand } from './commands/quickstart.ts';
 import { recordCommand } from './commands/record.ts';
 import { screenshotCommand } from './commands/screenshot.ts';
@@ -50,6 +51,7 @@ Commands:
   eval        Evaluate JavaScript expression
   record      Record browser actions to JSON
   audio       Audio I/O for voice agent testing
+  listen      Monitor network traffic (WebSocket/HTTP)
   snapshot    Get page with element refs
   diagnose    Debug element selection issues
   text        Extract text content
@@ -236,6 +238,10 @@ async function main(): Promise<void> {
 
       case 'audio':
         await audioCommand(remaining, options);
+        break;
+
+      case 'listen':
+        await listenCommand(remaining, options);
         break;
 
       case 'help':

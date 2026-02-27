@@ -533,6 +533,26 @@ Transcription adds ~1-2s overhead (Whisper API). Safe to use in hot loops and CI
 
 Use `--language <lang>` (e.g. `en`, `es`, `ja`) to improve accuracy for non-English audio.
 
+## Network Traffic Monitoring
+
+Use `bp listen` to monitor WebSocket and HTTP traffic as structured JSONL. Useful for debugging voice agent protocols, API calls, and real-time connections.
+
+```bash
+# WebSocket traffic only (e.g. voice agent protocol)
+bp listen ws -m "*realtime*" -o ws-trace.jsonl
+
+# HTTP API calls
+bp listen http -m "*/api/*" --max-payload 1024
+
+# All traffic, auto-stop after 60s
+bp listen all -o full-trace.jsonl --timeout 60000
+
+# Pipe to jq for live filtering
+bp listen ws | jq 'select(.type == "ws:frame:recv")'
+```
+
+Output is JSONL with event types: `ws:created`, `ws:frame:sent`, `ws:frame:recv`, `ws:closed`, `http:request`, `http:response`, `http:failed`.
+
 ## Troubleshooting
 
 ### "Element not found" for Shadow DOM
