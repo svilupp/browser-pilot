@@ -20,6 +20,11 @@ bp exec '[{"action":"fill","selector":"#q","value":"test"},{"action":"submit","s
 bp snapshot -i                     # Interactive elements only (recommended)
 bp snapshot --format text          # Full accessibility tree
 
+# Monitor network traffic
+bp listen ws -m "*realtime*"       # WebSocket traffic matching pattern
+bp listen http -m "*/api/*"        # HTTP traffic, filtered
+bp listen all -o trace.jsonl       # All traffic to file
+
 # Session management
 bp list                            # List sessions
 bp close -s <session-id>           # Close session

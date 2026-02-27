@@ -332,6 +332,43 @@ bp audio roundtrip -i prompt.wav --verbose --transcribe --silence-timeout 1500
 - Use `bp audio check` to validate the pipeline before testing.
 - Use `--json` for structured output in CI/scripting.
 
+### listen
+
+Monitor network traffic (WebSocket/HTTP) via CDP. Outputs structured JSONL to stdout, status messages to stderr.
+
+```bash
+bp listen <mode> [options]
+```
+
+**Modes:**
+- `ws` - WebSocket traffic only
+- `http` - HTTP requests/responses only
+- `all` - Both WebSocket and HTTP
+
+**Options:**
+- `-s, --session [id]` - Session to use (omit: auto-connect, `-s`: latest, `-s <id>`: specific)
+- `-m, --match <glob>` - Filter by URL glob pattern (e.g. `"*realtime*"`)
+- `-o, --output <file>` - Write JSONL to file instead of stdout
+- `--max-payload <n>` - Max text payload preview length (default: 256)
+- `--timeout <ms>` - Auto-stop after N milliseconds
+- `-q, --quiet` - Suppress stderr status messages
+
+**Examples:**
+
+```bash
+# Debug a voice agent's WebSocket protocol
+bp listen ws -m "*voice*" -o voice-traffic.jsonl
+
+# Watch all API calls during a session
+bp listen http -m "*/api/*" --max-payload 1024
+
+# Capture everything for 60 seconds
+bp listen all -o full-trace.jsonl --timeout 60000
+
+# Pipe to jq for live filtering
+bp listen ws | jq 'select(.type == "ws:frame:recv")'
+```
+
 ### close
 
 Close a session.

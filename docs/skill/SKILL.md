@@ -63,6 +63,11 @@ bp eval 'document.querySelectorAll("audio").length'
 # Handle dialogs (CRITICAL - blocks without this)
 bp exec --dialog accept '{"action":"click","selector":"#delete-btn"}'
 
+# Monitor network traffic
+bp listen ws -m "*realtime*"   # WebSocket traffic (JSONL)
+bp listen http -m "*/api/*"    # HTTP traffic
+bp listen all -o trace.jsonl   # All traffic to file
+
 # Session management
 bp list                    # List sessions
 bp list --json             # JSON output

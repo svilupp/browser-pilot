@@ -376,6 +376,7 @@ bp exec --dialog accept '{"action":"click","selector":"#delete-btn"}'
 # Other commands
 bp text -s my-session --selector ".main-content"
 bp screenshot -s my-session --output page.png
+bp listen ws -m "*voice*"  # monitor WebSocket traffic
 bp list                    # list all sessions
 bp close -s my-session     # close session
 bp actions                 # show complete action reference
