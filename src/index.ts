@@ -70,6 +70,7 @@ export {
   type NetworkIdleOptions,
   Page,
   type PageError,
+  type PageOptions,
   type PageSnapshot,
   type SnapshotNode,
   type SubmitOptions,

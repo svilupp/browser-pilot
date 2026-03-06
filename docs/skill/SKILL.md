@@ -38,6 +38,8 @@ bp snapshot -i
 
 **Why refs?** Work in Shadow DOM, no CSS guessing, stable within page load, cached across CLI calls.
 
+**Stay on the high-level path.** Prefer `bp exec` actions like `click`, `fill`, `select`, `submit`, `check`, and `type`. If one of those fails, use `bp diagnose` or take a fresh snapshot before reaching for `bp eval`.
+
 ## Quick Reference
 
 ```bash
@@ -56,7 +58,7 @@ bp exec '[{"action":"click","selector":"ref:e4"}]'
 bp exec -f actions.json               # Read actions from file
 echo '{"action":"snapshot"}' | bp exec # Pipe from stdin
 
-# Evaluate JavaScript (no JSON wrapping needed)
+# Evaluate JavaScript (inspection / escape hatch)
 bp eval 'document.title'
 bp eval 'document.querySelectorAll("audio").length'
 
@@ -145,7 +147,7 @@ browser-pilot operates at the DOM level and cannot directly access framework sta
 {"action":"fill","selector":"#email","value":"user@example.com","blur":true}
 ```
 
-**Check state via evaluate:**
+**Check state via evaluate (inspection only):**
 ```bash
 bp eval 'window.__REACT_STATE__ || window.__VUEX_STATE__'
 ```
@@ -289,7 +291,7 @@ Run `bp audio check` first. Then see [VOICE_AGENT_TESTING.md](./VOICE_AGENT_TEST
 3. **Always use `--dialog`** when actions might trigger native dialogs
 4. **Use `blur: true` for React/Vue forms** - Ensures state sync on controlled inputs
 5. **Use `bp diagnose`** when selectors fail - Shows why and suggests alternatives
-6. **Use `bp eval`** for quick JS checks - No JSON wrapping needed
+6. **Use `bp eval` only as an escape hatch** - Great for inspection/debugging, not routine clicking or filling
 7. **Use `bp exec -f`** for complex multi-step actions - Avoids shell escaping
 8. **Use `--json` for scripting** - Cleaner than `-f json`
 9. **Use `--export-log` for debugging** - Keeps local copy of session logs

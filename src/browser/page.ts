@@ -28,7 +28,9 @@ import {
   waitForNetworkIdle as waitForIdle,
   waitForNavigation as waitForNav,
 } from '../wait/index.ts';
+import { ensureActionable } from './actionability.ts';
 import { generateHints } from './hint-generator.ts';
+import { type KeyDefinition, US_KEYBOARD } from './keyboard.ts';
 import {
   type ActionOptions,
   type ConsoleHandler,
@@ -59,6 +61,60 @@ import {
 } from './types.ts';
 
 const DEFAULT_TIMEOUT = 30000;
+const EVENT_LISTENER_TRACKER_SCRIPT = `(() => {
+  if (globalThis.__bpEventListenerTrackerInstalled) return;
+  Object.defineProperty(globalThis, '__bpEventListenerTrackerInstalled', {
+    value: true,
+    configurable: true,
+  });
+
+  const storeKey = '__bpEventListeners';
+  const originalAddEventListener = EventTarget.prototype.addEventListener;
+  const originalRemoveEventListener = EventTarget.prototype.removeEventListener;
+
+  function ensureStore(target) {
+    if (!Object.prototype.hasOwnProperty.call(target, storeKey)) {
+      Object.defineProperty(target, storeKey, {
+        value: Object.create(null),
+        configurable: true,
+      });
+    }
+    return target[storeKey];
+  }
+
+  EventTarget.prototype.addEventListener = function(type, listener, options) {
+    try {
+      if (listener) {
+        const store = ensureStore(this);
+        const bucket = store[type] || (store[type] = []);
+        const capture =
+          typeof options === 'boolean' ? options : !!(options && options.capture);
+        const exists = bucket.some((entry) => entry.listener === listener && entry.capture === capture);
+        if (!exists) {
+          bucket.push({ listener, capture });
+        }
+      }
+    } catch {}
+
+    return originalAddEventListener.call(this, type, listener, options);
+  };
+
+  EventTarget.prototype.removeEventListener = function(type, listener, options) {
+    try {
+      const store = this[storeKey];
+      const bucket = store && store[type];
+      const capture =
+        typeof options === 'boolean' ? options : !!(options && options.capture);
+      if (Array.isArray(bucket)) {
+        store[type] = bucket.filter((entry) => {
+          return !(entry.listener === listener && entry.capture === capture);
+        });
+      }
+    } catch {}
+
+    return originalRemoveEventListener.call(this, type, listener, options);
+  };
+})();`;
 
 export class Page {
   private cdp: CDPClient;
@@ -83,6 +139,8 @@ export class Page {
   private currentFrameContextId: number | null = null;
   /** Last matched selector from findElement (for selectorUsed tracking) */
   private _lastMatchedSelector: string | undefined;
+  /** Last snapshot for stale ref recovery */
+  private lastSnapshot?: PageSnapshot;
   /** Audio input controller (lazy-initialized) */
   private _audioInput?: AudioInput;
   /** Audio output controller (lazy-initialized) */
@@ -138,6 +196,10 @@ export class Page {
       for (const [frameId, ctxId] of this.frameExecutionContexts.entries()) {
         if (ctxId === contextId) {
           this.frameExecutionContexts.delete(frameId);
+          // Invalidate cached frame context so next action re-resolves it
+          if (this.currentFrameContextId === contextId) {
+            this.currentFrameContextId = null;
+          }
           break;
         }
       }
@@ -152,6 +214,22 @@ export class Page {
       this.cdp.send('Runtime.enable'),
       this.cdp.send('Network.enable'),
     ]);
+
+    await this.installEventListenerTracker();
+  }
+
+  private async installEventListenerTracker(): Promise<void> {
+    await this.cdp.send('Page.addScriptToEvaluateOnNewDocument', {
+      source: EVENT_LISTENER_TRACKER_SCRIPT,
+    });
+
+    try {
+      await this.cdp.send('Runtime.evaluate', {
+        expression: EVENT_LISTENER_TRACKER_SCRIPT,
+      });
+    } catch {
+      // Ignore failures if no execution context is ready yet; the new-document hook is enough.
+    }
   }
 
   // ============ Navigation ============
@@ -172,9 +250,12 @@ export class Page {
       throw new TimeoutError(`Navigation to ${url} timed out after ${timeout}ms`);
     }
 
-    // Refresh root node and clear ref map after navigation
+    // Refresh root node, clear ref map, and reset frame state after navigation
     this.rootNodeId = null;
     this.refMap.clear();
+    this.currentFrame = null;
+    this.currentFrameContextId = null;
+    this.frameContexts.clear();
   }
 
   /**
@@ -276,15 +357,15 @@ export class Page {
   /**
    * Click an element (supports multi-selector)
    *
-   * Uses CDP mouse events for regular elements. For form submit buttons,
-   * uses dispatchEvent to reliably trigger form submission in headless Chrome.
+   * Uses CDP mouse events (mouseMoved + mousePressed + mouseReleased) to
+   * simulate a real click. Real mouse events on submit buttons naturally
+   * trigger native form submission — no JS dispatch needed.
    */
   async click(selector: string | string[], options: ActionOptions = {}): Promise<boolean> {
     return this.withStaleNodeRetry(async () => {
       const element = await this.findElement(selector, options);
       if (!element) {
         if (options.optional) return false;
-        // Generate hints for the failure
         const selectorList = Array.isArray(selector) ? selector : [selector];
         const hints = await generateHints(this, selectorList, 'click');
         throw new ElementNotFoundError(selector, hints);
@@ -292,34 +373,55 @@ export class Page {
 
       await this.scrollIntoView(element.nodeId);
 
-      // Check if this is a form submit button and handle accordingly
-      const submitResult = await this.evaluateInFrame<{
-        result: { value?: { isSubmit?: boolean } };
-      }>(
-        `(() => {
-          const el = document.querySelector(${JSON.stringify(element.selector)});
-          if (!el) return { isSubmit: false };
+      const objectId = await this.resolveObjectId(element.nodeId);
 
-          // Check if this is a form submit button
-          const isSubmitButton = (el instanceof HTMLButtonElement && (el.type === 'submit' || (el.form && el.type !== 'button'))) ||
-                                 (el instanceof HTMLInputElement && el.type === 'submit');
-
-          if (isSubmitButton && el.form) {
-            // Dispatch submit event directly - works reliably in headless Chrome
-            el.form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
-            return { isSubmit: true };
-          }
-          return { isSubmit: false };
-        })()`
-      );
-
-      const isSubmit = submitResult.result.value?.isSubmit;
-      if (!isSubmit) {
-        // For non-submit elements, use CDP click only
-        // (JS click would cause double-clicking issues with toggle handlers)
-        await this.clickElement(element.nodeId);
+      // Actionability checks before click
+      try {
+        await ensureActionable(this.cdp, objectId, ['visible', 'enabled', 'stable'], {
+          timeout: options.timeout ?? DEFAULT_TIMEOUT,
+        });
+      } catch (e) {
+        if (options.optional) return false;
+        throw e;
       }
 
+      // Compute click coordinates for hit target check
+      let clickX: number;
+      let clickY: number;
+      try {
+        const { quads } = await this.cdp.send<{ quads: number[][] }>('DOM.getContentQuads', {
+          objectId,
+        });
+        if (quads?.length > 0) {
+          const quad = quads[0]!;
+          clickX = (quad[0]! + quad[2]! + quad[4]! + quad[6]!) / 4;
+          clickY = (quad[1]! + quad[3]! + quad[5]! + quad[7]!) / 4;
+        } else {
+          throw new Error('No quads');
+        }
+      } catch {
+        const box = await this.getBoxModel(element.nodeId);
+        if (!box) throw new Error('Could not get element position');
+        clickX = box.content[0]! + box.width / 2;
+        clickY = box.content[1]! + box.height / 2;
+      }
+
+      // Hit target checks inside iframes need frame-local coordinates, while
+      // Input.dispatchMouseEvent still needs the page-level coordinates above.
+      const hitTargetCoordinates = this.currentFrame ? undefined : { x: clickX, y: clickY };
+
+      // Hit target check with actual click coordinates
+      try {
+        await ensureActionable(this.cdp, objectId, ['hitTarget'], {
+          timeout: options.timeout ?? DEFAULT_TIMEOUT,
+          coordinates: hitTargetCoordinates,
+        });
+      } catch (e) {
+        if (options.optional) return false;
+        throw e;
+      }
+
+      await this.clickElement(element.nodeId);
       return true;
     });
   }
@@ -332,7 +434,7 @@ export class Page {
     value: string,
     options: FillOptions = {}
   ): Promise<boolean> {
-    const { clear = true, blur = false } = options;
+    const { blur = false } = options;
 
     return this.withStaleNodeRetry(async () => {
       const element = await this.findElement(selector, options);
@@ -344,50 +446,96 @@ export class Page {
         throw new ElementNotFoundError(selector, hints);
       }
 
-      // Focus the element
-      await this.cdp.send('DOM.focus', { nodeId: element.nodeId });
+      // Resolve nodeId to objectId for Runtime.callFunctionOn
+      const { object } = await this.cdp.send<{ object: { objectId: string } }>('DOM.resolveNode', {
+        nodeId: element.nodeId,
+      });
+      const objectId = object.objectId;
 
-      // Clear existing content if requested
-      if (clear) {
-        await this.evaluateInFrame(
-          `(() => {
-            const el = document.querySelector(${JSON.stringify(element.selector)});
-            if (el) {
-              el.value = '';
-              el.dispatchEvent(new InputEvent('input', {
-                bubbles: true,
-                cancelable: true,
-                inputType: 'deleteContent'
-              }));
-            }
-          })()`
-        );
+      // Actionability checks before fill
+      try {
+        await ensureActionable(this.cdp, objectId, ['visible', 'enabled', 'editable'], {
+          timeout: options.timeout ?? DEFAULT_TIMEOUT,
+        });
+      } catch (e) {
+        if (options.optional) return false;
+        throw e;
       }
 
-      // Insert the text
-      await this.cdp.send('Input.insertText', { text: value });
+      // Check if this is a special input type that can't use Input.insertText
+      const tagInfo = await this.cdp.send<{
+        result: { value: { tagName: string; inputType: string } };
+      }>('Runtime.callFunctionOn', {
+        objectId,
+        functionDeclaration: `function() {
+            return { tagName: this.tagName?.toLowerCase() || '', inputType: (this.type || '').toLowerCase() };
+          }`,
+        returnByValue: true,
+      });
+      const { tagName, inputType } = tagInfo.result.value;
+      const specialInputTypes = new Set([
+        'date',
+        'datetime-local',
+        'month',
+        'week',
+        'time',
+        'color',
+        'range',
+        'file',
+      ]);
+      const isSpecialInput = tagName === 'input' && specialInputTypes.has(inputType);
 
-      // Dispatch InputEvent with proper properties for React compatibility
-      await this.evaluateInFrame(
-        `(() => {
-          const el = document.querySelector(${JSON.stringify(element.selector)});
-          if (el) {
-            el.dispatchEvent(new InputEvent('input', {
-              bubbles: true,
-              cancelable: true,
-              inputType: 'insertText',
-              data: ${JSON.stringify(value)}
-            }));
-            el.dispatchEvent(new Event('change', { bubbles: true }));
+      if (isSpecialInput) {
+        // Special inputs: set value directly + dispatch events
+        await this.cdp.send('Runtime.callFunctionOn', {
+          objectId,
+          functionDeclaration: `function(val) {
+            this.value = val;
+            this.dispatchEvent(new Event('input', { bubbles: true }));
+            this.dispatchEvent(new Event('change', { bubbles: true }));
+          }`,
+          arguments: [{ value }],
+          returnByValue: true,
+        });
+      } else {
+        // Playwright pattern: focus + select all, then insertText/Delete.
+        await this.selectEditableContent(objectId);
+
+        if (value === '') {
+          // Empty value: send Delete key to clear selected text (Playwright pattern)
+          await this.dispatchKey('Delete');
+        } else {
+          // Non-empty: Input.insertText fires real isTrusted:true events
+          await this.cdp.send('Input.insertText', { text: value });
+        }
+      }
+
+      if (options.verify !== false) {
+        let actualValue = await this.readEditableValue(objectId);
+
+        if (actualValue !== value && !isSpecialInput) {
+          if (value === '') {
+            await this.clearEditableSelection(objectId, 'Backspace');
+          } else {
+            await this.typeEditableFallback(element.nodeId, objectId, value);
           }
-        })()`
-      );
+          actualValue = await this.readEditableValue(objectId);
+        }
 
-      // Optionally trigger blur for frameworks that need it
+        if (actualValue !== value) {
+          if (options.optional) return false;
+          throw new Error(
+            `Fill value did not stick. Expected ${JSON.stringify(value)} but got ${JSON.stringify(actualValue)}.`
+          );
+        }
+      }
+
+      // Optionally trigger blur
       if (blur) {
-        await this.evaluateInFrame(
-          `document.querySelector(${JSON.stringify(element.selector)})?.blur()`
-        );
+        await this.cdp.send('Runtime.callFunctionOn', {
+          objectId,
+          functionDeclaration: 'function() { this.blur(); }',
+        });
       }
 
       return true;
@@ -396,38 +544,90 @@ export class Page {
 
   /**
    * Type text character by character (for autocomplete fields, etc.)
+   *
+   * Uses proper keyDown/rawKeyDown distinction with US keyboard layout.
+   * Printable chars use 'keyDown' with text, non-text keys use 'rawKeyDown',
+   * and non-layout chars (emoji, CJK) fall back to Input.insertText.
    */
   async type(
     selector: string | string[],
     text: string,
     options: TypeOptions = {}
   ): Promise<boolean> {
-    const { delay = 50 } = options;
-    const element = await this.findElement(selector, options);
+    return this.withStaleNodeRetry(async () => {
+      const { delay = 50 } = options;
+      const element = await this.findElement(selector, options);
 
-    if (!element) {
-      if (options.optional) return false;
-      throw new ElementNotFoundError(selector);
-    }
-
-    await this.cdp.send('DOM.focus', { nodeId: element.nodeId });
-
-    for (const char of text) {
-      await this.cdp.send('Input.dispatchKeyEvent', {
-        type: 'keyDown',
-        key: char,
-        text: char,
-      });
-      await this.cdp.send('Input.dispatchKeyEvent', {
-        type: 'keyUp',
-        key: char,
-      });
-      if (delay > 0) {
-        await sleep(delay);
+      if (!element) {
+        if (options.optional) return false;
+        throw new ElementNotFoundError(selector);
       }
-    }
 
-    return true;
+      // Actionability checks before typing
+      try {
+        const objectId = await this.resolveObjectId(element.nodeId);
+        await ensureActionable(this.cdp, objectId, ['visible', 'enabled'], {
+          timeout: options.timeout ?? DEFAULT_TIMEOUT,
+        });
+      } catch (e) {
+        if (options.optional) return false;
+        throw e;
+      }
+
+      await this.cdp.send('DOM.focus', { nodeId: element.nodeId });
+
+      for (const char of text) {
+        const def = US_KEYBOARD[char];
+
+        if (def) {
+          if (def.text !== undefined) {
+            // Printable character: 'keyDown' with text fields
+            await this.cdp.send('Input.dispatchKeyEvent', {
+              type: 'keyDown',
+              key: def.key,
+              code: def.code,
+              text: def.text,
+              unmodifiedText: def.text,
+              windowsVirtualKeyCode: def.keyCode,
+              modifiers: 0,
+              autoRepeat: false,
+              location: def.location ?? 0,
+              isKeypad: false,
+            });
+          } else {
+            // Non-text key (Enter, Tab, etc.): 'rawKeyDown', no text
+            await this.cdp.send('Input.dispatchKeyEvent', {
+              type: 'rawKeyDown',
+              key: def.key,
+              code: def.code,
+              windowsVirtualKeyCode: def.keyCode,
+              modifiers: 0,
+              autoRepeat: false,
+              location: def.location ?? 0,
+              isKeypad: false,
+            });
+          }
+
+          await this.cdp.send('Input.dispatchKeyEvent', {
+            type: 'keyUp',
+            key: def.key,
+            code: def.code,
+            windowsVirtualKeyCode: def.keyCode,
+            modifiers: 0,
+            location: def.location ?? 0,
+          });
+        } else {
+          // Non-layout character (emoji, CJK): use insertText
+          await this.cdp.send('Input.insertText', { text: char });
+        }
+
+        if (delay > 0) {
+          await sleep(delay);
+        }
+      }
+
+      return true;
+    });
   }
 
   /**
@@ -457,31 +657,76 @@ export class Page {
     const value = valueOrOptions as string | string[];
     const options = maybeOptions ?? {};
 
-    const element = await this.findElement(selector, options);
-    if (!element) {
-      if (options.optional) return false;
-      const selectorList = Array.isArray(selector) ? selector : [selector];
-      const hints = await generateHints(this, selectorList, 'select');
-      throw new ElementNotFoundError(selector, hints);
-    }
+    return this.withStaleNodeRetry(async () => {
+      const element = await this.findElement(selector, options);
+      if (!element) {
+        if (options.optional) return false;
+        const selectorList = Array.isArray(selector) ? selector : [selector];
+        const hints = await generateHints(this, selectorList, 'select');
+        throw new ElementNotFoundError(selector, hints);
+      }
 
-    const values = Array.isArray(value) ? value : [value];
+      const values = Array.isArray(value) ? value : [value];
+      const objectId = await this.resolveObjectId(element.nodeId);
 
-    await this.cdp.send('Runtime.evaluate', {
-      expression: `(() => {
-        const el = document.querySelector(${JSON.stringify(element.selector)});
-        if (!el || el.tagName !== 'SELECT') return false;
-        const values = ${JSON.stringify(values)};
-        for (const opt of el.options) {
-          opt.selected = values.includes(opt.value) || values.includes(opt.text);
-        }
-        el.dispatchEvent(new Event('change', { bubbles: true }));
+      try {
+        await this.scrollIntoView(element.nodeId);
+        await ensureActionable(this.cdp, objectId, ['visible', 'enabled'], {
+          timeout: options.timeout ?? DEFAULT_TIMEOUT,
+        });
+      } catch (e) {
+        if (options.optional) return false;
+        throw e;
+      }
+
+      const metadata = await this.getNativeSelectMetadata(objectId, values);
+      if (!metadata.isSelect) {
+        throw new Error('select() target must be a native <select> element');
+      }
+      if (metadata.missing.length > 0) {
+        throw new Error(`No option found for: ${metadata.missing.join(', ')}`);
+      }
+      if (metadata.disabled.length > 0) {
+        throw new Error(`Cannot select disabled option(s): ${metadata.disabled.join(', ')}`);
+      }
+      if (!metadata.multiple && metadata.targetIndexes.length > 1) {
+        throw new Error('Cannot select multiple values on a single-select element');
+      }
+
+      const expectedValues = metadata.targetIndexes.map((idx) => metadata.options[idx]!.value);
+      if (this.selectValuesMatch(metadata.selectedValues, expectedValues, metadata.multiple)) {
         return true;
-      })()`,
-      returnByValue: true,
-    });
+      }
 
-    return true;
+      if (!metadata.multiple && metadata.targetIndexes.length === 1) {
+        await this.applyNativeSelectByKeyboard(
+          element.nodeId,
+          objectId,
+          metadata.currentIndex,
+          metadata.targetIndexes[0]!
+        );
+      }
+
+      let selectedValues = await this.readNativeSelectValues(objectId);
+      if (!this.selectValuesMatch(selectedValues, expectedValues, metadata.multiple)) {
+        await this.applyNativeSelectFallback(objectId, metadata.targetIndexes);
+        selectedValues = await this.readNativeSelectValues(objectId);
+      }
+
+      if (!this.selectValuesMatch(selectedValues, expectedValues, metadata.multiple)) {
+        await this.applyRecordedSelectFallback(objectId, metadata.targetIndexes);
+        selectedValues = await this.readNativeSelectValues(objectId);
+      }
+
+      if (!this.selectValuesMatch(selectedValues, expectedValues, metadata.multiple)) {
+        if (options.optional) return false;
+        throw new Error(
+          `Select value did not stick. Expected ${expectedValues.join(', ') || '(empty)'} but got ${selectedValues.join(', ') || '(empty)'}.`
+        );
+      }
+
+      return true;
+    });
   }
 
   /**
@@ -493,99 +738,197 @@ export class Page {
   ): Promise<boolean> {
     const { trigger, option, value, match = 'text' } = config;
 
-    // Click the trigger to open dropdown
-    await this.click(trigger, options);
+    return this.withStaleNodeRetry(async () => {
+      // Click the trigger to open dropdown
+      await this.click(trigger, options);
 
-    // Small delay for dropdown animation
-    await sleep(100);
+      // Small delay for dropdown animation/render
+      await sleep(100);
 
-    // Build option selector based on match type
-    let optionSelector: string;
-    const optionSelectors = Array.isArray(option) ? option : [option];
+      const optionSelectors = Array.isArray(option) ? option : [option];
+      const optionHandle = await this.evaluateInFrame<{ result: RemoteObject }>(
+        `(() => {
+          const selectors = ${JSON.stringify(optionSelectors)};
+          const wanted = ${JSON.stringify(value)};
+          const mode = ${JSON.stringify(match)};
 
-    if (match === 'contains') {
-      optionSelector = optionSelectors.map((s) => `${s}:has-text("${value}")`).join(', ');
-    } else if (match === 'value') {
-      optionSelector = optionSelectors
-        .map((s) => `${s}[data-value="${value}"], ${s}[value="${value}"]`)
-        .join(', ');
-    } else {
-      // match === 'text' - exact text match
-      optionSelector = optionSelectors.map((s) => `${s}`).join(', ');
-    }
+          for (const selector of selectors) {
+            const candidates = document.querySelectorAll(selector);
+            for (const candidate of candidates) {
+              const text = candidate.textContent?.trim() || '';
+              const candidateValue =
+                candidate.getAttribute?.('data-value') ??
+                candidate.getAttribute?.('value') ??
+                candidate.value ??
+                '';
+              const matches =
+                mode === 'value'
+                  ? candidateValue === wanted
+                  : mode === 'contains'
+                    ? text.includes(wanted)
+                    : text === wanted;
 
-    // Find and click the matching option
-    const result = await this.cdp.send<{ result: RemoteObject }>('Runtime.evaluate', {
-      expression: `(() => {
-        const options = document.querySelectorAll(${JSON.stringify(optionSelector)});
-        for (const opt of options) {
-          const text = opt.textContent?.trim();
-          if (${match === 'text' ? `text === ${JSON.stringify(value)}` : match === 'contains' ? `text?.includes(${JSON.stringify(value)})` : 'true'}) {
-            opt.click();
-            return true;
+              if (matches) {
+                return candidate;
+              }
+            }
           }
+
+          return null;
+        })()`,
+        { returnByValue: false }
+      );
+
+      if (!optionHandle.result.objectId) {
+        if (options.optional) return false;
+        throw new ElementNotFoundError(`Option with ${match} "${value}"`);
+      }
+
+      const nodeResult = await this.cdp.send<{ nodeId: number }>('DOM.requestNode', {
+        objectId: optionHandle.result.objectId,
+      });
+
+      if (!nodeResult.nodeId) {
+        if (options.optional) return false;
+        throw new ElementNotFoundError(`Option with ${match} "${value}"`);
+      }
+
+      await this.scrollIntoView(nodeResult.nodeId);
+      await ensureActionable(
+        this.cdp,
+        optionHandle.result.objectId,
+        ['visible', 'enabled', 'stable'],
+        {
+          timeout: options.timeout ?? DEFAULT_TIMEOUT,
         }
-        return false;
-      })()`,
-      returnByValue: true,
+      );
+      await this.clickElement(nodeResult.nodeId);
+      return true;
     });
-
-    if (!result.result.value) {
-      if (options.optional) return false;
-      throw new ElementNotFoundError(`Option with ${match} "${value}"`);
-    }
-
-    return true;
   }
 
   /**
-   * Check a checkbox or radio button
+   * Check a checkbox or radio button using real mouse click.
+   * No-op if already checked. Verifies state changed after click.
    */
   async check(selector: string | string[], options: ActionOptions = {}): Promise<boolean> {
-    const element = await this.findElement(selector, options);
-    if (!element) {
-      if (options.optional) return false;
-      const selectorList = Array.isArray(selector) ? selector : [selector];
-      const hints = await generateHints(this, selectorList, 'check');
-      throw new ElementNotFoundError(selector, hints);
-    }
+    return this.withStaleNodeRetry(async () => {
+      const element = await this.findElement(selector, options);
+      if (!element) {
+        if (options.optional) return false;
+        const selectorList = Array.isArray(selector) ? selector : [selector];
+        const hints = await generateHints(this, selectorList, 'check');
+        throw new ElementNotFoundError(selector, hints);
+      }
 
-    const result = await this.cdp.send<{ result: RemoteObject }>('Runtime.evaluate', {
-      expression: `(() => {
-        const el = document.querySelector(${JSON.stringify(element.selector)});
-        if (!el) return false;
-        if (!el.checked) el.click();
-        return true;
-      })()`,
-      returnByValue: true,
+      const { object } = await this.cdp.send<{ object: { objectId: string } }>('DOM.resolveNode', {
+        nodeId: element.nodeId,
+      });
+
+      // Actionability checks
+      try {
+        await ensureActionable(this.cdp, object.objectId, ['visible', 'enabled'], {
+          timeout: options.timeout ?? DEFAULT_TIMEOUT,
+        });
+      } catch (e) {
+        if (options.optional) return false;
+        throw e;
+      }
+
+      // Read current checked state
+      const before = await this.cdp.send<{ result: { value: boolean } }>('Runtime.callFunctionOn', {
+        objectId: object.objectId,
+        functionDeclaration: 'function() { return !!this.checked; }',
+        returnByValue: true,
+      });
+
+      if (before.result.value) return true; // Already checked
+
+      // Real mouse click
+      await this.scrollIntoView(element.nodeId);
+      await this.clickElement(element.nodeId);
+
+      // Verify state changed
+      const after = await this.cdp.send<{ result: { value: boolean } }>('Runtime.callFunctionOn', {
+        objectId: object.objectId,
+        functionDeclaration: 'function() { return !!this.checked; }',
+        returnByValue: true,
+      });
+
+      if (!after.result.value) {
+        throw new Error('Clicking the checkbox did not change its state');
+      }
+
+      return true;
     });
-
-    return result.result.value as boolean;
   }
 
   /**
-   * Uncheck a checkbox
+   * Uncheck a checkbox using real mouse click.
+   * No-op if already unchecked. Radio buttons can't be unchecked (returns true).
    */
   async uncheck(selector: string | string[], options: ActionOptions = {}): Promise<boolean> {
-    const element = await this.findElement(selector, options);
-    if (!element) {
-      if (options.optional) return false;
-      const selectorList = Array.isArray(selector) ? selector : [selector];
-      const hints = await generateHints(this, selectorList, 'uncheck');
-      throw new ElementNotFoundError(selector, hints);
-    }
+    return this.withStaleNodeRetry(async () => {
+      const element = await this.findElement(selector, options);
+      if (!element) {
+        if (options.optional) return false;
+        const selectorList = Array.isArray(selector) ? selector : [selector];
+        const hints = await generateHints(this, selectorList, 'uncheck');
+        throw new ElementNotFoundError(selector, hints);
+      }
 
-    const result = await this.cdp.send<{ result: RemoteObject }>('Runtime.evaluate', {
-      expression: `(() => {
-        const el = document.querySelector(${JSON.stringify(element.selector)});
-        if (!el) return false;
-        if (el.checked) el.click();
-        return true;
-      })()`,
-      returnByValue: true,
+      const { object } = await this.cdp.send<{ object: { objectId: string } }>('DOM.resolveNode', {
+        nodeId: element.nodeId,
+      });
+
+      // Actionability checks
+      try {
+        await ensureActionable(this.cdp, object.objectId, ['visible', 'enabled'], {
+          timeout: options.timeout ?? DEFAULT_TIMEOUT,
+        });
+      } catch (e) {
+        if (options.optional) return false;
+        throw e;
+      }
+
+      // Check if it's a radio button (can't uncheck radio by clicking)
+      const isRadio = await this.cdp.send<{ result: { value: boolean } }>(
+        'Runtime.callFunctionOn',
+        {
+          objectId: object.objectId,
+          functionDeclaration: 'function() { return this.type === "radio"; }',
+          returnByValue: true,
+        }
+      );
+
+      if (isRadio.result.value) return true;
+
+      // Read current checked state
+      const before = await this.cdp.send<{ result: { value: boolean } }>('Runtime.callFunctionOn', {
+        objectId: object.objectId,
+        functionDeclaration: 'function() { return !!this.checked; }',
+        returnByValue: true,
+      });
+
+      if (!before.result.value) return true; // Already unchecked
+
+      // Real mouse click
+      await this.scrollIntoView(element.nodeId);
+      await this.clickElement(element.nodeId);
+
+      // Verify state changed
+      const after = await this.cdp.send<{ result: { value: boolean } }>('Runtime.callFunctionOn', {
+        objectId: object.objectId,
+        functionDeclaration: 'function() { return !!this.checked; }',
+        returnByValue: true,
+      });
+
+      if (after.result.value) {
+        throw new Error('Clicking the checkbox did not change its state');
+      }
+
+      return true;
     });
-
-    return result.result.value as boolean;
   }
 
   /**
@@ -600,125 +943,107 @@ export class Page {
    * the submit event and triggers HTML5 validation.
    */
   async submit(selector: string | string[], options: SubmitOptions = {}): Promise<boolean> {
-    const { method = 'enter+click', waitForNavigation: shouldWait = 'auto' } = options;
-    const element = await this.findElement(selector, options);
+    return this.withStaleNodeRetry(async () => {
+      const { method = 'enter+click', waitForNavigation: shouldWait = 'auto' } = options;
+      const element = await this.findElement(selector, options);
 
-    if (!element) {
-      if (options.optional) return false;
-      const selectorList = Array.isArray(selector) ? selector : [selector];
-      const hints = await generateHints(this, selectorList, 'submit');
-      throw new ElementNotFoundError(selector, hints);
-    }
+      if (!element) {
+        if (options.optional) return false;
+        const selectorList = Array.isArray(selector) ? selector : [selector];
+        const hints = await generateHints(this, selectorList, 'submit');
+        throw new ElementNotFoundError(selector, hints);
+      }
 
-    // Check if target is a <form> element - forms cannot receive focus
-    const isFormElement = await this.evaluateInFrame<{ result: { value: boolean } }>(
-      `(() => {
-        const el = document.querySelector(${JSON.stringify(element.selector)});
-        return el instanceof HTMLFormElement;
-      })()`
-    );
-
-    if (isFormElement.result.value) {
-      // For form elements, use requestSubmit() which fires submit event and validates
-      await this.evaluateInFrame(
-        `(() => {
-          const form = document.querySelector(${JSON.stringify(element.selector)});
-          if (form && form instanceof HTMLFormElement) {
-            form.requestSubmit();
-          }
-        })()`
+      const objectId = await this.resolveObjectId(element.nodeId);
+      const isFormElement = await this.cdp.send<{ result: { value: boolean } }>(
+        'Runtime.callFunctionOn',
+        {
+          objectId,
+          functionDeclaration: 'function() { return this instanceof HTMLFormElement; }',
+          returnByValue: true,
+        }
       );
 
-      // Handle navigation waiting
-      if (shouldWait === true) {
-        await this.waitForNavigation({ timeout: options.timeout ?? DEFAULT_TIMEOUT });
-      } else if (shouldWait === 'auto') {
-        await Promise.race([this.waitForNavigation({ timeout: 1000, optional: true }), sleep(500)]);
-      }
-      return true;
-    }
+      if (isFormElement.result.value) {
+        // For form elements, use requestSubmit() which fires submit event and validates
+        await this.cdp.send('Runtime.callFunctionOn', {
+          objectId,
+          functionDeclaration: `function() {
+            if (typeof this.requestSubmit === 'function') {
+              this.requestSubmit();
+            } else {
+              this.submit();
+            }
+          }`,
+        });
 
-    // For non-form elements, continue with existing focus+enter/click logic
-    await this.cdp.send('DOM.focus', { nodeId: element.nodeId });
-
-    // Try Enter first if method includes it
-    if (method.includes('enter')) {
-      await this.press('Enter');
-
-      if (shouldWait === true) {
-        try {
+        // Handle navigation waiting
+        if (shouldWait === true) {
           await this.waitForNavigation({ timeout: options.timeout ?? DEFAULT_TIMEOUT });
+        } else if (shouldWait === 'auto') {
+          await Promise.race([
+            this.waitForNavigation({ timeout: 1000, optional: true }),
+            sleep(500),
+          ]);
+        }
+        return true;
+      }
+
+      // For non-form elements, continue with existing focus+enter/click logic
+      await this.cdp.send('DOM.focus', { nodeId: element.nodeId });
+
+      // Try Enter first if method includes it
+      if (method.includes('enter')) {
+        await this.press('Enter');
+
+        if (shouldWait === true) {
+          try {
+            await this.waitForNavigation({ timeout: options.timeout ?? DEFAULT_TIMEOUT });
+            return true;
+          } catch {
+            // No navigation, try click if method includes it
+          }
+        } else if (shouldWait === 'auto') {
+          // Race: navigation detection vs short delay for client-side handling
+          const navigationDetected = await Promise.race([
+            this.waitForNavigation({ timeout: 1000, optional: true }).then((success) =>
+              success ? 'nav' : null
+            ),
+            sleep(500).then(() => 'timeout'),
+          ]);
+
+          if (navigationDetected === 'nav') {
+            return true; // Navigation happened, we're done
+          }
+          // Short delay passed - assume client-side form, try click if available
+        } else if (method === 'enter') {
+          // waitForNavigation: false - don't wait
           return true;
-        } catch {
-          // No navigation, try click if method includes it
         }
-      } else if (shouldWait === 'auto') {
-        // Race: navigation detection vs short delay for client-side handling
-        const navigationDetected = await Promise.race([
-          this.waitForNavigation({ timeout: 1000, optional: true }).then((success) =>
-            success ? 'nav' : null
-          ),
-          sleep(500).then(() => 'timeout'),
-        ]);
+      }
 
-        if (navigationDetected === 'nav') {
-          return true; // Navigation happened, we're done
+      // Try click if method includes it
+      if (method.includes('click')) {
+        await this.click(element.selector, { ...options, optional: false });
+
+        if (shouldWait === true) {
+          await this.waitForNavigation({ timeout: options.timeout ?? DEFAULT_TIMEOUT });
+        } else if (shouldWait === 'auto') {
+          // Short wait to allow client-side handlers to run
+          await sleep(100);
         }
-        // Short delay passed - assume client-side form, try click if available
-      } else {
-        // waitForNavigation: false - don't wait
-        if (method === 'enter') return true;
+        // waitForNavigation: false - return immediately
       }
-    }
 
-    // Try click if method includes it
-    if (method.includes('click')) {
-      await this.click(element.selector, { ...options, optional: false });
-
-      if (shouldWait === true) {
-        await this.waitForNavigation({ timeout: options.timeout ?? DEFAULT_TIMEOUT });
-      } else if (shouldWait === 'auto') {
-        // Short wait to allow client-side handlers to run
-        await sleep(100);
-      }
-      // waitForNavigation: false - return immediately
-    }
-
-    return true;
+      return true;
+    });
   }
 
   /**
    * Press a key
    */
   async press(key: string): Promise<void> {
-    // Map common key names
-    const keyMap: Record<string, { key: string; code: string; keyCode: number }> = {
-      Enter: { key: 'Enter', code: 'Enter', keyCode: 13 },
-      Tab: { key: 'Tab', code: 'Tab', keyCode: 9 },
-      Escape: { key: 'Escape', code: 'Escape', keyCode: 27 },
-      Backspace: { key: 'Backspace', code: 'Backspace', keyCode: 8 },
-      Delete: { key: 'Delete', code: 'Delete', keyCode: 46 },
-      ArrowUp: { key: 'ArrowUp', code: 'ArrowUp', keyCode: 38 },
-      ArrowDown: { key: 'ArrowDown', code: 'ArrowDown', keyCode: 40 },
-      ArrowLeft: { key: 'ArrowLeft', code: 'ArrowLeft', keyCode: 37 },
-      ArrowRight: { key: 'ArrowRight', code: 'ArrowRight', keyCode: 39 },
-    };
-
-    const keyInfo = keyMap[key] ?? { key, code: key, keyCode: 0 };
-
-    await this.cdp.send('Input.dispatchKeyEvent', {
-      type: 'keyDown',
-      key: keyInfo.key,
-      code: keyInfo.code,
-      windowsVirtualKeyCode: keyInfo.keyCode,
-    });
-
-    await this.cdp.send('Input.dispatchKeyEvent', {
-      type: 'keyUp',
-      key: keyInfo.key,
-      code: keyInfo.code,
-      windowsVirtualKeyCode: keyInfo.keyCode,
-    });
+    await this.dispatchKey(key);
   }
 
   /**
@@ -751,6 +1076,18 @@ export class Page {
       }
 
       await this.scrollIntoView(element.nodeId);
+
+      // Actionability checks
+      try {
+        const objectId = await this.resolveObjectId(element.nodeId);
+        await ensureActionable(this.cdp, objectId, ['visible', 'stable'], {
+          timeout: options.timeout ?? DEFAULT_TIMEOUT,
+        });
+      } catch (e) {
+        if (options.optional) return false;
+        throw e;
+      }
+
       const box = await this.getBoxModel(element.nodeId);
       if (!box) {
         if (options.optional) return false;
@@ -1022,13 +1359,26 @@ export class Page {
    * Get text content from the page or a specific element
    */
   async text(selector?: string): Promise<string> {
-    const expression = selector
-      ? `document.querySelector(${JSON.stringify(selector)})?.innerText ?? ''`
-      : 'document.body.innerText';
+    if (!selector) {
+      const result = await this.evaluateInFrame<{ result: RemoteObject }>(
+        'document.body.innerText'
+      );
+      return (result.result.value as string) ?? '';
+    }
 
-    const result = await this.evaluateInFrame<{ result: RemoteObject }>(expression);
+    return this.withStaleNodeRetry(async () => {
+      const element = await this.findElement(selector, { timeout: DEFAULT_TIMEOUT });
+      if (!element) return '';
 
-    return (result.result.value as string) ?? '';
+      const objectId = await this.resolveObjectId(element.nodeId);
+      const result = await this.cdp.send<{ result: { value: string } }>('Runtime.callFunctionOn', {
+        objectId,
+        functionDeclaration: 'function() { return this.innerText || this.textContent || ""; }',
+        returnByValue: true,
+      });
+
+      return result.result.value ?? '';
+    });
   }
 
   // ============ File Handling ============
@@ -1041,49 +1391,476 @@ export class Page {
     files: FileInput[],
     options: ActionOptions = {}
   ): Promise<boolean> {
-    const element = await this.findElement(selector, options);
-    if (!element) {
-      if (options.optional) return false;
-      throw new ElementNotFoundError(selector);
-    }
+    return this.withStaleNodeRetry(async () => {
+      const element = await this.findElement(selector, options);
+      if (!element) {
+        if (options.optional) return false;
+        throw new ElementNotFoundError(selector);
+      }
 
-    // Convert files to the format CDP expects
-    const fileData = await Promise.all(
-      files.map(async (f) => {
-        let base64: string;
-        if (typeof f.buffer === 'string') {
-          base64 = f.buffer;
-        } else {
-          const bytes = new Uint8Array(f.buffer);
-          base64 = btoa(String.fromCharCode(...bytes));
+      // Convert files to the format CDP expects
+      const fileData = await Promise.all(
+        files.map(async (f) => {
+          let base64: string;
+          if (typeof f.buffer === 'string') {
+            base64 = f.buffer;
+          } else {
+            const bytes = new Uint8Array(f.buffer);
+            base64 = btoa(String.fromCharCode(...bytes));
+          }
+          return { name: f.name, mimeType: f.mimeType, data: base64 };
+        })
+      );
+
+      const objectId = await this.resolveObjectId(element.nodeId);
+
+      const result = await this.cdp.send<{
+        result: { value: { ok: boolean; fileCount: number } };
+      }>('Runtime.callFunctionOn', {
+        objectId,
+        functionDeclaration: `function(files) {
+          if (!(this instanceof HTMLInputElement) || this.type !== 'file') {
+            return { ok: false, fileCount: 0 };
+          }
+
+          const dt = new DataTransfer();
+          for (const f of files) {
+            const bytes = Uint8Array.from(atob(f.data), function(c) { return c.charCodeAt(0); });
+            const file = new File([bytes], f.name, { type: f.mimeType });
+            dt.items.add(file);
+          }
+
+          var descriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'files');
+          if (descriptor && descriptor.set) {
+            descriptor.set.call(this, dt.files);
+          } else {
+            this.files = dt.files;
+          }
+
+          this.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+          this.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+          return {
+            ok: (this.files && this.files.length === files.length) || files.length === 0,
+            fileCount: this.files ? this.files.length : 0
+          };
+        }`,
+        arguments: [{ value: fileData }],
+        returnByValue: true,
+      });
+
+      if (!result.result.value.ok) {
+        if (options.optional) return false;
+        throw new Error('Failed to set files on input');
+      }
+
+      return true;
+    });
+  }
+
+  private async getNativeSelectMetadata(
+    objectId: string,
+    targets: string[]
+  ): Promise<{
+    currentIndex: number;
+    currentValue: string;
+    disabled: string[];
+    isSelect: boolean;
+    missing: string[];
+    multiple: boolean;
+    options: Array<{ index: number; label: string; value: string }>;
+    selectedValues: string[];
+    targetIndexes: number[];
+  }> {
+    const result = await this.cdp.send<{
+      result: {
+        value: {
+          currentIndex: number;
+          currentValue: string;
+          disabled: string[];
+          isSelect: boolean;
+          missing: string[];
+          multiple: boolean;
+          options: Array<{ index: number; label: string; value: string }>;
+          selectedValues: string[];
+          targetIndexes: number[];
+        };
+      };
+    }>('Runtime.callFunctionOn', {
+      objectId,
+      functionDeclaration: `function(targetValues) {
+        if (!(this instanceof HTMLSelectElement)) {
+          return {
+            currentIndex: -1,
+            currentValue: '',
+            disabled: [],
+            isSelect: false,
+            missing: Array.isArray(targetValues) ? targetValues.map(String) : [],
+            multiple: false,
+            options: [],
+            selectedValues: [],
+            targetIndexes: []
+          };
         }
-        return { name: f.name, mimeType: f.mimeType, data: base64 };
-      })
-    );
 
-    // Use Runtime.evaluate to set files via DataTransfer
-    await this.cdp.send('Runtime.evaluate', {
-      expression: `(() => {
-        const input = document.querySelector(${JSON.stringify(element.selector)});
-        if (!input) return false;
+        var allOptions = Array.from(this.options).map(function(opt, index) {
+          return { index: index, label: opt.label || opt.text || '', value: opt.value || '' };
+        });
+        var targetIndexes = [];
+        var missing = [];
+        var disabled = [];
 
-        const files = ${JSON.stringify(fileData)};
-        const dt = new DataTransfer();
+        for (var i = 0; i < targetValues.length; i++) {
+          var target = String(targetValues[i]);
+          var idx = -1;
 
-        for (const f of files) {
-          const bytes = Uint8Array.from(atob(f.data), c => c.charCodeAt(0));
-          const file = new File([bytes], f.name, { type: f.mimeType });
-          dt.items.add(file);
+          for (var j = 0; j < this.options.length; j++) {
+            var opt = this.options[j];
+            if (opt.value === target || opt.text === target || opt.label === target) {
+              idx = j;
+              break;
+            }
+          }
+
+          if (idx === -1 && /^\\d+$/.test(target)) {
+            var numericIndex = parseInt(target, 10);
+            if (numericIndex >= 0 && numericIndex < this.options.length) {
+              idx = numericIndex;
+            }
+          }
+
+          if (idx === -1) {
+            missing.push(target);
+            continue;
+          }
+
+          if (this.options[idx] && this.options[idx].disabled) {
+            disabled.push(target);
+            continue;
+          }
+
+          if (targetIndexes.indexOf(idx) === -1) {
+            targetIndexes.push(idx);
+          }
         }
 
-        input.files = dt.files;
-        input.dispatchEvent(new Event('change', { bubbles: true }));
-        return true;
-      })()`,
+        return {
+          currentIndex: this.selectedIndex,
+          currentValue: this.value || '',
+          disabled: disabled,
+          isSelect: true,
+          missing: missing,
+          multiple: !!this.multiple,
+          options: allOptions,
+          selectedValues: Array.from(this.selectedOptions).map(function(opt) { return opt.value || ''; }),
+          targetIndexes: targetIndexes
+        };
+      }`,
+      arguments: [{ value: targets }],
       returnByValue: true,
     });
 
-    return true;
+    return result.result.value;
+  }
+
+  private async readNativeSelectValues(objectId: string): Promise<string[]> {
+    const result = await this.cdp.send<{ result: { value: string[] } }>('Runtime.callFunctionOn', {
+      objectId,
+      functionDeclaration:
+        'function() { return this instanceof HTMLSelectElement ? Array.from(this.selectedOptions).map(function(opt) { return opt.value || ""; }) : []; }',
+      returnByValue: true,
+    });
+    return result.result.value ?? [];
+  }
+
+  private selectValuesMatch(actual: string[], expected: string[], multiple: boolean): boolean {
+    if (!multiple) {
+      return (actual[0] ?? '') === (expected[0] ?? '');
+    }
+    if (actual.length !== expected.length) {
+      return false;
+    }
+    const actualSorted = [...actual].sort();
+    const expectedSorted = [...expected].sort();
+    return actualSorted.every((value, index) => value === expectedSorted[index]);
+  }
+
+  private async applyNativeSelectByKeyboard(
+    nodeId: number,
+    objectId: string,
+    currentIndex: number,
+    targetIndex: number
+  ): Promise<boolean> {
+    await this.cdp.send('DOM.focus', { nodeId });
+
+    if (targetIndex !== currentIndex) {
+      let effectiveIndex = currentIndex;
+
+      if (effectiveIndex < 0 || targetIndex < effectiveIndex) {
+        await this.dispatchKey('Home');
+        effectiveIndex = 0;
+      }
+      const steps = targetIndex - effectiveIndex;
+      const direction = steps >= 0 ? 'ArrowDown' : 'ArrowUp';
+
+      for (let i = 0; i < Math.abs(steps); i++) {
+        await this.dispatchKey(direction);
+      }
+    }
+
+    const selectedValues = await this.readNativeSelectValues(objectId);
+    return selectedValues[0] !== undefined;
+  }
+
+  private async applyNativeSelectFallback(
+    objectId: string,
+    targetIndexes: number[]
+  ): Promise<void> {
+    await this.cdp.send('Runtime.callFunctionOn', {
+      objectId,
+      functionDeclaration: `function(indexes) {
+        if (!(this instanceof HTMLSelectElement)) return false;
+
+        var wanted = new Set(indexes.map(function(index) { return Number(index); }));
+        for (var i = 0; i < this.options.length; i++) {
+          this.options[i].selected = wanted.has(i);
+        }
+        if (!this.multiple && indexes.length === 1) {
+          this.selectedIndex = indexes[0];
+        }
+        this.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+        this.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+        return true;
+      }`,
+      arguments: [{ value: targetIndexes }],
+      returnByValue: true,
+    });
+  }
+
+  private async selectEditableContent(objectId: string): Promise<void> {
+    await this.cdp.send('Runtime.callFunctionOn', {
+      objectId,
+      functionDeclaration: `function() {
+        if (this.isContentEditable) {
+          this.focus();
+          const range = document.createRange();
+          range.selectNodeContents(this);
+          const selection = window.getSelection();
+          if (selection) {
+            selection.removeAllRanges();
+            selection.addRange(range);
+          }
+          return;
+        }
+
+        if (this.tagName === 'TEXTAREA') {
+          this.selectionStart = 0;
+          this.selectionEnd = this.value.length;
+          this.focus();
+          return;
+        }
+
+        if (typeof this.select === 'function') {
+          this.select();
+        }
+        this.focus();
+      }`,
+    });
+  }
+
+  private async clearEditableSelection(
+    objectId: string,
+    key: 'Backspace' | 'Delete'
+  ): Promise<void> {
+    await this.selectEditableContent(objectId);
+    await this.dispatchKey(key);
+  }
+
+  private async readEditableValue(objectId: string): Promise<string> {
+    const result = await this.cdp.send<{ result: { value: string } }>('Runtime.callFunctionOn', {
+      objectId,
+      functionDeclaration: `function() {
+        if (this.isContentEditable) {
+          return this.textContent || '';
+        }
+        return this.value || '';
+      }`,
+      returnByValue: true,
+    });
+    return result.result.value ?? '';
+  }
+
+  private async typeEditableFallback(
+    nodeId: number,
+    objectId: string,
+    value: string
+  ): Promise<void> {
+    await this.selectEditableContent(objectId);
+    await this.cdp.send('DOM.focus', { nodeId });
+    for (const char of value) {
+      await this.dispatchKey(char);
+    }
+  }
+
+  private async applyRecordedSelectFallback(
+    objectId: string,
+    targetIndexes: number[]
+  ): Promise<boolean> {
+    await this.cdp.send('Runtime.callFunctionOn', {
+      objectId,
+      functionDeclaration: `function(indexes) {
+        if (!(this instanceof HTMLSelectElement)) return false;
+
+        var wanted = new Set(indexes.map(function(index) { return Number(index); }));
+        for (var i = 0; i < this.options.length; i++) {
+          this.options[i].selected = wanted.has(i);
+        }
+        if (!this.multiple && indexes.length === 1) {
+          this.selectedIndex = indexes[0];
+        }
+        return true;
+      }`,
+      arguments: [{ value: targetIndexes }],
+      returnByValue: true,
+    });
+
+    return this.invokeRecordedEventListeners(objectId, ['input', 'change']);
+  }
+
+  private async invokeRecordedEventListeners(
+    objectId: string,
+    eventTypes: string[]
+  ): Promise<boolean> {
+    const result = await this.cdp.send<{ result: { value: boolean } }>('Runtime.callFunctionOn', {
+      objectId,
+      functionDeclaration: `function(types) {
+        function buildPath(target) {
+          var path = [];
+          var node = target;
+
+          while (node) {
+            path.push(node);
+
+            if (node.parentElement) {
+              node = node.parentElement;
+              continue;
+            }
+
+            if (node === document) {
+              node = window;
+              continue;
+            }
+
+            if (node.defaultView && node !== node.defaultView) {
+              node = node.defaultView;
+              continue;
+            }
+
+            if (node.ownerDocument && node !== node.ownerDocument) {
+              node = node.ownerDocument;
+              continue;
+            }
+
+            var root = node.getRootNode && node.getRootNode();
+            if (root && root !== node && root.host) {
+              node = root.host;
+              continue;
+            }
+
+            node = null;
+          }
+
+          return path;
+        }
+
+        function createEvent(type, target, currentTarget, path, phase) {
+          return {
+            type: type,
+            target: target,
+            currentTarget: currentTarget,
+            srcElement: target,
+            isTrusted: true,
+            bubbles: true,
+            cancelable: true,
+            composed: true,
+            defaultPrevented: false,
+            eventPhase: phase,
+            timeStamp: Date.now(),
+            preventDefault: function() {
+              this.defaultPrevented = true;
+            },
+            stopPropagation: function() {
+              this.__stopped = true;
+            },
+            stopImmediatePropagation: function() {
+              this.__stopped = true;
+              this.__immediateStopped = true;
+            },
+            composedPath: function() {
+              return path.slice();
+            }
+          };
+        }
+
+        function invokePhase(type, nodes, capture, target, path) {
+          var invoked = false;
+
+          for (var i = 0; i < nodes.length; i++) {
+            var currentTarget = nodes[i];
+            var store = currentTarget && currentTarget.__bpEventListeners;
+            var entries = store && store[type];
+            if (!Array.isArray(entries) || entries.length === 0) continue;
+
+            var phase = currentTarget === target ? 2 : capture ? 1 : 3;
+            var event = createEvent(type, target, currentTarget, path, phase);
+
+            for (var j = 0; j < entries.length; j++) {
+              var entry = entries[j];
+              if (!!entry.capture !== capture) continue;
+
+              var listener = entry.listener;
+              if (typeof listener === 'function') {
+                listener.call(currentTarget, event);
+                invoked = true;
+              } else if (listener && typeof listener.handleEvent === 'function') {
+                listener.handleEvent(event);
+                invoked = true;
+              }
+
+              if (event.__immediateStopped) {
+                break;
+              }
+            }
+
+            if (event.__stopped) {
+              break;
+            }
+          }
+
+          return invoked;
+        }
+
+        var path = buildPath(this);
+        var capturePath = path.slice().reverse();
+        var bubblePath = path.slice();
+        var invokedAny = false;
+
+        for (var i = 0; i < types.length; i++) {
+          var type = String(types[i]);
+          if (invokePhase(type, capturePath, true, this, path)) {
+            invokedAny = true;
+          }
+          if (invokePhase(type, bubblePath, false, this, path)) {
+            invokedAny = true;
+          }
+        }
+
+        return invokedAny;
+      }`,
+      arguments: [{ value: eventTypes }],
+      returnByValue: true,
+    });
+
+    return result.result.value ?? false;
   }
 
   /**
@@ -1319,7 +2096,7 @@ export class Page {
 
     const text = formatTree(accessibilityTree);
 
-    return {
+    const result: PageSnapshot = {
       url,
       title,
       timestamp: new Date().toISOString(),
@@ -1327,6 +2104,8 @@ export class Page {
       interactiveElements,
       text,
     };
+    this.lastSnapshot = result; // Store for stale ref recovery
+    return result;
   }
 
   /**
@@ -1965,16 +2744,24 @@ export class Page {
       try {
         return await fn();
       } catch (e) {
+        const message = e instanceof Error ? e.message : '';
         if (
           e instanceof Error &&
-          (e.message.includes('Could not find node with given id') ||
-            e.message.includes('Node with given id does not belong to the document') ||
-            e.message.includes('No node with given id found'))
+          (message.includes('Could not find node with given id') ||
+            message.includes('Node with given id does not belong to the document') ||
+            message.includes('No node with given id found') ||
+            message.includes('Could not find object with given id') ||
+            message.includes('Cannot find context with specified id') ||
+            message.includes('Cannot find context with given id') ||
+            message.includes('Execution context was destroyed') ||
+            message.includes('No execution context with given id') ||
+            message.includes('Argument should belong to the same JavaScript world'))
         ) {
           lastError = e;
           if (attempt < retries) {
-            // Reset root node and wait before retrying
+            // Reset cached DOM/context state so the next attempt re-resolves fresh handles.
             this.rootNodeId = null;
+            this.currentFrameContextId = null;
             await sleep(delay);
             continue;
           }
@@ -2029,6 +2816,43 @@ export class Page {
             };
           }
         } catch {}
+      }
+    }
+
+    // Stale ref recovery: if all selectors were refs and none worked, try matching by role+name
+    if (selectorList.every((s) => s.startsWith('ref:')) && this.lastSnapshot) {
+      for (const selector of selectorList) {
+        const ref = selector.slice(4);
+        const originalElement = this.lastSnapshot.interactiveElements.find((e) => e.ref === ref);
+        if (!originalElement) continue;
+
+        // Take a fresh snapshot to find matching element
+        const freshSnapshot = await this.snapshot();
+        const match = freshSnapshot.interactiveElements.find(
+          (e) => e.role === originalElement.role && e.name === originalElement.name
+        );
+
+        if (match) {
+          const newBackendNodeId = this.refMap.get(match.ref);
+          if (newBackendNodeId) {
+            try {
+              await this.ensureRootNode();
+              const pushResult = await this.cdp.send<{ nodeIds: number[] }>(
+                'DOM.pushNodesByBackendIdsToFrontend',
+                { backendNodeIds: [newBackendNodeId] }
+              );
+              if (pushResult.nodeIds?.[0]) {
+                this._lastMatchedSelector = `ref:${match.ref}`;
+                return {
+                  nodeId: pushResult.nodeIds[0],
+                  backendNodeId: newBackendNodeId,
+                  selector: `ref:${match.ref}`,
+                  waitedMs: 0,
+                };
+              }
+            } catch {}
+          }
+        }
       }
     }
 
@@ -2116,6 +2940,50 @@ export class Page {
   private async ensureRootNode(): Promise<void> {
     if (this.rootNodeId) return;
 
+    if (this.currentFrame) {
+      const mainDocument = await this.cdp.send<{ root: { nodeId: number } }>('DOM.getDocument', {
+        depth: 0,
+      });
+      const iframeNode = await this.cdp.send<{ nodeId: number }>('DOM.querySelector', {
+        nodeId: mainDocument.root.nodeId,
+        selector: this.currentFrame,
+      });
+
+      if (iframeNode.nodeId) {
+        const frameResult = await this.cdp.send<{
+          node: {
+            contentDocument?: { nodeId: number };
+            frameId?: string;
+          };
+        }>('DOM.describeNode', {
+          nodeId: iframeNode.nodeId,
+          depth: 1,
+        });
+
+        if (frameResult.node.contentDocument?.nodeId) {
+          this.rootNodeId = frameResult.node.contentDocument.nodeId;
+          if (frameResult.node.frameId) {
+            // Wait briefly for the new execution context if not yet available
+            // (Chrome may recreate it after destroying the old one)
+            let contextId = this.frameExecutionContexts.get(frameResult.node.frameId);
+            if (!contextId) {
+              for (let i = 0; i < 10; i++) {
+                await sleep(100);
+                contextId = this.frameExecutionContexts.get(frameResult.node.frameId);
+                if (contextId) break;
+              }
+            }
+            this.currentFrameContextId = contextId ?? null;
+          }
+          return;
+        }
+      }
+
+      // Frame is no longer available; fall back to the main document.
+      this.currentFrame = null;
+      this.currentFrameContextId = null;
+    }
+
     const doc = await this.cdp.send<{ root: { nodeId: number } }>('DOM.getDocument', {
       depth: 0,
     });
@@ -2165,34 +3033,132 @@ export class Page {
   }
 
   /**
-   * Click an element by node ID
+   * Click an element by node ID using Playwright's 3-event sequence:
+   * mouseMoved → mousePressed → mouseReleased (sequential).
+   * Uses DOM.getContentQuads for accurate coordinates (handles CSS transforms).
+   * Falls back to JS this.click() if CDP mouse dispatch fails.
    */
   private async clickElement(nodeId: number): Promise<void> {
-    const box = await this.getBoxModel(nodeId);
-    if (!box) {
-      throw new Error('Could not get element box model for click');
+    // Get objectId for getContentQuads
+    const { object } = await this.cdp.send<{ object: { objectId: string } }>('DOM.resolveNode', {
+      nodeId,
+    });
+
+    // Try getContentQuads first (more accurate for CSS-transformed elements)
+    let x: number;
+    let y: number;
+    try {
+      const { quads } = await this.cdp.send<{ quads: number[][] }>('DOM.getContentQuads', {
+        objectId: object.objectId,
+      });
+      if (quads && quads.length > 0) {
+        const quad = quads[0]!;
+        // Quad is [x1,y1,x2,y2,x3,y3,x4,y4] — center = average of 4 corners
+        x = (quad[0]! + quad[2]! + quad[4]! + quad[6]!) / 4;
+        y = (quad[1]! + quad[3]! + quad[5]! + quad[7]!) / 4;
+      } else {
+        throw new Error('No quads');
+      }
+    } catch {
+      // Fallback to getBoxModel
+      const box = await this.getBoxModel(nodeId);
+      if (!box) throw new Error('Could not get element position for click');
+      x = box.content[0]! + box.width / 2;
+      y = box.content[1]! + box.height / 2;
     }
 
-    // Calculate center of the element
-    const x = box.content[0]! + box.width / 2;
-    const y = box.content[1]! + box.height / 2;
+    // Sequential mouse events (Playwright pattern)
+    try {
+      await this.cdp.send('Input.dispatchMouseEvent', {
+        type: 'mouseMoved',
+        x,
+        y,
+        button: 'none',
+        buttons: 0,
+        modifiers: 0,
+      });
+      await this.cdp.send('Input.dispatchMouseEvent', {
+        type: 'mousePressed',
+        x,
+        y,
+        button: 'left',
+        buttons: 1,
+        clickCount: 1,
+        modifiers: 0,
+      });
+      await this.cdp.send('Input.dispatchMouseEvent', {
+        type: 'mouseReleased',
+        x,
+        y,
+        button: 'left',
+        buttons: 0,
+        clickCount: 1,
+        modifiers: 0,
+      });
+    } catch {
+      // Fallback: JS click if CDP mouse dispatch fails
+      await this.cdp.send('Runtime.callFunctionOn', {
+        objectId: object.objectId,
+        functionDeclaration: 'function() { this.click(); }',
+      });
+    }
 
-    // Perform click
-    await this.cdp.send('Input.dispatchMouseEvent', {
-      type: 'mousePressed',
-      x,
-      y,
-      button: 'left',
-      clickCount: 1,
-    });
+    // Force a round-trip to ensure all synchronous event handlers
+    // triggered by the click have completed before we return
+    await this.cdp.send('Runtime.evaluate', { expression: '0' });
+  }
 
-    await this.cdp.send('Input.dispatchMouseEvent', {
-      type: 'mouseReleased',
-      x,
-      y,
-      button: 'left',
-      clickCount: 1,
+  /**
+   * Resolve a nodeId to a Remote Object ID for use with Runtime.callFunctionOn
+   */
+  private async resolveObjectId(nodeId: number): Promise<string> {
+    const { object } = await this.cdp.send<{ object: { objectId: string } }>('DOM.resolveNode', {
+      nodeId,
     });
+    return object.objectId;
+  }
+
+  private async dispatchKeyDefinition(def: KeyDefinition): Promise<void> {
+    const downParams: Record<string, unknown> = {
+      type: def.text !== undefined ? 'keyDown' : 'rawKeyDown',
+      key: def.key,
+      code: def.code,
+      windowsVirtualKeyCode: def.keyCode,
+      modifiers: 0,
+      autoRepeat: false,
+      location: def.location ?? 0,
+      isKeypad: false,
+    };
+
+    if (def.text !== undefined) {
+      downParams['text'] = def.text;
+      downParams['unmodifiedText'] = def.text;
+    }
+
+    await this.cdp.send('Input.dispatchKeyEvent', downParams);
+    await this.cdp.send('Input.dispatchKeyEvent', {
+      type: 'keyUp',
+      key: def.key,
+      code: def.code,
+      windowsVirtualKeyCode: def.keyCode,
+      modifiers: 0,
+      location: def.location ?? 0,
+    });
+  }
+
+  private async dispatchKey(key: string): Promise<void> {
+    const def = US_KEYBOARD[key];
+    if (def) {
+      await this.dispatchKeyDefinition(def);
+      return;
+    }
+
+    if ([...key].length === 1) {
+      await this.cdp.send('Input.insertText', { text: key });
+      return;
+    }
+
+    await this.dispatchKeyDefinition({ key, code: key, keyCode: 0 });
   }
 
   // ============ Audio I/O ============

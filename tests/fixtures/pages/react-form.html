@@ -14,7 +14,7 @@
     h1 { color: #333; }
     .form-group { margin-bottom: 20px; }
     label { display: block; margin-bottom: 5px; font-weight: 500; }
-    input, select {
+    input, textarea, select {
       width: 100%;
       padding: 10px;
       font-size: 16px;
@@ -22,6 +22,7 @@
       border-radius: 4px;
       box-sizing: border-box;
     }
+    textarea { resize: vertical; min-height: 80px; }
     .state-display {
       margin-top: 30px;
       padding: 15px;
@@ -58,7 +59,7 @@
 </head>
 <body>
   <h1>React-like Controlled Form</h1>
-  <p>This form simulates React controlled inputs that track state via event handlers.</p>
+  <p>This form simulates React controlled inputs with <code>_valueTracker</code> and <code>isTrusted</code> checks.</p>
 
   <form id="controlled-form">
     <div class="form-group">
@@ -72,8 +73,8 @@
     </div>
 
     <div class="form-group">
-      <label for="search">Search (with debounce)</label>
-      <input type="text" id="search" name="search" placeholder="Type to search..." autocomplete="off">
+      <label for="bio">Bio (controlled textarea)</label>
+      <textarea id="bio" name="bio" placeholder="Tell us about yourself" autocomplete="off"></textarea>
     </div>
 
     <div class="form-group">
@@ -87,9 +88,14 @@
     </div>
 
     <div class="form-group">
+      <label for="search">Search (controlled)</label>
+      <input type="search" id="search" name="search" placeholder="Type a search term" autocomplete="off">
+    </div>
+
+    <div class="form-group">
       <label>
         <input type="checkbox" id="newsletter" name="newsletter">
-        Subscribe to newsletter
+        Subscribe to newsletter (controlled checkbox)
       </label>
     </div>
 
@@ -114,11 +120,13 @@
     const state = {
       username: '',
       email: '',
-      search: '',
+      bio: '',
       country: '',
+      search: '',
       newsletter: false,
       eventCount: 0,
-      lastEvent: null
+      lastEvent: null,
+      rejectedEvents: 0
     };
 
     const eventLog = document.getElementById('event-log');
@@ -137,12 +145,77 @@
       stateOutput.textContent = JSON.stringify(state, null, 2);
     }
 
+    // --- React _valueTracker simulation ---
+    // React uses an internal _valueTracker to detect programmatic value changes.
+    // It overrides the native value descriptor so it can compare the "last value"
+    // with the current value. If they match, React skips the synthetic event.
+    // Automation tools must invalidate the tracker to trigger React's onChange.
+    function installValueTracker(element, prop) {
+      const descriptor = Object.getOwnPropertyDescriptor(
+        Object.getPrototypeOf(element), prop
+      );
+      if (!descriptor) return;
+
+      let trackerValue = element[prop];
+
+      const tracker = {
+        getValue() { return trackerValue; },
+        setValue(val) { trackerValue = val; },
+        stopTracking() {
+          element._valueTracker = undefined;
+          Object.defineProperty(element, prop, descriptor);
+        }
+      };
+
+      Object.defineProperty(element, prop, {
+        configurable: true,
+        enumerable: true,
+        get() {
+          return descriptor.get.call(this);
+        },
+        set(val) {
+          trackerValue = val;
+          descriptor.set.call(this, val);
+        }
+      });
+
+      element._valueTracker = tracker;
+    }
+
+    // --- isTrusted event rejection ---
+    // Some React apps check isTrusted on events and ignore synthetic dispatches.
+    // This simulates that pattern.
+    function handleInputChange(e) {
+      if (!e.isTrusted) {
+        state.rejectedEvents++;
+        log(`REJECTED untrusted ${e.type} on ${e.target.name} (isTrusted=false)`, 'error');
+        // Revert the value to the last known state (simulates React resetting)
+        e.target[e.target.tagName === 'TEXTAREA' ? 'value' : 'value'] = state[e.target.name] || '';
+        updateStateDisplay();
+        return;
+      }
+
+      const { name, value } = e.target;
+      state[name] = value;
+      state.eventCount++;
+      state.lastEvent = e.type;
+
+      // Update the tracker's known value (like React would)
+      if (e.target._valueTracker) {
+        e.target._valueTracker.setValue(value);
+      }
+
+      log(`${e.type} on ${name}: "${value}" (event #${state.eventCount})`);
+      updateStateDisplay();
+    }
+
     function checkSync() {
       const domValues = {
         username: document.getElementById('username').value,
         email: document.getElementById('email').value,
-        search: document.getElementById('search').value,
+        bio: document.getElementById('bio').value,
         country: document.getElementById('country').value,
+        search: document.getElementById('search').value,
         newsletter: document.getElementById('newsletter').checked
       };
 
@@ -154,61 +227,75 @@
       }
 
       if (issues.length === 0) {
-        syncStatus.innerHTML = '<p class="synced">✓ DOM and State are synchronized</p>';
+        syncStatus.innerHTML = '<p class="synced">State: synced</p>';
         syncStatus.dataset.synced = 'true';
         log('Sync check: PASS - DOM matches state');
         return true;
       } else {
-        syncStatus.innerHTML = `<p class="desynced">✗ State mismatch detected:<br>${issues.join('<br>')}</p>`;
+        syncStatus.innerHTML = `<p class="desynced">State: desynced - ${issues.join(', ')}</p>`;
         syncStatus.dataset.synced = 'false';
         log(`Sync check: FAIL - ${issues.join(', ')}`, 'error');
         return false;
       }
     }
 
-    // Controlled input handler - simulates React onChange
-    function handleInputChange(e) {
-      const { name, value, type, checked } = e.target;
-      const newValue = type === 'checkbox' ? checked : value;
+    // Install trackers and listeners on text-like inputs
+    ['username', 'email', 'bio', 'search'].forEach((id) => {
+      var el = document.getElementById(id);
+      var prop = el.tagName === 'TEXTAREA' ? 'value' : 'value';
+      installValueTracker(el, prop);
 
-      state[name] = newValue;
-      state.eventCount++;
-      state.lastEvent = e.type;
-
-      log(`${e.type} on ${name}: "${newValue}" (event #${state.eventCount})`);
-      updateStateDisplay();
-    }
-
-    // Attach event listeners (like React's onChange which fires on input for text, change for select)
-    ['username', 'email', 'search'].forEach(id => {
-      const el = document.getElementById(id);
-
-      // React's onChange is actually based on 'input' event for text inputs
+      // React's onChange fires on 'input' for text inputs
       el.addEventListener('input', handleInputChange);
 
-      // Also track other events for debugging
-      el.addEventListener('change', (_e) => {
+      el.addEventListener('change', () => {
         log(`change event on ${id} (after blur typically)`, 'warn');
       });
-
-      el.addEventListener('focus', () => log(`focus on ${id}`));
-      el.addEventListener('blur', () => log(`blur on ${id}`));
+      el.addEventListener('focus', () => { log(`focus on ${id}`); });
+      el.addEventListener('blur', () => { log(`blur on ${id}`); });
     });
 
-    // Select elements use 'change' event (this is what React actually does)
-    const countryEl = document.getElementById('country');
-    countryEl.addEventListener('change', handleInputChange);
-    countryEl.addEventListener('focus', () => log(`focus on country`));
+    // Select uses 'change' event (React does this too)
+    var countryEl = document.getElementById('country');
+    countryEl.addEventListener('change', (e) => {
+      if (!e.isTrusted) {
+        state.rejectedEvents++;
+        log('REJECTED untrusted change on country (isTrusted=false)', 'error');
+        countryEl.value = state.country || '';
+        updateStateDisplay();
+        return;
+      }
+      state.country = countryEl.value;
+      state.eventCount++;
+      state.lastEvent = 'change';
+      log(`change on country: "${countryEl.value}" (event #${state.eventCount})`);
+      updateStateDisplay();
+    });
+    countryEl.addEventListener('focus', () => { log('focus on country'); });
 
-    // Checkbox handler
-    document.getElementById('newsletter').addEventListener('change', handleInputChange);
+    // Checkbox uses change events
+    var newsletterEl = document.getElementById('newsletter');
+    newsletterEl.addEventListener('change', (e) => {
+      if (!e.isTrusted) {
+        state.rejectedEvents++;
+        log('REJECTED untrusted change on newsletter (isTrusted=false)', 'error');
+        newsletterEl.checked = !!state.newsletter;
+        updateStateDisplay();
+        return;
+      }
+
+      state.newsletter = newsletterEl.checked;
+      state.eventCount++;
+      state.lastEvent = 'change';
+      log(`change on newsletter: ${newsletterEl.checked} (event #${state.eventCount})`);
+      updateStateDisplay();
+    });
+    newsletterEl.addEventListener('focus', () => { log('focus on newsletter'); });
 
     // Submit handler
     document.getElementById('controlled-form').addEventListener('submit', (e) => {
       e.preventDefault();
       log(`Form submitted with state: ${JSON.stringify(state)}`);
-
-      // Verify sync before accepting submission
       if (checkSync()) {
         alert(`Form submitted successfully!\n\nState:\n${JSON.stringify(state, null, 2)}`);
       } else {
@@ -226,7 +313,7 @@
 
     // Initialize
     updateStateDisplay();
-    log('Form initialized - state tracking active');
+    log('Form initialized - _valueTracker active, isTrusted checking enabled');
   </script>
 </body>
 </html>

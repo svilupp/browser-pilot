@@ -56,7 +56,8 @@ interface ActionOptions {
 }
 
 interface FillOptions extends ActionOptions {
-  clear?: boolean;
+  blur?: boolean;
+  verify?: boolean;
 }
 
 interface TypeOptions extends ActionOptions {
@@ -65,7 +66,7 @@ interface TypeOptions extends ActionOptions {
 
 interface SubmitOptions extends ActionOptions {
   method?: 'enter' | 'click' | 'enter+click';
-  waitForNavigation?: boolean;
+  waitForNavigation?: boolean | 'auto';
 }
 
 interface WaitForOptions extends ActionOptions {

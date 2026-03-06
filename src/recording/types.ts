@@ -287,5 +287,77 @@ export interface RecordingOutput {
   steps: Step[];
 }
 
+// --- Network recording types ---
+
+/** A captured HTTP request. */
+export interface RecordedNetworkRequest {
+  requestId: string;
+  timestamp: number;
+  elapsedMs: number;
+  method: string;
+  url: string;
+  headers?: Record<string, string>;
+  body?: string;
+}
+
+/** A captured HTTP response. */
+export interface RecordedNetworkResponse {
+  requestId: string;
+  timestamp: number;
+  elapsedMs: number;
+  status: number;
+  headers?: Record<string, string>;
+  mimeType?: string;
+  body?: string;
+  bodySize?: number;
+}
+
+/** A captured WebSocket frame (sent or received). */
+export interface RecordedWebSocketFrame {
+  requestId: string;
+  timestamp: number;
+  elapsedMs: number;
+  direction: 'sent' | 'received';
+  opcode: number;
+  payload: string;
+  length: number;
+}
+
+/** A WebSocket lifecycle event. */
+export interface RecordedWebSocketEvent {
+  requestId: string;
+  timestamp: number;
+  elapsedMs: number;
+  type: 'created' | 'closed' | 'error';
+  url?: string;
+}
+
+/** A unified timeline entry covering both actions and network events. */
+export interface TimelineEntry {
+  timestamp: number;
+  elapsedMs: number;
+  type: 'action' | 'network-request' | 'network-response' | 'ws-frame' | 'ws-event';
+  data: unknown;
+}
+
+/** Grouped HTTP network events. */
+export interface NetworkRecording {
+  requests: RecordedNetworkRequest[];
+  responses: RecordedNetworkResponse[];
+}
+
+/** Grouped WebSocket events. */
+export interface WebSocketRecording {
+  events: RecordedWebSocketEvent[];
+  frames: RecordedWebSocketFrame[];
+}
+
+/** Extended recording output that includes network capture data. */
+export interface FullRecordingOutput extends RecordingOutput {
+  network?: NetworkRecording;
+  websockets?: WebSocketRecording;
+  timeline?: TimelineEntry[];
+}
+
 // Re-export Step for convenience
 export type { Step };

@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Animation Test</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      padding: 20px;
+      max-width: 600px;
+      margin: 0 auto;
+    }
+    h1 { color: #333; }
+
+    .button-area {
+      margin-top: 40px;
+      min-height: 100px;
+      position: relative;
+    }
+
+    /* Static element for comparison */
+    #static-button {
+      padding: 12px 24px;
+      font-size: 16px;
+      cursor: pointer;
+      background: #9E9E9E;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      margin-bottom: 20px;
+    }
+    #static-button:hover { background: #757575; }
+
+    /* Animated button that slides in from the left */
+    #animated-button {
+      padding: 12px 24px;
+      font-size: 16px;
+      cursor: pointer;
+      background: #4CAF50;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      animation: slideIn 1.5s ease-out forwards;
+      opacity: 0;
+      transform: translateX(-300px);
+    }
+    #animated-button:hover { background: #43A047; }
+
+    @keyframes slideIn {
+      0% {
+        opacity: 0;
+        transform: translateX(-300px);
+      }
+      70% {
+        opacity: 1;
+        transform: translateX(10px);
+      }
+      100% {
+        opacity: 1;
+        transform: translateX(0);
+      }
+    }
+
+    /* Result display */
+    #result {
+      margin-top: 20px;
+      padding: 15px;
+      border-radius: 4px;
+      display: none;
+    }
+    #result.visible {
+      display: block;
+      background: #e8f5e9;
+      border: 1px solid #c8e6c9;
+      color: #2e7d32;
+    }
+
+    #animation-status {
+      margin-top: 20px;
+      padding: 10px;
+      background: #f5f5f5;
+      border-radius: 4px;
+      font-family: monospace;
+      font-size: 14px;
+    }
+  </style>
+</head>
+<body>
+  <h1>Animation Test</h1>
+  <p>The green button slides into position over 1.5 seconds. The grey button is static for comparison.</p>
+
+  <div class="button-area">
+    <button id="static-button">Static Button</button>
+    <br><br>
+    <button id="animated-button">Animated Button</button>
+  </div>
+
+  <div id="result"></div>
+
+  <div id="animation-status">Animation: running</div>
+
+  <script>
+    var animatedBtn = document.getElementById('animated-button');
+    var result = document.getElementById('result');
+    var status = document.getElementById('animation-status');
+
+    // Track animation state
+    animatedBtn.addEventListener('animationend', () => {
+      status.textContent = 'Animation: complete';
+      animatedBtn.dataset.animationComplete = 'true';
+    });
+
+    // Static button click
+    document.getElementById('static-button').addEventListener('click', () => {
+      result.className = 'visible';
+      result.textContent = 'Static button clicked!';
+    });
+
+    // Animated button click
+    animatedBtn.addEventListener('click', () => {
+      result.className = 'visible';
+      result.textContent = 'Animated button clicked!';
+    });
+  </script>
+</body>
+</html>

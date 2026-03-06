@@ -117,6 +117,7 @@ The last form is a simple delay in milliseconds.
 ```
 
 > **Tip:** For JavaScript evaluation, prefer `bp eval 'document.title'` — no JSON escaping needed.
+> Use it for inspection/debugging, not routine interactions when `click`/`fill`/`select`/`submit` already exist.
 
 ### Iframe Navigation
 
@@ -167,6 +168,7 @@ bp exec '[
 - Refs reset on navigation - take a new snapshot after `goto` or form submit
 - Use `ref:` prefix: `"selector": "ref:e4"`
 - Combine with CSS fallbacks: `["ref:e4", "#submit", "button[type=submit]"]`
+- If a high-level action fails, run `bp diagnose <selector>` before dropping to raw JS
 
 ### Multi-Selector Arrays
 
@@ -559,8 +561,8 @@ Output is JSONL with event types: `ws:created`, `ws:frame:sent`, `ws:frame:recv`
 
 Don't guess CSS selectors - use refs:
 ```bash
-bp exec '[{"action":"snapshot"}]' | grep -i "button"  # Find the ref
-bp exec '[{"action":"click","selector":"ref:e45"}]'   # Use it
+bp snapshot -i | grep -i "button"                  # Find the ref
+bp exec '[{"action":"click","selector":"ref:e45"}]' # Use it
 ```
 
 ### Session Hangs After Clicking Button

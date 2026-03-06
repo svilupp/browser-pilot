@@ -53,17 +53,14 @@ export interface Step {
   /** Submit method */
   method?: 'enter' | 'click' | 'enter+click';
 
-  /** Clear input before filling */
-  clear?: boolean;
-
   /** Trigger blur after filling (for React/Vue frameworks) */
   blur?: boolean;
 
   /** Delay between keystrokes for type action */
   delay?: number;
 
-  /** Wait for navigation after click action completes */
-  waitForNavigation?: boolean;
+  /** Wait mode after click/submit: true, false, or 'auto' for submit heuristics */
+  waitForNavigation?: boolean | 'auto';
 
   /** Custom select: trigger selector */
   trigger?: string | string[];

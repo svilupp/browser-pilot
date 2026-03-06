@@ -79,6 +79,8 @@ bp exec '[
 bp exec -s my-session --json '{"action":"snapshot"}'
 ```
 
+**Preferred agent workflow:** use `bp snapshot -i` first, target `ref:eN` values in `bp exec` actions, and fall back to `bp diagnose` if an action fails. Reserve raw JavaScript evaluation for inspection/debugging after the high-level actions have already failed.
+
 ### snapshot
 
 Get page accessibility snapshot.

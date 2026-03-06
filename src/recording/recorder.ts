@@ -9,7 +9,32 @@
 import type { CDPClient } from '../cdp/client.ts';
 import { aggregateEvents } from './aggregator.ts';
 import { RECORDER_BINDING_NAME, RECORDER_SCRIPT } from './script.ts';
-import type { RawRecordedEvent, RecordingOutput } from './types.ts';
+import type {
+  FullRecordingOutput,
+  RawRecordedEvent,
+  RecordedNetworkRequest,
+  RecordedNetworkResponse,
+  RecordedWebSocketEvent,
+  RecordedWebSocketFrame,
+  TimelineEntry,
+} from './types.ts';
+
+/** Listen mode: which traffic to capture. */
+export type ListenMode = 'ws' | 'http' | 'all';
+
+/** Options for network traffic capture during recording. */
+export interface RecorderListenOptions {
+  mode?: ListenMode;
+  match?: string;
+  captureResponseBodies?: boolean;
+  maxPayload?: number;
+}
+
+/** Options for creating a Recorder. */
+export interface RecorderOptions {
+  /** Enable network traffic capture alongside DOM recording. */
+  listen?: boolean | RecorderListenOptions;
+}
 
 /**
  * Recorder captures browser interactions and outputs them as Steps.
@@ -25,14 +50,31 @@ import type { RawRecordedEvent, RecordingOutput } from './types.ts';
  */
 export class Recorder {
   private cdp: CDPClient;
+  private options: RecorderOptions;
   private events: RawRecordedEvent[] = [];
   private recording = false;
   private startTime = 0;
   private startUrl = '';
   private bindingHandler: ((params: Record<string, unknown>) => void) | null = null;
 
-  constructor(cdp: CDPClient) {
+  // Network capture state
+  private listenOpts: RecorderListenOptions | null = null;
+  private networkRequests: RecordedNetworkRequest[] = [];
+  private networkResponses: RecordedNetworkResponse[] = [];
+  private wsEvents: RecordedWebSocketEvent[] = [];
+  private wsFrames: RecordedWebSocketFrame[] = [];
+  private networkHandlers: Array<{
+    event: string;
+    handler: (params: Record<string, unknown>) => void;
+  }> = [];
+  private matchRegex: RegExp | null = null;
+  private pendingBodies: Promise<void>[] = [];
+  private wsUrls = new Map<string, string>();
+  private httpUrls = new Map<string, string>();
+
+  constructor(cdp: CDPClient, options?: RecorderOptions) {
     this.cdp = cdp;
+    this.options = options ?? {};
   }
 
   /**
@@ -93,6 +135,17 @@ export class Recorder {
       }
     };
     this.cdp.on('Runtime.bindingCalled', this.bindingHandler);
+
+    // Set up network capture if listen option is enabled
+    if (this.options.listen) {
+      const listenOpts: RecorderListenOptions =
+        typeof this.options.listen === 'boolean' ? { mode: 'all' } : this.options.listen;
+      this.listenOpts = listenOpts;
+      this.matchRegex = listenOpts.match ? globToRegex(listenOpts.match) : null;
+
+      await this.cdp.send('Network.enable');
+      this.setupNetworkListeners(listenOpts);
+    }
   }
 
   /**
@@ -100,7 +153,7 @@ export class Recorder {
    *
    * Returns a RecordingOutput with steps compatible with page.batch().
    */
-  async stop(): Promise<RecordingOutput> {
+  async stop(): Promise<FullRecordingOutput> {
     if (!this.recording) {
       throw new Error('No recording in progress');
     }
@@ -114,15 +167,54 @@ export class Recorder {
       this.bindingHandler = null;
     }
 
+    // Remove network handlers
+    for (const { event, handler } of this.networkHandlers) {
+      this.cdp.off(event, handler);
+    }
+    this.networkHandlers = [];
+
+    // Disable network domain if listen was active
+    if (this.listenOpts) {
+      await this.cdp.send('Network.disable');
+    }
+
+    // Wait for any in-flight response body fetches to complete
+    await Promise.allSettled(this.pendingBodies);
+    this.pendingBodies = [];
+
     // Aggregate events into steps (pass startUrl for navigation detection)
     const steps = aggregateEvents(this.events, this.startUrl);
 
-    return {
+    const result: FullRecordingOutput = {
       recordedAt: new Date(this.startTime).toISOString(),
       startUrl: this.startUrl,
       duration,
       steps,
     };
+
+    // Add network data if listen was enabled
+    if (this.listenOpts) {
+      const mode = this.listenOpts.mode ?? 'all';
+
+      if (mode === 'http' || mode === 'all') {
+        result.network = {
+          requests: this.networkRequests,
+          responses: this.networkResponses,
+        };
+      }
+
+      if (mode === 'ws' || mode === 'all') {
+        result.websockets = {
+          events: this.wsEvents,
+          frames: this.wsFrames,
+        };
+      }
+
+      // Build merged timeline
+      result.timeline = this.buildTimeline();
+    }
+
+    return result;
   }
 
   /**
@@ -145,4 +237,260 @@ export class Recorder {
       // Invalid payload, ignore
     }
   }
+
+  /** Subscribe to a CDP event, tracking for cleanup. */
+  private subscribeNetwork(
+    event: string,
+    handler: (params: Record<string, unknown>) => void
+  ): void {
+    this.cdp.on(event, handler);
+    this.networkHandlers.push({ event, handler });
+  }
+
+  /** Check if a URL matches the configured filter. */
+  private matchesUrl(url: string): boolean {
+    if (!this.matchRegex) return true;
+    return this.matchRegex.test(url);
+  }
+
+  /** Elapsed milliseconds since recording started. */
+  private elapsed(): number {
+    return Date.now() - this.startTime;
+  }
+
+  /** Format a WebSocket payload, truncating or replacing binary data. */
+  private formatPayload(
+    payloadData: string | undefined,
+    opcode: number
+  ): { payload: string; length: number } {
+    const data = payloadData ?? '';
+    const maxPayload = this.listenOpts?.maxPayload ?? 256;
+
+    if (opcode === 2) {
+      const byteLength = Math.floor((data.length * 3) / 4);
+      return { payload: `[binary: ${byteLength} bytes]`, length: data.length };
+    }
+
+    const length = data.length;
+    if (length > maxPayload) {
+      return {
+        payload: `${data.slice(0, maxPayload)}... [truncated, ${length} total]`,
+        length,
+      };
+    }
+
+    return { payload: data, length };
+  }
+
+  /** Set up CDP event listeners for network traffic capture. */
+  private setupNetworkListeners(opts: RecorderListenOptions): void {
+    const mode = opts.mode ?? 'all';
+
+    if (mode === 'ws' || mode === 'all') {
+      this.subscribeNetwork('Network.webSocketCreated', (params) => {
+        const url = params['url'] as string;
+        const requestId = params['requestId'] as string;
+        if (!this.matchesUrl(url)) return;
+
+        this.wsUrls.set(requestId, url);
+        const now = Date.now();
+        this.wsEvents.push({
+          requestId,
+          timestamp: now,
+          elapsedMs: this.elapsed(),
+          type: 'created',
+          url,
+        });
+      });
+
+      this.subscribeNetwork('Network.webSocketFrameSent', (params) => {
+        const requestId = params['requestId'] as string;
+        if (!this.wsUrls.has(requestId)) return;
+
+        const response = params['response'] as { opcode: number; payloadData?: string } | undefined;
+        const opcode = response?.opcode ?? 1;
+        const { payload, length } = this.formatPayload(response?.payloadData, opcode);
+        const now = Date.now();
+
+        this.wsFrames.push({
+          requestId,
+          timestamp: now,
+          elapsedMs: this.elapsed(),
+          direction: 'sent',
+          opcode,
+          payload,
+          length,
+        });
+      });
+
+      this.subscribeNetwork('Network.webSocketFrameReceived', (params) => {
+        const requestId = params['requestId'] as string;
+        if (!this.wsUrls.has(requestId)) return;
+
+        const response = params['response'] as { opcode: number; payloadData?: string } | undefined;
+        const opcode = response?.opcode ?? 1;
+        const { payload, length } = this.formatPayload(response?.payloadData, opcode);
+        const now = Date.now();
+
+        this.wsFrames.push({
+          requestId,
+          timestamp: now,
+          elapsedMs: this.elapsed(),
+          direction: 'received',
+          opcode,
+          payload,
+          length,
+        });
+      });
+
+      this.subscribeNetwork('Network.webSocketClosed', (params) => {
+        const requestId = params['requestId'] as string;
+        if (!this.wsUrls.has(requestId)) return;
+
+        this.wsUrls.delete(requestId);
+        const now = Date.now();
+        this.wsEvents.push({
+          requestId,
+          timestamp: now,
+          elapsedMs: this.elapsed(),
+          type: 'closed',
+        });
+      });
+    }
+
+    if (mode === 'http' || mode === 'all') {
+      this.subscribeNetwork('Network.requestWillBeSent', (params) => {
+        const request = params['request'] as
+          | { url: string; method: string; headers?: Record<string, string>; postData?: string }
+          | undefined;
+        const url = request?.url ?? '';
+        const requestId = params['requestId'] as string;
+        if (!this.matchesUrl(url)) return;
+
+        this.httpUrls.set(requestId, url);
+        const now = Date.now();
+
+        this.networkRequests.push({
+          requestId,
+          timestamp: now,
+          elapsedMs: this.elapsed(),
+          method: request?.method ?? 'GET',
+          url,
+          headers: request?.headers,
+          body: request?.postData,
+        });
+      });
+
+      this.subscribeNetwork('Network.responseReceived', (params) => {
+        const requestId = params['requestId'] as string;
+        if (!this.httpUrls.has(requestId)) return;
+
+        const response = params['response'] as
+          | {
+              status: number;
+              headers?: Record<string, string>;
+              mimeType?: string;
+            }
+          | undefined;
+        const now = Date.now();
+
+        this.networkResponses.push({
+          requestId,
+          timestamp: now,
+          elapsedMs: this.elapsed(),
+          status: response?.status ?? 0,
+          headers: response?.headers,
+          mimeType: response?.mimeType,
+        });
+
+        // Optionally capture response body
+        if (this.listenOpts?.captureResponseBodies) {
+          const bodyPromise = this.cdp
+            .send<{ body: string; base64Encoded: boolean }>('Network.getResponseBody', {
+              requestId,
+            })
+            .then((result) => {
+              const resp = this.networkResponses.find((r) => r.requestId === requestId);
+              if (resp) {
+                resp.body = result.base64Encoded
+                  ? `[base64: ${result.body.length} chars]`
+                  : result.body;
+                resp.bodySize = result.body.length;
+              }
+            })
+            .catch(() => {
+              // Body not available (e.g. streaming, redirects) — ignore
+            });
+          this.pendingBodies.push(bodyPromise);
+        }
+      });
+    }
+  }
+
+  /** Build a merged timeline from action events and network events. */
+  private buildTimeline(): TimelineEntry[] {
+    const entries: TimelineEntry[] = [];
+
+    // Add DOM action events
+    for (const event of this.events) {
+      entries.push({
+        timestamp: event.timestamp,
+        elapsedMs: event.timestamp - this.startTime,
+        type: 'action',
+        data: { kind: event.kind, url: event.url, selectors: event.selectors, value: event.value },
+      });
+    }
+
+    // Add network requests
+    for (const req of this.networkRequests) {
+      entries.push({
+        timestamp: req.timestamp,
+        elapsedMs: req.elapsedMs,
+        type: 'network-request',
+        data: req,
+      });
+    }
+
+    // Add network responses
+    for (const resp of this.networkResponses) {
+      entries.push({
+        timestamp: resp.timestamp,
+        elapsedMs: resp.elapsedMs,
+        type: 'network-response',
+        data: resp,
+      });
+    }
+
+    // Add WebSocket events
+    for (const evt of this.wsEvents) {
+      entries.push({
+        timestamp: evt.timestamp,
+        elapsedMs: evt.elapsedMs,
+        type: 'ws-event',
+        data: evt,
+      });
+    }
+
+    // Add WebSocket frames
+    for (const frame of this.wsFrames) {
+      entries.push({
+        timestamp: frame.timestamp,
+        elapsedMs: frame.elapsedMs,
+        type: 'ws-frame',
+        data: frame,
+      });
+    }
+
+    // Sort by timestamp
+    entries.sort((a, b) => a.timestamp - b.timestamp);
+
+    return entries;
+  }
+}
+
+/** Convert a simple glob pattern to a RegExp. Supports * only. */
+function globToRegex(pattern: string): RegExp {
+  const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+  const withWildcards = escaped.replace(/\*/g, '.*');
+  return new RegExp(`^${withWildcards}$`);
 }

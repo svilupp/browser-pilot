@@ -153,32 +153,38 @@ describe('Dropdown Selection', () => {
     await withRetry(async () => {
       await page.goto(`${baseUrl}/dropdown.html`);
 
-      // Use custom select config (if implemented)
-      // For now, test via composition
-      await page.click('#dropdown-trigger');
-
-      // Wait for menu
-      await page.waitFor('#dropdown-menu.open', { timeout: 2000 });
-
-      // Select by text content
-      const options = await page.evaluate(() => {
-        const opts = document.querySelectorAll('.dropdown-option');
-        for (const opt of opts) {
-          if (opt.textContent === 'Brazil') {
-            (opt as HTMLElement).click();
-            return true;
-          }
-        }
-        return false;
+      await page.select({
+        trigger: '#dropdown-trigger',
+        option: '.dropdown-option',
+        value: 'Brazil',
+        match: 'text',
       });
-
-      expect(options).toBe(true);
 
       // Verify
       const value = await page.evaluate(() => {
         return document.getElementById('custom-value')?.textContent || '';
       });
       expect(value).toContain('Brazil');
+    });
+  });
+
+  test('should handle custom select config by value', async () => {
+    const { page, baseUrl } = ctx.get();
+
+    await withRetry(async () => {
+      await page.goto(`${baseUrl}/dropdown.html`);
+
+      await page.select({
+        trigger: '#dropdown-trigger',
+        option: '.dropdown-option',
+        value: 'jp',
+        match: 'value',
+      });
+
+      const value = await page.evaluate(() => {
+        return document.getElementById('custom-value')?.textContent || '';
+      });
+      expect(value).toContain('Japan');
     });
   });
 });
