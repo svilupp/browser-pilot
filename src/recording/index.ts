@@ -12,8 +12,8 @@ export {
   generateAnnotation,
   selectBestSelectors,
 } from './aggregator.ts';
-
-// Export Recorder class
+export type { ListenMode, RecorderListenOptions, RecorderOptions } from './recorder.ts';
+// Export Recorder class and options
 export { Recorder } from './recorder.ts';
 
 // Export recorder script
@@ -25,9 +25,15 @@ export type {
   ElementInfo,
   ElementPosition,
   ElementSummary,
+  FullRecordingOutput,
+  NetworkRecording,
   PageState,
   RawRecordedEvent,
   RecordedEventKind,
+  RecordedNetworkRequest,
+  RecordedNetworkResponse,
+  RecordedWebSocketEvent,
+  RecordedWebSocketFrame,
   RecordingOutput,
   RichRecordedEvent,
   RichRecordingOutput,
@@ -38,4 +44,6 @@ export type {
   SelectorStrategy,
   StateChange,
   Step,
+  TimelineEntry,
+  WebSocketRecording,
 } from './types.ts';

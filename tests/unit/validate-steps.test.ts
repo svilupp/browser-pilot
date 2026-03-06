@@ -151,6 +151,13 @@ describe('validateSteps', () => {
       const result = validateSteps([{ action: 'wait', waitFor: 'navigation' }]);
       expect(result.valid).toBe(true);
     });
+
+    test('submit with auto navigation wait passes', () => {
+      const result = validateSteps([
+        { action: 'submit', selector: '#form', waitForNavigation: 'auto' },
+      ]);
+      expect(result.valid).toBe(true);
+    });
   });
 
   describe('unknown properties', () => {
@@ -231,6 +238,14 @@ describe('validateSteps', () => {
       const result = validateSteps([{ action: 'snapshot', optional: 'yes' }]);
       expect(result.valid).toBe(false);
       expect(result.errors[0]!.message).toContain('expected boolean');
+    });
+
+    test('submit waitForNavigation rejects invalid strings', () => {
+      const result = validateSteps([
+        { action: 'submit', selector: '#form', waitForNavigation: 'later' },
+      ]);
+      expect(result.valid).toBe(false);
+      expect(result.errors[0]!.message).toContain('expected boolean or "auto"');
     });
   });
 

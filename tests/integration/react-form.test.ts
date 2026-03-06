@@ -122,6 +122,29 @@ describe('React-like Controlled Form', () => {
     });
   });
 
+  test('select by ref should update controlled state', async () => {
+    const { page, baseUrl } = ctx.get();
+
+    await withRetry(async () => {
+      await page.goto(`${baseUrl}/react-form.html`);
+
+      const snapshot = await page.snapshot();
+      const countryRef = snapshot.interactiveElements.find(
+        (el) => el.role === 'combobox' && el.name?.toLowerCase().includes('country')
+      )?.ref;
+      expect(countryRef).toBeDefined();
+
+      await page.select(`ref:${countryRef}`, 'ca');
+
+      const state = await page.evaluate(() => {
+        const stateEl = document.getElementById('state-output');
+        return JSON.parse(stateEl?.textContent || '{}');
+      });
+
+      expect(state.country).toBe('ca');
+    });
+  });
+
   test('checkbox check should update controlled state', async () => {
     const { page, baseUrl } = ctx.get();
 

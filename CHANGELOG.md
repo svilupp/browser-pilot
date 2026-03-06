@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.0.11] - 2026-03-06
+
+### Improved
+
+- More reliable click actions with actionability checks, keyboard input helpers, and overlay/animation handling
+
 ## [0.0.10] - 2026-02-27
 
 ### Added

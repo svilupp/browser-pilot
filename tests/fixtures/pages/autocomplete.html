@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Autocomplete Test</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      padding: 20px;
+      max-width: 600px;
+      margin: 0 auto;
+    }
+    h1 { color: #333; }
+
+    .autocomplete-wrapper {
+      position: relative;
+      margin-top: 20px;
+    }
+    label {
+      display: block;
+      margin-bottom: 5px;
+      font-weight: 500;
+      color: #555;
+    }
+    #search-input {
+      width: 100%;
+      padding: 10px;
+      font-size: 16px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      box-sizing: border-box;
+    }
+    #search-input:focus {
+      outline: none;
+      border-color: #2196F3;
+    }
+
+    /* Dropdown suggestions */
+    #suggestions {
+      position: absolute;
+      top: 100%;
+      left: 0;
+      right: 0;
+      background: white;
+      border: 1px solid #ddd;
+      border-top: none;
+      border-radius: 0 0 4px 4px;
+      max-height: 200px;
+      overflow-y: auto;
+      display: none;
+      z-index: 100;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+    }
+    #suggestions.visible { display: block; }
+
+    .suggestion-item {
+      padding: 10px 12px;
+      cursor: pointer;
+      font-size: 14px;
+      border-bottom: 1px solid #f0f0f0;
+    }
+    .suggestion-item:last-child { border-bottom: none; }
+    .suggestion-item:hover {
+      background: #e3f2fd;
+    }
+
+    /* Selected value display */
+    #selected-value {
+      margin-top: 20px;
+      padding: 10px;
+      background: #f5f5f5;
+      border-radius: 4px;
+      font-family: monospace;
+      font-size: 14px;
+    }
+  </style>
+</head>
+<body>
+  <h1>Autocomplete Test</h1>
+  <p>Type to search with a 300ms debounce. Suggestions appear after the debounce. Click a suggestion to select it.</p>
+
+  <div class="autocomplete-wrapper">
+    <label for="search-input">Search City</label>
+    <input type="text" id="search-input" placeholder="Start typing a city name..." autocomplete="off">
+    <div id="suggestions"></div>
+  </div>
+
+  <div id="selected-value">Selected: (none)</div>
+
+  <script>
+    var cities = [
+      'New York', 'Los Angeles', 'Chicago', 'Houston', 'Phoenix',
+      'Philadelphia', 'San Antonio', 'San Diego', 'Dallas', 'San Jose',
+      'Austin', 'Jacksonville', 'Fort Worth', 'Columbus', 'Charlotte',
+      'Indianapolis', 'San Francisco', 'Seattle', 'Denver', 'Nashville',
+      'London', 'Paris', 'Berlin', 'Tokyo', 'Toronto'
+    ];
+
+    var input = document.getElementById('search-input');
+    var suggestionsEl = document.getElementById('suggestions');
+    var selectedDisplay = document.getElementById('selected-value');
+    var debounceTimer = null;
+
+    input.addEventListener('input', () => {
+      // Clear previous debounce
+      if (debounceTimer) clearTimeout(debounceTimer);
+
+      var query = input.value.trim();
+      if (!query) {
+        hideSuggestions();
+        return;
+      }
+
+      // 300ms debounce
+      debounceTimer = setTimeout(() => {
+        var filtered = cities.filter((city) => city.toLowerCase().indexOf(query.toLowerCase()) !== -1);
+        showSuggestions(filtered);
+      }, 300);
+    });
+
+    function showSuggestions(items) {
+      if (items.length === 0) {
+        suggestionsEl.innerHTML = '<div class="suggestion-item" style="color:#999;">No results found</div>';
+        suggestionsEl.classList.add('visible');
+        return;
+      }
+
+      suggestionsEl.innerHTML = items.map((item) => `<div class="suggestion-item" data-value="${item}">${item}</div>`).join('');
+
+      suggestionsEl.classList.add('visible');
+    }
+
+    function hideSuggestions() {
+      suggestionsEl.classList.remove('visible');
+      suggestionsEl.innerHTML = '';
+    }
+
+    // Handle suggestion clicks via event delegation
+    suggestionsEl.addEventListener('click', (e) => {
+      var item = e.target.closest('.suggestion-item');
+      if (item?.dataset.value) {
+        input.value = item.dataset.value;
+        selectedDisplay.textContent = `Selected: ${item.dataset.value}`;
+        hideSuggestions();
+      }
+    });
+
+    // Hide suggestions when clicking outside
+    document.addEventListener('click', (e) => {
+      if (!e.target.closest('.autocomplete-wrapper')) {
+        hideSuggestions();
+      }
+    });
+
+    // Hide suggestions on escape
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        hideSuggestions();
+      }
+    });
+  </script>
+</body>
+</html>

@@ -23,6 +23,7 @@ Options:
   --url <ws-url>          WebSocket URL (auto-discovered for generic provider)
   -n, --name <id>         Custom session name (default: auto-generated)
   -r, --resume <id>       Resume an existing session by ID
+  --target-url <str>      Filter targets to those whose URL contains this string
   --api-key <key>         API key for cloud providers
   --project-id <id>       Project ID for BrowserBase provider
   --export-log <path>     Export session log to file on close
@@ -35,6 +36,7 @@ Examples:
   bp connect --provider generic --name dev      # Connect with custom session name
   bp connect --url ws://localhost:9222/devtools  # Explicit WebSocket URL
   bp connect --resume dev                       # Resume a previous session
+  bp connect --target-url localhost:3000         # Attach to tab matching URL
 `.trimEnd();
 
 interface ConnectOptions {
@@ -42,6 +44,7 @@ interface ConnectOptions {
   url?: string;
   name?: string;
   resume?: string;
+  targetUrl?: string;
   apiKey?: string;
   projectId?: string;
   exportLog?: string;
@@ -61,6 +64,8 @@ function parseConnectArgs(args: string[]): ConnectOptions {
       options.name = args[++i];
     } else if (arg === '--resume' || arg === '-r') {
       options.resume = args[++i];
+    } else if (arg === '--target-url') {
+      options.targetUrl = args[++i];
     } else if (arg === '--api-key') {
       options.apiKey = args[++i];
     } else if (arg === '--project-id') {
@@ -128,7 +133,8 @@ export async function connectCommand(
 
   // Connect to browser
   const browser = await connect(connectOptions);
-  const page = await browser.page();
+  const pageOptions = options.targetUrl ? { targetUrl: options.targetUrl } : undefined;
+  const page = await browser.page(undefined, pageOptions);
   const currentUrl = await page.url();
 
   // Generate session ID

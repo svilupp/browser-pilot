@@ -46,6 +46,14 @@ BatchExecutor → Executes Step[] sequentially with timing/error tracking
 
 Entry: `src/index.ts` exports `Browser`, `Page`, types, providers.
 
+### Target Selection & Viewport Validation
+When `browser.page()` picks a target, it scores candidates (prefers http URLs, unattached targets, targets with titles; penalizes chrome://, devtools://, extensions). After attaching, validates the viewport — if dimensions are pathological (e.g. 56px height from a side panel), auto-applies 1280x720 override with a warning.
+- Scoring: `src/browser/browser.ts` (`scoreTarget()`, `pickBestTarget()`)
+- Viewport check: `src/browser/browser.ts` (in `page()` method after `init()`)
+- `PageOptions.targetUrl`: filter targets by URL substring
+- `PageOptions.minViewport`: custom threshold or `false` to disable
+- CLI: `bp connect --target-url localhost:3000` to filter targets
+
 ## Core Design Patterns
 
 ### Multi-Selector First

@@ -124,6 +124,39 @@ describe('Ref-Based Selectors', () => {
     });
   }, 30000);
 
+  test('should select a native dropdown by ref', async () => {
+    const { page, baseUrl } = ctx.get();
+
+    await withRetry(async () => {
+      await page.goto(`${baseUrl}/dropdown.html`);
+
+      const snapshot = await page.snapshot();
+      const selectRef = findRef(snapshot.interactiveElements, 'combobox', 'country');
+      expect(selectRef).toBeDefined();
+
+      const selected = await page.select(`ref:${selectRef}`, 'ca');
+      expect(selected).toBe(true);
+
+      const value = await page.evaluate('document.getElementById("native-select")?.value || ""');
+      expect(value).toBe('ca');
+    });
+  }, 30000);
+
+  test('should read text from an element by ref', async () => {
+    const { page, baseUrl } = ctx.get();
+
+    await withRetry(async () => {
+      await page.goto(`${baseUrl}/basic.html`);
+
+      const snapshot = await page.snapshot();
+      const buttonRef = findRef(snapshot.interactiveElements, 'button', 'show dynamic');
+      expect(buttonRef).toBeDefined();
+
+      const text = await page.text(`ref:${buttonRef}`);
+      expect(text).toContain('Show Dynamic Content');
+    });
+  }, 30000);
+
   // === Test 3: Multi-selector with ref + CSS fallbacks ===
 
   test('should use ref in multi-selector array', async () => {

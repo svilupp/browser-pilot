@@ -26,8 +26,7 @@ INTERACTION
     Click element. Multi-selector tries each until success.
 
   {"action": "fill", "selector": "#input", "value": "text"}
-  {"action": "fill", "selector": "#input", "value": "text", "clear": false}
-    Fill input field. Clears first by default.
+    Fill input field. Always selects all text before inserting.
 
   {"action": "type", "selector": "#input", "value": "text", "delay": 50}
     Type character-by-character (for autocomplete).

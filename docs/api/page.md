@@ -96,13 +96,15 @@ Fill an input field. Clears existing content by default.
 
 ```typescript
 await page.fill('#email', 'user@example.com');
-await page.fill('#search', 'query', { clear: false }); // Append
+await page.fill('#email', 'user@example.com', { blur: true }); // Trigger blur after fill
+await page.fill('#notes', 'draft', { verify: false }); // Skip read-back verification
 ```
 
 **Parameters:**
 - `selector: string | string[]` - Target input
 - `value: string` - Text to fill
-- `options.clear?: boolean` - Clear first (default: true)
+- `options.blur?: boolean` - Trigger blur after fill (default: false)
+- `options.verify?: boolean` - Read value back and retry if needed (default: true)
 - `options.timeout?: number`
 - `options.optional?: boolean`
 
@@ -184,13 +186,15 @@ Submit a form. Tries Enter key first, then click.
 await page.submit('#login-form');
 await page.submit('#form', { method: 'enter' });  // Enter only
 await page.submit('#form', { method: 'click' });  // Click only
-await page.submit('#form', { waitForNavigation: false }); // Don't wait
+await page.submit('#form', { waitForNavigation: 'auto' }); // Detect navigation briefly, then continue
+await page.submit('#form', { waitForNavigation: false });  // Return immediately
+await page.submit('#form', { waitForNavigation: true });   // Always wait for full navigation
 ```
 
 **Parameters:**
 - `selector: string | string[]` - Form or submit button
 - `options.method?: 'enter' | 'click' | 'enter+click'` (default: 'enter+click')
-- `options.waitForNavigation?: boolean` (default: true)
+- `options.waitForNavigation?: boolean | 'auto'` (default: 'auto')
 - `options.timeout?: number`
 - `options.optional?: boolean`
 
@@ -634,7 +638,8 @@ interface ActionOptions {
 }
 
 interface FillOptions extends ActionOptions {
-  clear?: boolean;
+  blur?: boolean;
+  verify?: boolean;
 }
 
 interface TypeOptions extends ActionOptions {
@@ -643,7 +648,7 @@ interface TypeOptions extends ActionOptions {
 
 interface SubmitOptions extends ActionOptions {
   method?: 'enter' | 'click' | 'enter+click';
-  waitForNavigation?: boolean;
+  waitForNavigation?: boolean | 'auto';
 }
 
 interface WaitForOptions extends ActionOptions {

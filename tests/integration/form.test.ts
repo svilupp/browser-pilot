@@ -47,7 +47,7 @@ describe('Form Fill and Submit Actions', () => {
     });
   });
 
-  test('should clear and fill with { clear: true }', async () => {
+  test('should clear and fill (always replaces)', async () => {
     const { page, baseUrl } = ctx.get();
 
     await withRetry(async () => {
@@ -57,10 +57,23 @@ describe('Form Fill and Submit Actions', () => {
       await page.fill('#name', 'Initial Value');
       await expectInputValue(page, '#name', 'Initial Value');
 
-      // Fill with clear should replace
-      await page.fill('#name', 'New Value', { clear: true });
+      // Fill again should replace (fill always selects all + replaces)
+      await page.fill('#name', 'New Value');
 
       await expectInputValue(page, '#name', 'New Value');
+    });
+  });
+
+  test('should clear a field to an empty string', async () => {
+    const { page, baseUrl } = ctx.get();
+
+    await withRetry(async () => {
+      await page.goto(`${baseUrl}/form.html`);
+
+      await page.fill('#name', 'Will be cleared');
+      await page.fill('#name', '');
+
+      await expectInputValue(page, '#name', '');
     });
   });
 
@@ -164,6 +177,21 @@ describe('Form Fill and Submit Actions', () => {
       await page.submit('#submit-btn');
 
       await expectHasClass(page, '#result', 'success', true);
+    });
+  });
+
+  test('should submit a form element directly via requestSubmit', async () => {
+    const { page, baseUrl } = ctx.get();
+
+    await withRetry(async () => {
+      await page.goto(`${baseUrl}/form.html`);
+
+      await page.fill('#name', 'Form Element Submit');
+      await page.fill('#email', 'form-element@test.com');
+      await page.submit('#test-form', { waitForNavigation: false });
+
+      await expectHasClass(page, '#result', 'success', true);
+      await expectTextContent(page, 'Form submitted successfully');
     });
   });
 

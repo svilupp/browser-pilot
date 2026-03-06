@@ -6,6 +6,7 @@
  */
 
 import { type Browser, connect, getBrowserWebSocketUrl } from '../../index.ts';
+import type { ListenMode, RecorderListenOptions } from '../../recording/recorder.ts';
 import { Recorder } from '../../recording/recorder.ts';
 import { output } from '../index.ts';
 import {
@@ -30,16 +31,25 @@ Options:
                         - -s <id>: use specific session
   -f, --file <path>   Output file (default: recording.json)
   --timeout <ms>      Auto-stop after timeout (optional)
+  --listen [mode]     Capture network traffic: ws, http, or all (default: all)
+  --bodies            Capture HTTP response bodies (requires --listen)
+  -m, --match <glob>  Filter network URLs by glob pattern (requires --listen)
+  --max-payload <n>   Max WebSocket payload preview length (default: 256)
   -h, --help          Show this help
 
 Examples:
-  bp record                        # Auto-connect to local Chrome
-  bp record -s                     # Use most recent session
-  bp record -s mysession           # Use specific session
-  bp record -f login.json          # Save to specific file
-  bp record --timeout 60000        # Auto-stop after 60s
+  bp record                              # Auto-connect to local Chrome
+  bp record -s                           # Use most recent session
+  bp record -s mysession                 # Use specific session
+  bp record -f login.json                # Save to specific file
+  bp record --timeout 60000              # Auto-stop after 60s
+  bp record --listen                     # Record actions + all network traffic
+  bp record --listen ws -m "*voice*"     # Record actions + matching WS traffic
+  bp record --listen http --bodies       # Record actions + HTTP with bodies
 
 Recording captures: clicks, inputs, form submissions, navigation.
+When --listen is enabled, network traffic is captured alongside actions
+and merged into a unified timeline in the output file.
 Password fields are automatically redacted as [REDACTED].
 
 Press Ctrl+C to stop recording and save.
@@ -50,6 +60,10 @@ interface RecordOptions {
   timeout?: number;
   help?: boolean;
   useLatestSession?: boolean;
+  listen?: boolean | ListenMode;
+  bodies?: boolean;
+  match?: string;
+  maxPayload?: number;
 }
 
 export function parseRecordArgs(args: string[]): RecordOptions {
@@ -71,6 +85,21 @@ export function parseRecordArgs(args: string[]): RecordOptions {
         options.useLatestSession = true;
       }
       // Note: actual session ID value is parsed by main CLI into globalOptions.session
+    } else if (arg === '--listen') {
+      // Check if next arg is a mode value
+      const nextArg = args[i + 1];
+      if (nextArg && (nextArg === 'ws' || nextArg === 'http' || nextArg === 'all')) {
+        options.listen = nextArg as ListenMode;
+        i++;
+      } else {
+        options.listen = true;
+      }
+    } else if (arg === '--bodies') {
+      options.bodies = true;
+    } else if (arg === '-m' || arg === '--match') {
+      options.match = args[++i];
+    } else if (arg === '--max-payload') {
+      options.maxPayload = Number.parseInt(args[++i] ?? '', 10);
     }
   }
 
@@ -191,8 +220,20 @@ export async function recordCommand(
   const page = await browser.page();
   const cdp = page.cdpClient;
 
+  // Build recorder options
+  let listenConfig: RecorderListenOptions | boolean | undefined;
+  if (options.listen) {
+    const listenOpts: RecorderListenOptions = {
+      mode: typeof options.listen === 'string' ? options.listen : 'all',
+      match: options.match,
+      captureResponseBodies: options.bodies,
+      maxPayload: options.maxPayload,
+    };
+    listenConfig = listenOpts;
+  }
+
   // Create recorder
-  const recorder = new Recorder(cdp);
+  const recorder = new Recorder(cdp, listenConfig ? { listen: listenConfig } : undefined);
 
   // Track if we're already stopping to prevent double-stop
   let stopping = false;
@@ -217,7 +258,18 @@ export async function recordCommand(
       await browser.disconnect();
 
       // Output summary
-      console.log(`\nSaved ${recording.steps.length} steps to ${outputFile}`);
+      const networkInfo = recording.network
+        ? `, ${recording.network.requests.length} HTTP requests`
+        : '';
+      const wsInfo = recording.websockets
+        ? `, ${recording.websockets.frames.length} WS frames`
+        : '';
+      const timelineInfo = recording.timeline
+        ? ` (${recording.timeline.length} timeline entries)`
+        : '';
+      console.log(
+        `\nSaved ${recording.steps.length} steps${networkInfo}${wsInfo}${timelineInfo} to ${outputFile}`
+      );
 
       if (globalOptions.format === 'json') {
         output(
@@ -226,6 +278,9 @@ export async function recordCommand(
             file: outputFile,
             steps: recording.steps.length,
             duration: recording.duration,
+            networkRequests: recording.network?.requests.length ?? 0,
+            wsFrames: recording.websockets?.frames.length ?? 0,
+            timelineEntries: recording.timeline?.length ?? 0,
           },
           'json'
         );
@@ -239,8 +294,14 @@ export async function recordCommand(
   }
 
   // Handle signals
-  process.on('SIGINT', stopAndSave);
-  process.on('SIGTERM', stopAndSave);
+  const handleSignal = () => {
+    stopAndSave().catch((err) => {
+      console.error('Error during shutdown:', err);
+      process.exit(1);
+    });
+  };
+  process.on('SIGINT', handleSignal);
+  process.on('SIGTERM', handleSignal);
 
   // Handle timeout
   if (options.timeout && options.timeout > 0) {
@@ -251,6 +312,11 @@ export async function recordCommand(
   await recorder.start();
 
   console.log(`Recording... Press Ctrl+C to stop and save to ${outputFile}`);
+  if (options.listen) {
+    const listenMode = typeof options.listen === 'string' ? options.listen : 'all';
+    const matchLabel = options.match ? ` matching "${options.match}"` : '';
+    console.log(`Network capture: ${listenMode} traffic${matchLabel}`);
+  }
   console.log(`Session: ${session.id}`);
   console.log(`URL: ${await page.url()}`);
 }

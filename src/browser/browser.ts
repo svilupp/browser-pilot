@@ -20,6 +20,52 @@ export interface BrowserOptions extends ConnectOptions {
 export interface PageOptions {
   /** Specific target ID to attach to */
   targetId?: string;
+  /** Filter targets to those whose URL contains this string */
+  targetUrl?: string;
+  /**
+   * Minimum acceptable viewport dimensions.
+   * If the attached target's viewport is smaller, it will be overridden.
+   * Defaults to { width: 200, height: 200 }.
+   * Set to false to disable viewport validation.
+   */
+  minViewport?: { width: number; height: number } | false;
+}
+
+/**
+ * Score a target for selection priority.
+ * Higher score = more likely to be a real interactive tab.
+ */
+function scoreTarget(t: TargetInfo): number {
+  let score = 0;
+
+  // Strongly prefer http/https URLs (real pages)
+  if (t.url.startsWith('http://') || t.url.startsWith('https://')) score += 10;
+
+  // Penalize internal Chrome URLs
+  if (t.url.startsWith('chrome://')) score -= 20;
+  if (t.url.startsWith('chrome-extension://')) score -= 15;
+  if (t.url.startsWith('devtools://')) score -= 25;
+
+  // Slight penalty for blank pages
+  if (t.url === 'about:blank') score -= 5;
+
+  // Prefer targets not already attached by another client
+  if (!t.attached) score += 3;
+
+  // Prefer targets with a title (usually real pages)
+  if (t.title && t.title.length > 0) score += 2;
+
+  return score;
+}
+
+/**
+ * Pick the best target from a list of page targets using scoring heuristics.
+ * Returns undefined if the list is empty.
+ */
+function pickBestTarget(targets: TargetInfo[]): string | undefined {
+  if (targets.length === 0) return undefined;
+  const sorted = [...targets].sort((a, b) => scoreTarget(b) - scoreTarget(a));
+  return sorted[0]!.targetId;
 }
 
 export class Browser {
@@ -53,8 +99,13 @@ export class Browser {
   }
 
   /**
-   * Get or create a page by name
-   * If no name is provided, returns the first available page or creates a new one
+   * Get or create a page by name.
+   * If no name is provided, returns the first available page or creates a new one.
+   *
+   * Target selection heuristics (when no targetId is specified):
+   * - Prefer http/https URLs over chrome://, devtools://, about:blank
+   * - Prefer unattached targets (not already controlled by another client)
+   * - Filter by targetUrl if provided
    */
   async page(name?: string, options?: PageOptions): Promise<Page> {
     const pageName = name ?? 'default';
@@ -65,29 +116,42 @@ export class Browser {
 
     // Get available targets
     const targets = await this.cdp.send<{ targetInfos: TargetInfo[] }>('Target.getTargets');
-    const pageTargets = targets.targetInfos.filter((t) => t.type === 'page');
+    let pageTargets = targets.targetInfos.filter((t) => t.type === 'page');
+
+    // Apply URL filter if provided
+    if (options?.targetUrl) {
+      const urlFilter = options.targetUrl;
+      const filtered = pageTargets.filter((t) => t.url.includes(urlFilter));
+      if (filtered.length > 0) {
+        pageTargets = filtered;
+      } else {
+        console.warn(
+          `[browser-pilot] No targets match URL filter "${urlFilter}", falling back to all page targets`
+        );
+      }
+    }
 
     let targetId: string;
 
     if (options?.targetId) {
       // Verify the requested target still exists
-      const targetExists = pageTargets.some((t) => t.targetId === options.targetId);
+      const targetExists = targets.targetInfos.some(
+        (t) => t.type === 'page' && t.targetId === options.targetId
+      );
       if (targetExists) {
         targetId = options.targetId;
       } else {
         console.warn(`[browser-pilot] Target ${options.targetId} no longer exists, falling back`);
         targetId =
-          pageTargets.length > 0
-            ? pageTargets[0]!.targetId
-            : (
-                await this.cdp.send<{ targetId: string }>('Target.createTarget', {
-                  url: 'about:blank',
-                })
-              ).targetId;
+          pickBestTarget(pageTargets) ??
+          (
+            await this.cdp.send<{ targetId: string }>('Target.createTarget', {
+              url: 'about:blank',
+            })
+          ).targetId;
       }
     } else if (pageTargets.length > 0) {
-      // Use the first available page
-      targetId = pageTargets[0]!.targetId;
+      targetId = pickBestTarget(pageTargets)!;
     } else {
       // Create a new page
       const result = await this.cdp.send<{ targetId: string }>('Target.createTarget', {
@@ -102,6 +166,28 @@ export class Browser {
     // Create and initialize page
     const page = new Page(this.cdp, targetId);
     await page.init();
+
+    // Validate viewport dimensions (detect pathological targets like 921x56)
+    const minViewport =
+      options?.minViewport !== undefined ? options.minViewport : { width: 200, height: 200 };
+
+    if (minViewport !== false) {
+      try {
+        const viewport = await page.evaluate<{ w: number; h: number }>(
+          '({ w: window.innerWidth, h: window.innerHeight })'
+        );
+        if (viewport.w < minViewport.width || viewport.h < minViewport.height) {
+          console.warn(
+            `[browser-pilot] Attached target has small viewport (${viewport.w}x${viewport.h}). ` +
+              `Applying default viewport override (1280x720). ` +
+              `Use { minViewport: false } to disable this check.`
+          );
+          await page.setViewport({ width: 1280, height: 720 });
+        }
+      } catch {
+        // Viewport check is best-effort; don't fail the connection
+      }
+    }
 
     this.pages.set(pageName, page);
     return page;

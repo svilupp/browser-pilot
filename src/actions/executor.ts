@@ -96,7 +96,7 @@ export class BatchExecutor {
         if (!step.selector) throw new Error('click requires selector');
 
         // If waitForNavigation is set, set up listener BEFORE clicking
-        if (step.waitForNavigation) {
+        if (step.waitForNavigation === true) {
           const navPromise = this.page.waitForNavigation({ timeout, optional });
           await this.page.click(step.selector, { timeout, optional });
           await navPromise;
@@ -113,7 +113,6 @@ export class BatchExecutor {
         await this.page.fill(step.selector, step.value, {
           timeout,
           optional,
-          clear: step.clear ?? true,
           blur: step.blur,
         });
         return { selectorUsed: this.getUsedSelector(step.selector) };
@@ -170,6 +169,7 @@ export class BatchExecutor {
           timeout,
           optional,
           method: step.method ?? 'enter+click',
+          waitForNavigation: step.waitForNavigation,
         });
         return { selectorUsed: this.getUsedSelector(step.selector) };
       }

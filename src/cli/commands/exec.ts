@@ -130,7 +130,7 @@ export async function execCommand(
     const snippet = actionsJson!.substring(0, 80);
     const looksLikeEvaluate = /evaluate/i.test(actionsJson!);
     const evalTip = looksLikeEvaluate
-      ? "\n\nTip: For JavaScript evaluation, use 'bp eval' instead — no JSON wrapping needed:\n  bp eval 'your.expression.here'"
+      ? "\n\nTip: If you truly need raw JavaScript evaluation, use 'bp eval' instead — no JSON wrapping needed:\n  bp eval 'your.expression.here'\nUse high-level actions plus refs first whenever possible."
       : '';
     throw new Error(
       `Invalid JSON: ${snippet}${actionsJson!.length > 80 ? '...' : ''}\n\n` +
@@ -270,11 +270,11 @@ export async function execCommand(
       globalOptions.format
     );
 
-    // Tip: suggest bp eval when an evaluate action fails
+    // Tip: suggest bp eval only as an escape hatch when evaluate steps fail
     const failedEval = result.steps.find((s) => s.action === 'evaluate' && !s.success);
     if (failedEval) {
       console.error(
-        '\nTip: Use "bp eval \'expression\'" for simpler JavaScript evaluation (no JSON escaping needed).'
+        '\nTip: Use "bp eval \'expression\'" for simpler JavaScript inspection/debugging (no JSON escaping needed). Prefer high-level actions for interactions.'
       );
     }
   } finally {

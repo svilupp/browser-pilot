@@ -5,6 +5,44 @@
 
 import type { CreateSessionOptions, Provider, ProviderSession } from './types.ts';
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function fetchDevToolsJson<T>(
+  host: string,
+  path: string,
+  errorPrefix: string,
+  options: { attempts?: number; initialDelayMs?: number; maxDelayMs?: number } = {}
+): Promise<T> {
+  const protocol = host.includes('://') ? '' : 'http://';
+  const attempts = options.attempts ?? 1;
+  let delayMs = options.initialDelayMs ?? 50;
+  const maxDelayMs = options.maxDelayMs ?? 250;
+  let lastError: Error | undefined;
+
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      const response = await fetch(`${protocol}${host}${path}`);
+      if (response.ok) {
+        return (await response.json()) as T;
+      }
+      lastError = new Error(`${errorPrefix}: ${response.status}`);
+    } catch (error) {
+      lastError = new Error(
+        `${errorPrefix}: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+
+    if (attempt < attempts) {
+      await sleep(delayMs);
+      delayMs = Math.min(delayMs * 2, maxDelayMs);
+    }
+  }
+
+  throw lastError ?? new Error(errorPrefix);
+}
+
 export interface GenericProviderOptions {
   /** WebSocket URL to connect to (e.g., ws://localhost:9222/devtools/browser/xxx) */
   wsUrl: string;
@@ -43,19 +81,14 @@ export class GenericProvider implements Provider {
 export async function discoverTargets(
   host: string = 'localhost:9222'
 ): Promise<Array<{ id: string; type: string; url: string; webSocketDebuggerUrl?: string }>> {
-  const protocol = host.includes('://') ? '' : 'http://';
-  const response = await fetch(`${protocol}${host}/json/list`);
-
-  if (!response.ok) {
-    throw new Error(`Failed to discover targets: ${response.status}`);
-  }
-
-  return (await response.json()) as Array<{
-    id: string;
-    type: string;
-    url: string;
-    webSocketDebuggerUrl?: string;
-  }>;
+  return fetchDevToolsJson<
+    Array<{
+      id: string;
+      type: string;
+      url: string;
+      webSocketDebuggerUrl?: string;
+    }>
+  >(host, '/json/list', 'Failed to discover targets');
 }
 
 /**
@@ -65,13 +98,13 @@ export async function discoverTargets(
  * @returns WebSocket URL for browser-level CDP connection
  */
 export async function getBrowserWebSocketUrl(host: string = 'localhost:9222'): Promise<string> {
-  const protocol = host.includes('://') ? '' : 'http://';
-  const response = await fetch(`${protocol}${host}/json/version`);
-
-  if (!response.ok) {
-    throw new Error(`Failed to get browser info: ${response.status}`);
-  }
-
-  const info = (await response.json()) as { webSocketDebuggerUrl: string };
+  const info = await fetchDevToolsJson<{
+    id: string;
+    webSocketDebuggerUrl: string;
+  }>(host, '/json/version', 'Failed to get browser info', {
+    attempts: 10,
+    initialDelayMs: 50,
+    maxDelayMs: 250,
+  });
   return info.webSocketDebuggerUrl;
 }

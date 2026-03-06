@@ -172,7 +172,6 @@ async function executeBatch(
           await page.fill(step.selector!, step.value as string, {
             timeout: step.timeout ?? timeout,
             optional: step.optional,
-            clear: step.clear,
           });
           break;
         case 'type':
@@ -205,6 +204,7 @@ async function executeBatch(
             timeout: step.timeout ?? timeout,
             optional: step.optional,
             method: step.method,
+            waitForNavigation: step.waitForNavigation,
           });
           break;
         case 'press':
@@ -408,5 +408,16 @@ describe('BatchExecutor', () => {
     expect(result.success).toBe(true);
     expect(result.steps).toHaveLength(steps.length);
     expect(page.calls).toHaveLength(steps.length);
+  });
+
+  test('should forward submit waitForNavigation mode', async () => {
+    const page = createMockPage();
+
+    await executeBatch(page, [{ action: 'submit', selector: '#form', waitForNavigation: 'auto' }]);
+
+    expect(page.calls[0]).toEqual({
+      method: 'submit',
+      args: ['#form', expect.objectContaining({ waitForNavigation: 'auto' })],
+    });
   });
 });

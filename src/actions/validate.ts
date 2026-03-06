@@ -103,7 +103,7 @@ const PROPERTY_ALIASES: Record<string, string> = {
 
 // --- Action rules ---
 
-type FieldType = 'string' | 'string|string[]' | 'number' | 'boolean';
+type FieldType = 'string' | 'string|string[]' | 'number' | 'boolean' | 'boolean|auto';
 
 interface FieldRule {
   type: FieldType;
@@ -129,7 +129,6 @@ const ACTION_RULES: Record<ActionType, ActionRule> = {
   fill: {
     required: { selector: { type: 'string|string[]' }, value: { type: 'string' } },
     optional: {
-      clear: { type: 'boolean' },
       blur: { type: 'boolean' },
     },
   },
@@ -161,6 +160,7 @@ const ACTION_RULES: Record<ActionType, ActionRule> = {
     required: { selector: { type: 'string|string[]' } },
     optional: {
       method: { type: 'string', enum: ['enter', 'click', 'enter+click'] },
+      waitForNavigation: { type: 'boolean|auto' },
     },
   },
   press: {
@@ -241,7 +241,6 @@ const KNOWN_STEP_FIELDS = new Set([
   'timeout',
   'optional',
   'method',
-  'clear',
   'blur',
   'delay',
   'waitForNavigation',
@@ -337,6 +336,11 @@ function checkFieldType(value: unknown, rule: FieldRule): string | null {
       return null;
     case 'boolean':
       if (typeof value !== 'boolean') return `expected boolean, got ${typeof value}`;
+      return null;
+    case 'boolean|auto':
+      if (typeof value !== 'boolean' && value !== 'auto') {
+        return `expected boolean or "auto", got ${typeof value}`;
+      }
       return null;
   }
 }

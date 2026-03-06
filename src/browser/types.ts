@@ -13,10 +13,10 @@ export interface ActionOptions {
 }
 
 export interface FillOptions extends ActionOptions {
-  /** Clear existing content before filling */
-  clear?: boolean;
   /** Trigger blur after filling (useful for React/Vue frameworks that update on blur) */
   blur?: boolean;
+  /** Verify value stuck after fill; falls back to char-by-char typing if not (default: true) */
+  verify?: boolean;
 }
 
 export interface TypeOptions extends ActionOptions {
@@ -175,7 +175,15 @@ export class ElementNotFoundError extends Error {
 
   constructor(selectors: string | string[], hints?: FailureHint[]) {
     const selectorList = Array.isArray(selectors) ? selectors : [selectors];
-    super(`Element not found: ${selectorList.join(', ')}`);
+    let msg = `Element not found: ${selectorList.join(', ')}`;
+    if (hints?.length) {
+      msg += `. Did you mean: ${hints
+        .slice(0, 3)
+        .map((h) => `${h.element.ref} (${h.element.role} "${h.element.name}")`)
+        .join(', ')}`;
+    }
+    msg += `. Run 'bp snapshot' to see available elements.`;
+    super(msg);
     this.name = 'ElementNotFoundError';
     this.selectors = selectorList;
     this.hints = hints;
@@ -184,7 +192,10 @@ export class ElementNotFoundError extends Error {
 
 export class TimeoutError extends Error {
   constructor(message = 'Operation timed out') {
-    super(message);
+    const msg = message.includes('bp snapshot')
+      ? message
+      : `${message}. Run 'bp snapshot' to check current page state.`;
+    super(msg);
     this.name = 'TimeoutError';
   }
 }
