@@ -22,6 +22,8 @@ export interface FillOptions extends ActionOptions {
 export interface TypeOptions extends ActionOptions {
   /** Delay between keystrokes in ms */
   delay?: number;
+  /** Blur the element after typing */
+  blur?: boolean;
 }
 
 export interface SubmitOptions extends ActionOptions {

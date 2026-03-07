@@ -87,7 +87,7 @@ export async function createCDPClient(
 
     // Response to a command (has id)
     if ('id' in msg && typeof msg.id === 'number') {
-      const response = msg as CDPResponse;
+      const response = msg;
       const request = pending.get(response.id);
 
       if (request) {
@@ -105,7 +105,7 @@ export async function createCDPClient(
 
     // Event (has method but no id)
     if ('method' in msg) {
-      const event = msg as CDPEvent;
+      const event = msg;
       const params = event.params ?? {};
 
       // Notify any-event handlers

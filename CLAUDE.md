@@ -7,14 +7,16 @@ Lightweight CDP-based browser automation for AI agents. Zero production dependen
 ## Commands
 
 ```bash
-bun check                   # TypeScript + lint (run first)
+bun run check:quiet         # All checks, shows errors only (tsc + biome + oxlint + unit tests)
+bun run check               # Same checks, verbose output
+bun run lint:fix             # Auto-fix formatting (biome)
 bun test                    # Run all tests
 bun test tests/unit         # Unit tests only (fast, mocked CDP)
 bun test tests/integration  # Integration tests (real browser)
 bun run dev:bp              # Run CLI from source (no build needed)
 ```
 
-Before PR: run `bun check && bun test`
+Before PR: run `bun run check:quiet`
 
 > **Dev tip:** Use `bun run dev:bp` (or `bun ./src/cli/index.ts`) instead of `bp` during development to avoid stale binaries.
 
@@ -69,6 +71,7 @@ await page.click(['#submit', '.fallback', 'button[type=submit]']);
 Every action implicitly waits for element visibility before interaction. No separate `waitFor()` needed.
 - Visibility check: `src/wait/strategies.ts:26-45` (checks display, visibility, opacity, rect)
 - Default timeout: 30s, polling: 100ms
+- **Fast-fail on static pages:** Element presence waits (`visible`/`attached`) fail fast instead of polling for the full timeout when the page is fully loaded and the DOM is not mutating. Uses `isPageStatic()` heuristic with a 200ms MutationObserver observation window. Implementation: `src/wait/strategies.ts:132-167`.
 
 ### Optional Actions
 All actions support `optional: true` to skip failures gracefully instead of throwing.
@@ -88,8 +91,13 @@ Complex patterns (custom dropdowns, multi-step forms) are composed from primitiv
 |-----------|----------|
 | Browser class | `src/browser/browser.ts` |
 | Page class (all actions) | `src/browser/page.ts` |
+| Actionability checks | `src/browser/actionability.ts` |
+| Element diagnostics | `src/browser/diagnose.ts` |
+| Failure hint generation | `src/browser/hint-generator.ts` |
+| Snapshot diffing | `src/browser/snapshot-diff.ts` |
 | CDP client | `src/cdp/client.ts:53-242` |
-| Batch executor | `src/actions/executor.ts:21-73` |
+| Batch executor | `src/actions/executor.ts` |
+| Step types + FailureReason | `src/actions/types.ts` |
 | Wait strategies | `src/wait/strategies.ts` |
 | Provider interface | `src/providers/types.ts:5-60` |
 | BrowserBase provider | `src/providers/browserbase.ts:23-99` |
@@ -104,6 +112,11 @@ Complex patterns (custom dropdowns, multi-step forms) are composed from primitiv
 | CLI | `src/cli/index.ts` |
 | CLI audio command | `src/cli/commands/audio.ts` (subcommands: setup, play, capture, roundtrip, check) |
 | CLI listen command | `src/cli/commands/listen.ts` (network traffic monitor: ws, http, all) |
+| CLI session attach helper | `src/cli/attach.ts` |
+| Step validation + aliases | `src/actions/validate.ts` |
+
+### Lazy Session Attach (CLI)
+`bp exec` and `bp eval` no longer do preflight `/json/version` validation. They connect directly via WebSocket and clean up stale sessions on failure. Implementation: `src/cli/attach.ts`.
 
 ## Audio I/O Pattern
 
@@ -163,6 +176,7 @@ Providers implement `createSession()` and optional `resumeSession()`. Return `{ 
 `page.batch(steps[], options)` executes steps sequentially with timing. Supports `onFail: 'stop' | 'continue'`.
 - Executor: `src/actions/executor.ts:21-73`
 - Step types: `src/actions/types.ts:22-71`
+- Validation & aliases: `src/actions/validate.ts`
 
 ```typescript
 const result = await page.batch([
@@ -172,18 +186,40 @@ const result = await page.batch([
 ], { onFail: 'stop' });
 ```
 
+### Assertion Steps
+Batch steps support 5 assertion actions for verifying page state:
+- `assertVisible` — requires `selector`, waits for element to be visible
+- `assertExists` — requires `selector`, waits for element to be attached to DOM
+- `assertText` — requires `expect` (or `value`), optional `selector` (defaults to full page text), substring match
+- `assertUrl` — requires `expect` (or `url`), checks current URL contains expected substring
+- `assertValue` — requires `selector` and `expect` (or `value`), waits for element then checks its value (exact match)
+
+### Retry Support
+Any step can include `retry` (number, default 0) and `retryDelay` (ms, default 500). Retries wrap the full step execution including waits.
+
+```typescript
+{ action: 'click', selector: '#flaky-btn', retry: 3, retryDelay: 1000 }
+```
+
 ## Snapshot Format
 
 Accessibility tree extraction via `Accessibility.getFullAXTree`. Nodes get refs (e1, e2...) for identification.
 - Implementation: `src/browser/page.ts:825-967`
 - Types: `src/browser/types.ts:100-145`
 
-## Error Types
+## Error Types & Failure Classification
 
 - `ElementNotFoundError`: `src/browser/types.ts:148-157`
 - `TimeoutError`: `src/browser/types.ts:159-163`
 - `NavigationError`: `src/browser/types.ts:166-171`
-- `CDPError`: `src/cdp/client.ts` (for CDP-level errors)
+- `CDPError`: `src/cdp/protocol.ts` (for CDP-level errors)
+- `ActionabilityError`: `src/browser/actionability.ts` (stores `failureType` and `coveringElement`)
+
+### Structured Failure Reasons (planned — see PLAN_v2.md Epic 4)
+`StepResult.failureReason` classifies errors for agent consumption:
+`missing` | `hidden` | `covered` | `disabled` | `readonly` | `detached` | `replaced` | `notEditable` | `timeout` | `navigation` | `cdpError` | `unknown`
+
+Each failure includes a `suggestion` string guiding the agent to the next action, and `hints` with alternative selectors when applicable.
 
 ## Testing
 
@@ -204,4 +240,16 @@ test('clicks element', async () => {
 - All actions scroll into view before interaction
 - DOM node ID cached after first `DOM.getDocument()`, reset on navigation
 - Event listeners cleaned up after use (prevents memory leaks)
+- Event listener tracker persists across navigations via `Page.addScriptToEvaluateOnNewDocument`
 - No production dependencies - pure Web Standard APIs (WebSocket, fetch)
+
+## Improvement Plan
+
+See `PLAN_v2.md` for the full reliability and effectiveness improvement plan (15 epics). Key themes:
+- **Click reliability**: Hit-target retry through transient overlays, viewport validation after scroll
+- **Failure classification**: Structured `failureReason` in StepResult with auto-recovery and AI-friendly suggestions
+- **Event-driven waits**: Replace all hardcoded `sleep()` calls in submit, selectCustom, iframe context
+- **Workflow runner**: `bp run <workflow.json>` for multi-step action + assertion in one invocation
+- **Keyboard modifiers**: `press('a', { modifiers: ['Control'] })` and `shortcut('Control+a')` batch action
+- **Iframe safety**: Explicit errors on broken frame context, never silent degradation
+- **Benchmarks**: Repo-local `bun run bench` with CI regression gates

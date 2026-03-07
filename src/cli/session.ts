@@ -98,7 +98,7 @@ export async function updateSession(
   const session = await loadSession(id);
   const mergedMetadata =
     updates.metadata !== undefined
-      ? { ...(session.metadata ?? {}), ...(updates.metadata ?? {}) }
+      ? { ...session.metadata, ...updates.metadata }
       : session.metadata;
   const updated = {
     ...session,

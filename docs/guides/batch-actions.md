@@ -271,6 +271,38 @@ const result = await page.batch([
 const linkCount = result.steps[0].result as number;
 ```
 
+## Assertions
+
+Assertion steps let you verify page state inside a batch, eliminating extra round trips:
+
+```typescript
+const result = await page.batch([
+  { action: 'goto', url: 'https://example.com/login' },
+  { action: 'fill', selector: '#email', value: 'user@example.com' },
+  { action: 'fill', selector: '#password', value: 'secret' },
+  { action: 'submit', selector: 'form' },
+  { action: 'assertUrl', expect: '/dashboard' },
+  { action: 'assertText', expect: 'Welcome', selector: 'h1' },
+]);
+// result.success is false if any assertion fails
+```
+
+Available assertions: `assertVisible`, `assertExists`, `assertText`, `assertUrl`, `assertValue`.
+
+## Retry
+
+Any step can include `retry` and `retryDelay` to handle flaky async content:
+
+```typescript
+const result = await page.batch([
+  { action: 'goto', url: 'https://example.com' },
+  { action: 'click', selector: '#load-more', retry: 3, retryDelay: 1000 },
+  { action: 'assertVisible', selector: '.results', retry: 5, retryDelay: 500 },
+]);
+```
+
+With `onFail: 'stop'` (the default), a failed assertion halts the batch immediately — useful for fast-fail validation after form submissions or navigations.
+
 ## Real-World Examples
 
 ### E-commerce Checkout

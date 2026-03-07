@@ -305,7 +305,9 @@ export async function recordCommand(
 
   // Handle timeout
   if (options.timeout && options.timeout > 0) {
-    setTimeout(stopAndSave, options.timeout);
+    setTimeout(() => {
+      void stopAndSave();
+    }, options.timeout);
   }
 
   // Start recording

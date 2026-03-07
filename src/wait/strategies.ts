@@ -191,6 +191,10 @@ export async function waitForElement(
         return isElementAttached(cdp, selector, contextId);
       case 'detached':
         return !(await isElementAttached(cdp, selector, contextId));
+      default: {
+        const _exhaustive: never = state;
+        throw new Error(`Unhandled wait state: ${_exhaustive}`);
+      }
     }
   };
 
@@ -252,6 +256,10 @@ export async function waitForAnyElement(
         return isElementAttached(cdp, selector, contextId);
       case 'detached':
         return !(await isElementAttached(cdp, selector, contextId));
+      default: {
+        const _exhaustive: never = state;
+        throw new Error(`Unhandled wait state: ${_exhaustive}`);
+      }
     }
   };
 
@@ -370,6 +378,15 @@ export async function waitForNavigation(
       cleanup.push(() => cdp.off('Page.navigatedWithinDocument', onSameDoc));
     }
 
+    // Event: Network idle lifecycle (catches SPAs that don't fire loadEventFired)
+    const onLifecycle = (params: Record<string, unknown>) => {
+      if (params['name'] === 'networkIdle') {
+        done(true);
+      }
+    };
+    cdp.on('Page.lifecycleEvent', onLifecycle);
+    cleanup.push(() => cdp.off('Page.lifecycleEvent', onLifecycle));
+
     // Fallback: URL polling (catches edge cases)
     const pollUrl = async () => {
       while (!resolved && Date.now() < startTime + timeout) {
@@ -386,7 +403,7 @@ export async function waitForNavigation(
         }
       }
     };
-    pollUrl();
+    void pollUrl();
   });
 }
 

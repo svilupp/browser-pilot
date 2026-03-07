@@ -54,6 +54,8 @@ const ACTION_ALIASES: Record<string, ActionType> = {
   inspect: 'snapshot',
   enter: 'press',
   keypress: 'press',
+  hotkey: 'shortcut',
+  keybinding: 'shortcut',
   nav: 'goto',
   open: 'goto',
   visit: 'goto',
@@ -105,6 +107,9 @@ const PROPERTY_ALIASES: Record<string, string> = {
   input: 'value',
   content: 'value',
   keys: 'key',
+  shortcutKey: 'combo',
+  hotkey: 'combo',
+  keybinding: 'combo',
   button: 'key',
   address: 'url',
   page: 'url',
@@ -133,7 +138,7 @@ const ACTION_RULES: Record<ActionType, ActionRule> = {
   click: {
     required: { selector: { type: 'string|string[]' } },
     optional: {
-      waitForNavigation: { type: 'boolean' },
+      waitForNavigation: { type: 'boolean|auto' },
     },
   },
   fill: {
@@ -146,6 +151,7 @@ const ACTION_RULES: Record<ActionType, ActionRule> = {
     required: { selector: { type: 'string|string[]' }, value: { type: 'string' } },
     optional: {
       delay: { type: 'number' },
+      blur: { type: 'boolean' },
     },
   },
   select: {
@@ -175,6 +181,12 @@ const ACTION_RULES: Record<ActionType, ActionRule> = {
   },
   press: {
     required: { key: { type: 'string' } },
+    optional: {
+      modifiers: { type: 'string|string[]' },
+    },
+  },
+  shortcut: {
+    required: { combo: { type: 'string' } },
     optional: {},
   },
   focus: {
@@ -277,6 +289,8 @@ const KNOWN_STEP_FIELDS = new Set([
   'url',
   'value',
   'key',
+  'combo',
+  'modifiers',
   'waitFor',
   'timeout',
   'optional',
@@ -385,6 +399,10 @@ function checkFieldType(value: unknown, rule: FieldRule): string | null {
         return `expected boolean or "auto", got ${typeof value}`;
       }
       return null;
+    default: {
+      const _exhaustive: never = rule.type;
+      return `unknown type: ${_exhaustive}`;
+    }
   }
 }
 
@@ -452,7 +470,7 @@ export function validateSteps(steps: unknown[]): ValidationResult {
     }
 
     const action = resolved.action;
-    const rule = ACTION_RULES[action]!;
+    const rule = ACTION_RULES[action];
 
     // Detect unknown properties
     for (const key of Object.keys(obj)) {

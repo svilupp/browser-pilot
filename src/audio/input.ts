@@ -203,10 +203,10 @@ export class AudioInput {
 
     // Validate we're on a real page (not about:blank)
     try {
-      const resp = (await this.cdp.send('Runtime.evaluate', {
+      const resp = await this.cdp.send<{ result?: { value?: unknown } }>('Runtime.evaluate', {
         expression: 'location.href',
         returnByValue: true,
-      })) as { result?: { value?: unknown } };
+      });
       const href = resp.result?.value;
       if (typeof href === 'string' && (href === 'about:blank' || href === 'about:srcdoc')) {
         throw new Error(
@@ -222,10 +222,10 @@ export class AudioInput {
     // Get current page origin for permission grant
     let origin: string | undefined;
     try {
-      const resp = (await this.cdp.send('Runtime.evaluate', {
+      const resp = await this.cdp.send<{ result?: { value?: unknown } }>('Runtime.evaluate', {
         expression: 'location.origin',
         returnByValue: true,
-      })) as { result?: { value?: unknown } };
+      });
       const val = resp.result?.value;
       if (typeof val === 'string' && val !== 'null') {
         origin = val;

@@ -106,13 +106,13 @@ export async function execCommand(
   try {
     actions = JSON.parse(actionsJson);
   } catch {
-    const snippet = actionsJson!.substring(0, 80);
-    const looksLikeEvaluate = /evaluate/i.test(actionsJson!);
+    const snippet = actionsJson.substring(0, 80);
+    const looksLikeEvaluate = /evaluate/i.test(actionsJson);
     const evalTip = looksLikeEvaluate
       ? "\n\nTip: If you truly need raw JavaScript evaluation, use 'bp eval' instead — no JSON wrapping needed:\n  bp eval 'your.expression.here'\nUse high-level actions plus refs first whenever possible."
       : '';
     throw new Error(
-      `Invalid JSON: ${snippet}${actionsJson!.length > 80 ? '...' : ''}\n\n` +
+      `Invalid JSON: ${snippet}${actionsJson.length > 80 ? '...' : ''}\n\n` +
         "Actions must be valid JSON. Tip: use 'bp exec -f actions.json' for complex steps.\n" +
         `Run 'bp actions' for complete action reference.${evalTip}`
     );

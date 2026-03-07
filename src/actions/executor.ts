@@ -2,11 +2,89 @@
  * Batch action executor
  */
 
+import { ActionabilityError } from '../browser/actionability.ts';
+import { generateHints } from '../browser/hint-generator.ts';
 import type { Page } from '../browser/page.ts';
-import { ElementNotFoundError } from '../browser/types.ts';
-import type { BatchOptions, BatchResult, Step, StepResult } from './types.ts';
+import { ElementNotFoundError, NavigationError, TimeoutError } from '../browser/types.ts';
+import { CDPError } from '../cdp/protocol.ts';
+import type { BatchOptions, BatchResult, FailureReason, Step, StepResult } from './types.ts';
 
 const DEFAULT_TIMEOUT = 30000;
+
+function classifyFailure(error: unknown): {
+  reason: FailureReason;
+  coveringElement?: { tag: string; id?: string; className?: string };
+} {
+  if (error instanceof ElementNotFoundError) {
+    return { reason: 'missing' };
+  }
+  if (error instanceof ActionabilityError) {
+    switch (error.failureType) {
+      case 'visible':
+        return { reason: 'hidden' };
+      case 'hitTarget':
+        return { reason: 'covered', coveringElement: error.coveringElement };
+      case 'enabled':
+        return { reason: 'disabled' };
+      case 'editable':
+        return { reason: error.message?.includes('readonly') ? 'readonly' : 'notEditable' };
+      case 'stable':
+        return { reason: 'replaced' };
+      default:
+        return { reason: 'unknown' };
+    }
+  }
+  if (error instanceof TimeoutError) {
+    return { reason: 'timeout' };
+  }
+  if (error instanceof NavigationError) {
+    return { reason: 'navigation' };
+  }
+  if (error instanceof CDPError) {
+    return { reason: 'cdpError' };
+  }
+  const msg = String((error as Error)?.message ?? error);
+  if (msg.includes('Could not find node') || msg.includes('does not belong to the document')) {
+    return { reason: 'detached' };
+  }
+  return { reason: 'unknown' };
+}
+
+function getSuggestion(reason: FailureReason): string {
+  switch (reason) {
+    case 'missing':
+      return "Element not found. Run 'snapshot' to see available elements, or try alternative selectors.";
+    case 'hidden':
+      return "Element exists but is not visible. Try 'scroll' or wait for it to appear.";
+    case 'covered':
+      return 'Element is blocked by another element. Dismiss the covering element first.';
+    case 'disabled':
+      return 'Element is disabled. Complete prerequisite steps to enable it.';
+    case 'readonly':
+      return 'Element is readonly and cannot be edited directly.';
+    case 'detached':
+      return "Element was removed from the DOM. Run 'snapshot' for fresh element refs.";
+    case 'replaced':
+      return "Element was replaced in the DOM. Run 'snapshot' to get updated refs.";
+    case 'notEditable':
+      return 'Element is not an editable field. Try a different selector targeting an input or textarea.';
+    case 'timeout':
+      return 'Timed out waiting. The page may still be loading. Try increasing timeout.';
+    case 'navigation':
+      return 'Navigation failed. Check the URL and network connectivity.';
+    case 'cdpError':
+      return "Browser connection error. Try 'bp connect' again.";
+    case 'unknown':
+      return "Unexpected error. Run 'snapshot' to check page state.";
+    default: {
+      const _exhaustive: never = reason;
+      return `Unknown failure: ${_exhaustive}`;
+    }
+  }
+}
+
+// Exported for testing
+export { classifyFailure, getSuggestion };
 
 export class BatchExecutor {
   private page: Page;
@@ -59,7 +137,25 @@ export class BatchExecutor {
 
       if (!succeeded) {
         const errorMessage = lastError?.message ?? 'Unknown error';
-        const hints = lastError instanceof ElementNotFoundError ? lastError.hints : undefined;
+        let hints = lastError instanceof ElementNotFoundError ? lastError.hints : undefined;
+        const { reason, coveringElement } = classifyFailure(lastError);
+
+        // Auto-generate hints on element-related failures
+        if (
+          step.selector &&
+          !step.optional &&
+          ['missing', 'hidden', 'covered', 'disabled', 'detached', 'replaced'].includes(reason)
+        ) {
+          try {
+            const selectors = Array.isArray(step.selector) ? step.selector : [step.selector];
+            const autoHints = await generateHints(this.page, selectors, step.action, 3);
+            if (autoHints.length > 0) {
+              hints = autoHints;
+            }
+          } catch {
+            // Hint generation is best-effort
+          }
+        }
 
         results.push({
           index: i,
@@ -69,6 +165,9 @@ export class BatchExecutor {
           durationMs: Date.now() - stepStart,
           error: errorMessage,
           hints,
+          failureReason: reason,
+          coveringElement,
+          suggestion: getSuggestion(reason),
         });
 
         // Stop execution on failure (unless optional or onFail: 'continue')
@@ -193,7 +292,25 @@ export class BatchExecutor {
 
       case 'press': {
         if (!step.key) throw new Error('press requires key');
-        await this.page.press(step.key);
+        try {
+          await this.page.press(step.key, {
+            modifiers: step.modifiers,
+          });
+        } catch (e) {
+          if (optional) return {};
+          throw e;
+        }
+        return {};
+      }
+
+      case 'shortcut': {
+        if (!step.combo) throw new Error('shortcut requires combo');
+        try {
+          await this.page.shortcut(step.combo);
+        } catch (e) {
+          if (optional) return {};
+          throw e;
+        }
         return {};
       }
 
@@ -375,7 +492,7 @@ export class BatchExecutor {
       }
 
       default: {
-        const action = (step as Step).action;
+        const action = step.action as string;
         const aliases: Record<string, string> = {
           execute: 'evaluate',
           navigate: 'goto',
@@ -386,22 +503,44 @@ export class BatchExecutor {
           capture: 'screenshot',
           inspect: 'snapshot',
           enter: 'press',
+          keypress: 'press',
+          hotkey: 'shortcut',
+          keybinding: 'shortcut',
+          nav: 'goto',
           open: 'goto',
           visit: 'goto',
+          browse: 'goto',
+          load: 'goto',
+          write: 'fill',
+          set: 'fill',
+          pick: 'select',
+          choose: 'select',
+          send: 'press',
           eval: 'evaluate',
           js: 'evaluate',
+          script: 'evaluate',
           snap: 'snapshot',
+          accessibility: 'snapshot',
+          a11y: 'snapshot',
+          image: 'screenshot',
+          pic: 'screenshot',
           frame: 'switchFrame',
+          iframe: 'switchFrame',
           assert_visible: 'assertVisible',
           assert_exists: 'assertExists',
           assert_text: 'assertText',
           assert_url: 'assertUrl',
           assert_value: 'assertValue',
+          checkvisible: 'assertVisible',
+          checkexists: 'assertExists',
+          checktext: 'assertText',
+          checkurl: 'assertUrl',
+          checkvalue: 'assertValue',
         };
         const suggestion = aliases[action.toLowerCase()];
         const hint = suggestion ? ` Did you mean "${suggestion}"?` : '';
         const valid =
-          'goto, click, fill, type, select, check, uncheck, submit, press, focus, hover, scroll, wait, snapshot, screenshot, evaluate, text, switchFrame, switchToMain, assertVisible, assertExists, assertText, assertUrl, assertValue';
+          'goto, click, fill, type, select, check, uncheck, submit, press, shortcut, focus, hover, scroll, wait, snapshot, screenshot, evaluate, text, switchFrame, switchToMain, assertVisible, assertExists, assertText, assertUrl, assertValue';
         throw new Error(`Unknown action "${action}".${hint}\n\nValid actions: ${valid}`);
       }
     }

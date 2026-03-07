@@ -133,6 +133,64 @@ export const US_KEYBOARD: Record<string, KeyDefinition> = {
   PageDown: { key: 'PageDown', code: 'PageDown', keyCode: 34 },
 };
 
+/** Modifier key name to CDP key code mapping */
+export const MODIFIER_CODES: Record<string, string> = {
+  Control: 'ControlLeft',
+  Shift: 'ShiftLeft',
+  Alt: 'AltLeft',
+  Meta: 'MetaLeft',
+};
+
+/** Modifier key name to CDP keyCode mapping */
+export const MODIFIER_KEY_CODES: Record<string, number> = {
+  Control: 17,
+  Shift: 16,
+  Alt: 18,
+  Meta: 91,
+};
+
+/** Valid modifier names */
+export type ModifierKey = 'Control' | 'Shift' | 'Alt' | 'Meta';
+
+/** Compute CDP modifier bitmask from modifier names */
+export function computeModifierBitmask(modifiers: string[]): number {
+  let mask = 0;
+  if (modifiers.includes('Alt')) mask |= 1;
+  if (modifiers.includes('Control')) mask |= 2;
+  if (modifiers.includes('Meta')) mask |= 4;
+  if (modifiers.includes('Shift')) mask |= 8;
+  return mask;
+}
+
+/**
+ * Parse a shortcut combo string like "Control+a" or "Meta+Shift+z"
+ * into { modifiers, key }.
+ */
+export function parseShortcut(combo: string): { modifiers: ModifierKey[]; key: string } {
+  const parts = combo.split('+');
+  if (parts.length < 2) {
+    throw new Error(
+      `Invalid shortcut "${combo}": must contain at least one modifier and a key (e.g. "Control+a").`
+    );
+  }
+
+  const key = parts[parts.length - 1]!;
+  const modifiers: ModifierKey[] = [];
+  const validModifiers = new Set(Object.keys(MODIFIER_CODES));
+
+  for (let i = 0; i < parts.length - 1; i++) {
+    const mod = parts[i]!;
+    if (!validModifiers.has(mod)) {
+      throw new Error(
+        `Invalid modifier "${mod}" in shortcut "${combo}". Valid modifiers: ${[...validModifiers].join(', ')}`
+      );
+    }
+    modifiers.push(mod as ModifierKey);
+  }
+
+  return { modifiers, key };
+}
+
 /** Check if a character is in the US keyboard layout */
 export function isLayoutCharacter(char: string): boolean {
   return char in US_KEYBOARD;
