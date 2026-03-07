@@ -74,6 +74,16 @@ const ACTION_ALIASES: Record<string, ActionType> = {
   pic: 'screenshot',
   frame: 'switchFrame',
   iframe: 'switchFrame',
+  assert_visible: 'assertVisible',
+  assert_exists: 'assertExists',
+  assert_text: 'assertText',
+  assert_url: 'assertUrl',
+  assert_value: 'assertValue',
+  checkvisible: 'assertVisible',
+  checkexists: 'assertExists',
+  checktext: 'assertText',
+  checkurl: 'assertUrl',
+  checkvalue: 'assertValue',
 };
 
 const PROPERTY_ALIASES: Record<string, string> = {
@@ -225,6 +235,36 @@ const ACTION_RULES: Record<ActionType, ActionRule> = {
     required: {},
     optional: {},
   },
+  assertVisible: {
+    required: { selector: { type: 'string|string[]' } },
+    optional: {},
+  },
+  assertExists: {
+    required: { selector: { type: 'string|string[]' } },
+    optional: {},
+  },
+  assertText: {
+    required: {},
+    optional: {
+      selector: { type: 'string|string[]' },
+      expect: { type: 'string' },
+      value: { type: 'string' },
+    },
+  },
+  assertUrl: {
+    required: {},
+    optional: {
+      expect: { type: 'string' },
+      url: { type: 'string' },
+    },
+  },
+  assertValue: {
+    required: { selector: { type: 'string|string[]' } },
+    optional: {
+      expect: { type: 'string' },
+      value: { type: 'string' },
+    },
+  },
 };
 
 const VALID_ACTIONS = Object.keys(ACTION_RULES) as ActionType[];
@@ -254,6 +294,9 @@ const KNOWN_STEP_FIELDS = new Set([
   'format',
   'quality',
   'fullPage',
+  'expect',
+  'retry',
+  'retryDelay',
 ]);
 
 // --- Action resolution ---
@@ -477,6 +520,57 @@ export function validateSteps(steps: unknown[]): ValidationResult {
           stepIndex: i,
           field: 'optional',
           message: `"optional" expected boolean, got ${typeof obj['optional']}.`,
+        });
+      }
+    }
+    if ('retry' in obj && obj['retry'] !== undefined) {
+      if (typeof obj['retry'] !== 'number') {
+        errors.push({
+          stepIndex: i,
+          field: 'retry',
+          message: `"retry" expected number, got ${typeof obj['retry']}.`,
+        });
+      }
+    }
+    if ('retryDelay' in obj && obj['retryDelay'] !== undefined) {
+      if (typeof obj['retryDelay'] !== 'number') {
+        errors.push({
+          stepIndex: i,
+          field: 'retryDelay',
+          message: `"retryDelay" expected number, got ${typeof obj['retryDelay']}.`,
+        });
+      }
+    }
+
+    // Custom validation for assertText: needs expect or value
+    if (action === 'assertText') {
+      if (!('expect' in obj) && !('value' in obj)) {
+        errors.push({
+          stepIndex: i,
+          field: 'expect',
+          message: 'assertText requires "expect" or "value" containing the expected text.',
+        });
+      }
+    }
+
+    // Custom validation for assertUrl: needs expect or url
+    if (action === 'assertUrl') {
+      if (!('expect' in obj) && !('url' in obj)) {
+        errors.push({
+          stepIndex: i,
+          field: 'expect',
+          message: 'assertUrl requires "expect" or "url" containing the expected URL substring.',
+        });
+      }
+    }
+
+    // Custom validation for assertValue: needs expect or value
+    if (action === 'assertValue') {
+      if (!('expect' in obj) && !('value' in obj)) {
+        errors.push({
+          stepIndex: i,
+          field: 'expect',
+          message: 'assertValue requires "expect" or "value" containing the expected value.',
         });
       }
     }

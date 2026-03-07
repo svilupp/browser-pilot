@@ -5,15 +5,10 @@
  * Eliminates JSON-in-JSON escaping nightmare.
  */
 
-import { addBatchToPage, connect, type Step } from '../../index.ts';
+import type { Step } from '../../index.ts';
+import { attachSession, resolveSession } from '../attach.ts';
 import { output } from '../index.ts';
-import {
-  deleteSession,
-  getDefaultSession,
-  loadSession,
-  type SessionData,
-  updateSession,
-} from '../session.ts';
+import { updateSession } from '../session.ts';
 
 const EVAL_HELP = `
 bp eval - Evaluate JavaScript in the browser
@@ -39,18 +34,6 @@ Examples:
   bp eval 'document.querySelectorAll("a").length'
   bp eval -f scrape.js
 `.trimEnd();
-
-async function validateSession(session: SessionData): Promise<boolean> {
-  try {
-    const wsUrl = new URL(session.wsUrl);
-    const protocol = wsUrl.protocol === 'wss:' ? 'https:' : 'http:';
-    const httpUrl = `${protocol}//${wsUrl.host}/json/version`;
-    const response = await fetch(httpUrl, { signal: AbortSignal.timeout(3000) });
-    return response.ok;
-  } catch {
-    return false;
-  }
-}
 
 interface EvalOptions {
   file?: string;
@@ -111,42 +94,12 @@ export async function evalCommand(
   }
 
   // Get session
-  let session: SessionData | null;
-  if (globalOptions.session) {
-    session = await loadSession(globalOptions.session);
-  } else {
-    session = await getDefaultSession();
-    if (!session) {
-      throw new Error('No session found. Run "bp connect" first.');
-    }
-  }
+  const session = await resolveSession(globalOptions.session);
 
-  // Validate session
-  const isValid = await validateSession(session);
-  if (!isValid) {
-    await deleteSession(session.id);
-    throw new Error(
-      `Session "${session.id}" is no longer valid (browser may have closed).\n` +
-        'Session file has been cleaned up. Run "bp connect" to create a new session.'
-    );
-  }
-
-  const browser = await connect({
-    provider: session.provider,
-    wsUrl: session.wsUrl,
-    debug: globalOptions.trace,
-  });
+  // Connect to browser (lazy — no preflight /json/version check)
+  const { browser, page } = await attachSession(session, { trace: globalOptions.trace });
 
   try {
-    const page = addBatchToPage(await browser.page(undefined, { targetId: session.targetId }));
-
-    // Hydrate ref map from session cache if URL matches
-    const currentUrlForCache = await page.url();
-    const refCache = session.metadata?.refCache;
-    if (refCache && refCache.url === currentUrlForCache) {
-      page.importRefMap(refCache.refMap);
-    }
-
     const step: Step = { action: 'evaluate', value: expression };
     const result = await page.batch([step]);
     const stepResult = result.steps[0]!;

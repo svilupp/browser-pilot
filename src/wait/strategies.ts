@@ -126,7 +126,50 @@ function sleep(ms: number): Promise<void> {
 }
 
 /**
- * Wait for an element to reach a specific state
+ * Check if the page is likely static (no pending DOM changes).
+ * Returns true if the page appears settled and no mutations are observed.
+ * Returns false (= page is dynamic) if:
+ * - document.readyState is not 'complete'
+ * - DOM mutations are observed within the observation window
+ * - Page has been loaded recently (within 500ms of DOMContentLoaded)
+ */
+async function isPageStatic(
+  cdp: CDPClient,
+  windowMs: number = 200,
+  contextId?: number
+): Promise<boolean> {
+  const params: Record<string, unknown> = {
+    expression: `new Promise(resolve => {
+      // If page is still loading, it's not static
+      if (document.readyState !== 'complete') { resolve(false); return; }
+      // Check for recent page load (navigationStart within last 1s = page just loaded)
+      try {
+        var nav = performance.getEntriesByType('navigation')[0];
+        if (nav && (performance.now() - nav.loadEventEnd) < 500) { resolve(false); return; }
+      } catch(e) {}
+      // Observe for DOM mutations
+      var seen = false;
+      var obs = new MutationObserver(function() { seen = true; });
+      obs.observe(document.documentElement, { childList: true, subtree: true, attributes: true });
+      setTimeout(function() { obs.disconnect(); resolve(!seen); }, ${windowMs});
+    })`,
+    returnByValue: true,
+    awaitPromise: true,
+  };
+  if (contextId !== undefined) params['contextId'] = contextId;
+
+  try {
+    const result = await cdp.send<{ result: { value: boolean } }>('Runtime.evaluate', params);
+    return result.result.value === true;
+  } catch {
+    return false; // Assume dynamic if we can't check
+  }
+}
+
+/**
+ * Wait for an element to reach a specific state.
+ * Uses fast-fail: if the element is not found on a static page (no DOM mutations),
+ * returns early instead of polling for the full timeout.
  */
 export async function waitForElement(
   cdp: CDPClient,
@@ -138,29 +181,48 @@ export async function waitForElement(
   const startTime = Date.now();
   const deadline = startTime + timeout;
 
-  while (Date.now() < deadline) {
-    let conditionMet = false;
-
+  const checkCondition = async (): Promise<boolean> => {
     switch (state) {
       case 'visible':
-        conditionMet = await isElementVisible(cdp, selector, contextId);
-        break;
+        return isElementVisible(cdp, selector, contextId);
       case 'hidden':
-        conditionMet = !(await isElementVisible(cdp, selector, contextId));
-        break;
+        return !(await isElementVisible(cdp, selector, contextId));
       case 'attached':
-        conditionMet = await isElementAttached(cdp, selector, contextId);
-        break;
+        return isElementAttached(cdp, selector, contextId);
       case 'detached':
-        conditionMet = !(await isElementAttached(cdp, selector, contextId));
-        break;
+        return !(await isElementAttached(cdp, selector, contextId));
     }
+  };
 
-    if (conditionMet) {
+  // Immediate check
+  if (await checkCondition()) {
+    return { success: true, waitedMs: Date.now() - startTime };
+  }
+
+  // For waiting-for-absence states (hidden/detached), skip fast-fail
+  // since the element is present but we're waiting for it to go away
+  const waitingForPresence = state === 'visible' || state === 'attached';
+
+  // Fast-fail: if the page is static and we're waiting for an element to appear,
+  // no point polling for the full timeout
+  if (waitingForPresence && timeout >= 300) {
+    const pageStatic = await isPageStatic(cdp, 200, contextId);
+    if (pageStatic) {
+      // DOM is static — one final check then bail
+      if (await checkCondition()) {
+        return { success: true, waitedMs: Date.now() - startTime };
+      }
+      return { success: false, waitedMs: Date.now() - startTime };
+    }
+  }
+
+  // Standard polling loop for dynamic pages
+  while (Date.now() < deadline) {
+    await sleep(pollInterval);
+
+    if (await checkCondition()) {
       return { success: true, waitedMs: Date.now() - startTime };
     }
-
-    await sleep(pollInterval);
   }
 
   return { success: false, waitedMs: Date.now() - startTime };
@@ -180,31 +242,49 @@ export async function waitForAnyElement(
   const startTime = Date.now();
   const deadline = startTime + timeout;
 
-  while (Date.now() < deadline) {
-    for (const selector of selectors) {
-      let conditionMet = false;
+  const checkSelector = async (selector: string): Promise<boolean> => {
+    switch (state) {
+      case 'visible':
+        return isElementVisible(cdp, selector, contextId);
+      case 'hidden':
+        return !(await isElementVisible(cdp, selector, contextId));
+      case 'attached':
+        return isElementAttached(cdp, selector, contextId);
+      case 'detached':
+        return !(await isElementAttached(cdp, selector, contextId));
+    }
+  };
 
-      switch (state) {
-        case 'visible':
-          conditionMet = await isElementVisible(cdp, selector, contextId);
-          break;
-        case 'hidden':
-          conditionMet = !(await isElementVisible(cdp, selector, contextId));
-          break;
-        case 'attached':
-          conditionMet = await isElementAttached(cdp, selector, contextId);
-          break;
-        case 'detached':
-          conditionMet = !(await isElementAttached(cdp, selector, contextId));
-          break;
+  // Immediate check
+  for (const selector of selectors) {
+    if (await checkSelector(selector)) {
+      return { success: true, selector, waitedMs: Date.now() - startTime };
+    }
+  }
+
+  // Fast-fail for presence waits on static pages
+  const waitingForPresence = state === 'visible' || state === 'attached';
+  if (waitingForPresence && timeout >= 300) {
+    const pageStatic = await isPageStatic(cdp, 200, contextId);
+    if (pageStatic) {
+      for (const selector of selectors) {
+        if (await checkSelector(selector)) {
+          return { success: true, selector, waitedMs: Date.now() - startTime };
+        }
       }
+      return { success: false, waitedMs: Date.now() - startTime };
+    }
+  }
 
-      if (conditionMet) {
+  // Standard polling loop
+  while (Date.now() < deadline) {
+    await sleep(pollInterval);
+
+    for (const selector of selectors) {
+      if (await checkSelector(selector)) {
         return { success: true, selector, waitedMs: Date.now() - startTime };
       }
     }
-
-    await sleep(pollInterval);
   }
 
   return { success: false, waitedMs: Date.now() - startTime };

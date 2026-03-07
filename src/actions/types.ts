@@ -23,7 +23,12 @@ export type ActionType =
   | 'evaluate'
   | 'text'
   | 'switchFrame'
-  | 'switchToMain';
+  | 'switchToMain'
+  | 'assertVisible'
+  | 'assertExists'
+  | 'assertText'
+  | 'assertUrl'
+  | 'assertValue';
 
 export interface Step {
   /** Action type */
@@ -85,6 +90,15 @@ export interface Step {
   format?: 'png' | 'jpeg' | 'webp';
   quality?: number;
   fullPage?: boolean;
+
+  /** Expected value for assertion steps (substring match for assertText, exact for assertValue/assertUrl) */
+  expect?: string;
+
+  /** Retry count for assertion or action steps (default: 0 = no retry) */
+  retry?: number;
+
+  /** Delay between retries in ms (default: 500) */
+  retryDelay?: number;
 }
 
 export interface BatchOptions {

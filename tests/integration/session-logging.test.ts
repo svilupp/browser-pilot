@@ -161,7 +161,7 @@ describe('Session Logging Integration', () => {
           'exec',
           '-s',
           sessionName,
-          JSON.stringify({ action: 'click', selector: '#nonexistent-element' }),
+          JSON.stringify({ action: 'click', selector: '#nonexistent-element', timeout: 1000 }),
         ]);
 
         // Check log file

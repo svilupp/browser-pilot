@@ -26,23 +26,40 @@ export class BatchExecutor {
     for (let i = 0; i < steps.length; i++) {
       const step = steps[i]!;
       const stepStart = Date.now();
+      const maxAttempts = (step.retry ?? 0) + 1;
+      const retryDelay = step.retryDelay ?? 500;
 
-      try {
-        const result = await this.executeStep(step, timeout);
+      let lastError: Error | undefined;
+      let succeeded = false;
 
-        results.push({
-          index: i,
-          action: step.action,
-          selector: step.selector,
-          selectorUsed: result.selectorUsed,
-          success: true,
-          durationMs: Date.now() - stepStart,
-          result: result.value,
-          text: result.text,
-        });
-      } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        const hints = error instanceof ElementNotFoundError ? error.hints : undefined;
+      for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        if (attempt > 0) {
+          await new Promise((resolve) => setTimeout(resolve, retryDelay));
+        }
+
+        try {
+          const result = await this.executeStep(step, timeout);
+
+          results.push({
+            index: i,
+            action: step.action,
+            selector: step.selector,
+            selectorUsed: result.selectorUsed,
+            success: true,
+            durationMs: Date.now() - stepStart,
+            result: result.value,
+            text: result.text,
+          });
+          succeeded = true;
+          break;
+        } catch (error) {
+          lastError = error instanceof Error ? error : new Error(String(error));
+        }
+      }
+
+      if (!succeeded) {
+        const errorMessage = lastError?.message ?? 'Unknown error';
+        const hints = lastError instanceof ElementNotFoundError ? lastError.hints : undefined;
 
         results.push({
           index: i,
@@ -278,6 +295,85 @@ export class BatchExecutor {
         return {};
       }
 
+      case 'assertVisible': {
+        if (!step.selector) throw new Error('assertVisible requires selector');
+        const el = await this.page.waitFor(step.selector, {
+          timeout,
+          optional: true,
+          state: 'visible',
+        });
+        if (!el) {
+          throw new Error(
+            `Assertion failed: selector ${JSON.stringify(step.selector)} is not visible`
+          );
+        }
+        return { selectorUsed: this.getUsedSelector(step.selector) };
+      }
+
+      case 'assertExists': {
+        if (!step.selector) throw new Error('assertExists requires selector');
+        const el = await this.page.waitFor(step.selector, {
+          timeout,
+          optional: true,
+          state: 'attached',
+        });
+        if (!el) {
+          throw new Error(
+            `Assertion failed: selector ${JSON.stringify(step.selector)} does not exist`
+          );
+        }
+        return { selectorUsed: this.getUsedSelector(step.selector) };
+      }
+
+      case 'assertText': {
+        const selector = Array.isArray(step.selector) ? step.selector[0] : step.selector;
+        const text = await this.page.text(selector);
+        const expected = step.expect ?? step.value;
+        if (typeof expected !== 'string') throw new Error('assertText requires expect or value');
+        if (!text.includes(expected)) {
+          throw new Error(
+            `Assertion failed: text does not contain ${JSON.stringify(expected)}. Got: ${JSON.stringify(text.slice(0, 200))}`
+          );
+        }
+        return { selectorUsed: selector, text };
+      }
+
+      case 'assertUrl': {
+        const currentUrl = await this.page.url();
+        const expected = step.expect ?? step.url;
+        if (typeof expected !== 'string') throw new Error('assertUrl requires expect or url');
+        if (!currentUrl.includes(expected)) {
+          throw new Error(
+            `Assertion failed: URL does not contain ${JSON.stringify(expected)}. Got: ${JSON.stringify(currentUrl)}`
+          );
+        }
+        return { value: currentUrl };
+      }
+
+      case 'assertValue': {
+        if (!step.selector) throw new Error('assertValue requires selector');
+        const expected = step.expect ?? step.value;
+        if (typeof expected !== 'string') throw new Error('assertValue requires expect or value');
+        const found = await this.page.waitFor(step.selector, {
+          timeout,
+          optional: true,
+          state: 'attached',
+        });
+        if (!found) {
+          throw new Error(`Assertion failed: selector ${JSON.stringify(step.selector)} not found`);
+        }
+        const usedSelector = this.getUsedSelector(step.selector);
+        const actual = await this.page.evaluate(
+          `(function() { var el = document.querySelector(${JSON.stringify(usedSelector)}); return el ? el.value : null; })()`
+        );
+        if (actual !== expected) {
+          throw new Error(
+            `Assertion failed: value of ${JSON.stringify(usedSelector)} is ${JSON.stringify(actual)}, expected ${JSON.stringify(expected)}`
+          );
+        }
+        return { selectorUsed: usedSelector, value: actual };
+      }
+
       default: {
         const action = (step as Step).action;
         const aliases: Record<string, string> = {
@@ -296,11 +392,16 @@ export class BatchExecutor {
           js: 'evaluate',
           snap: 'snapshot',
           frame: 'switchFrame',
+          assert_visible: 'assertVisible',
+          assert_exists: 'assertExists',
+          assert_text: 'assertText',
+          assert_url: 'assertUrl',
+          assert_value: 'assertValue',
         };
         const suggestion = aliases[action.toLowerCase()];
         const hint = suggestion ? ` Did you mean "${suggestion}"?` : '';
         const valid =
-          'goto, click, fill, type, select, check, uncheck, submit, press, focus, hover, scroll, wait, snapshot, screenshot, evaluate, text, switchFrame, switchToMain';
+          'goto, click, fill, type, select, check, uncheck, submit, press, focus, hover, scroll, wait, snapshot, screenshot, evaluate, text, switchFrame, switchToMain, assertVisible, assertExists, assertText, assertUrl, assertValue';
         throw new Error(`Unknown action "${action}".${hint}\n\nValid actions: ${valid}`);
       }
     }
