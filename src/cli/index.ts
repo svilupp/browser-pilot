@@ -34,6 +34,7 @@ import { listCommand } from './commands/list.ts';
 import { listenCommand } from './commands/listen.ts';
 import { quickstartCommand } from './commands/quickstart.ts';
 import { recordCommand } from './commands/record.ts';
+import { runCommand } from './commands/run.ts';
 import { screenshotCommand } from './commands/screenshot.ts';
 import { snapshotCommand } from './commands/snapshot.ts';
 import { textCommand } from './commands/text.ts';
@@ -49,6 +50,7 @@ Commands:
   connect     Create browser session
   exec        Execute actions
   eval        Evaluate JavaScript expression
+  run         Run a workflow file (JSON steps)
   record      Record browser actions to JSON
   audio       Audio I/O for voice agent testing
   listen      Monitor network traffic (WebSocket/HTTP)
@@ -232,6 +234,10 @@ async function main(): Promise<void> {
         await actionsCommand();
         break;
 
+      case 'run':
+        await runCommand(remaining, options);
+        break;
+
       case 'record':
         await recordCommand(remaining, options);
         break;
@@ -264,5 +270,5 @@ async function main(): Promise<void> {
 
 // Only run when executed directly (not when imported for testing)
 if (import.meta.main) {
-  main();
+  void main();
 }

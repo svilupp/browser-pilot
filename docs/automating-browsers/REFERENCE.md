@@ -75,7 +75,12 @@ When targeting a submit button, uses the configured method (enter, click, or bot
 {"action": "press", "key": "Enter"}
 {"action": "press", "key": "Escape"}
 {"action": "press", "key": "Tab"}
+{"action": "press", "key": "a", "modifiers": ["Control"]}
+{"action": "shortcut", "combo": "Control+a"}
+{"action": "shortcut", "combo": "Meta+Shift+z"}
 ```
+
+Valid modifiers: `Control`, `Shift`, `Alt`, `Meta`.
 
 ### Focus/Hover
 
@@ -137,6 +142,35 @@ Example workflow:
 ```
 
 Note: Cross-origin iframes cannot be accessed due to browser security.
+
+### Assertions
+
+Verify expected state within a batch. No extra CLI calls needed.
+
+```json
+{"action": "assertVisible", "selector": "#success-banner"}
+{"action": "assertExists", "selector": "[data-loaded]"}
+{"action": "assertText", "expect": "Welcome back", "selector": "h1"}
+{"action": "assertText", "expect": "Order confirmed"}
+{"action": "assertUrl", "expect": "/dashboard"}
+{"action": "assertValue", "selector": "#email", "expect": "user@example.com"}
+```
+
+- `assertVisible` / `assertExists`: wait for selector (supports multi-selector arrays), throw if not found
+- `assertText`: substring match. Omit selector to check full page text
+- `assertUrl`: substring match against current URL
+- `assertValue`: exact match of input element's value
+
+### Retry
+
+Any step supports bounded retries:
+
+```json
+{"action": "assertVisible", "selector": ".async-content", "retry": 3, "retryDelay": 1000}
+{"action": "click", "selector": "#flaky-button", "retry": 2, "retryDelay": 500}
+```
+
+`retry`: number of retries (0 = no retry, default). `retryDelay`: ms between retries (default 500).
 
 ## Selectors
 
@@ -329,6 +363,21 @@ bp exec '[
   {"action":"click","selector":"ref:e10"}
 ]'
 ```
+
+### Action + Verification in One Batch
+
+```bash
+bp exec '[
+  {"action":"goto","url":"https://example.com/login"},
+  {"action":"fill","selector":"#email","value":"user@example.com"},
+  {"action":"fill","selector":"#password","value":"secret"},
+  {"action":"submit","selector":"form"},
+  {"action":"assertUrl","expect":"/dashboard"},
+  {"action":"assertText","expect":"Welcome back"}
+]'
+```
+
+Eliminates the extra `bp eval` call to verify navigation succeeded.
 
 ### Delete with Confirmation Dialog
 

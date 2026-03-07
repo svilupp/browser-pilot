@@ -33,6 +33,7 @@ await browser.close();
 | Bun CDP connection bugs | Custom CDP client that works everywhere |
 | Single-selector API (fragile) | Multi-selector by default: `['#primary', '.fallback']` |
 | No action batching (high latency) | Batch DSL: one call for entire sequences |
+| No inline assertions (extra API calls to verify) | Built-in assertions: verify state within the same batch |
 | No AI-optimized snapshots | Built-in accessibility tree extraction |
 | No audio I/O for voice agents | Mic injection + output capture + Whisper transcription |
 
@@ -129,6 +130,25 @@ const result = await page.batch([
 console.log(result.success); // true if all steps succeeded
 console.log(result.totalDurationMs); // total execution time
 console.log(result.steps[5].result); // snapshot from step 5
+```
+
+Assertion steps verify expected state within the same batch — no extra round trips. Available: `assertVisible`, `assertExists`, `assertText`, `assertUrl`, `assertValue`.
+
+```typescript
+const result = await page.batch([
+  { action: 'goto', url: 'https://example.com/login' },
+  { action: 'fill', selector: '#email', value: 'user@example.com' },
+  { action: 'fill', selector: '#password', value: 'secret' },
+  { action: 'submit', selector: '#login-btn' },
+  { action: 'assertUrl', expect: '/dashboard' },
+  { action: 'assertVisible', selector: '.welcome-message' },
+]);
+```
+
+Any step supports `retry` and `retryDelay` for flaky or async content:
+
+```typescript
+{ action: 'assertVisible', selector: '.async-content', retry: 3, retryDelay: 1000 }
 ```
 
 ### AI-Optimized Snapshots
@@ -380,6 +400,16 @@ bp listen ws -m "*voice*"  # monitor WebSocket traffic
 bp list                    # list all sessions
 bp close -s my-session     # close session
 bp actions                 # show complete action reference
+bp run workflow.json       # run a workflow file
+
+# Actions with inline assertions (no extra bp eval needed)
+bp exec '[
+  {"action":"goto","url":"https://example.com/login"},
+  {"action":"fill","selector":"#email","value":"user@example.com"},
+  {"action":"submit","selector":"form"},
+  {"action":"assertUrl","expect":"/dashboard"},
+  {"action":"assertText","expect":"Welcome"}
+]'
 ```
 
 ### CLI for AI Agents
@@ -572,7 +602,7 @@ const browserTool = {
         items: {
           type: 'object',
           properties: {
-            action: { enum: ['goto', 'click', 'fill', 'submit', 'snapshot'] },
+            action: { enum: ['goto', 'click', 'fill', 'submit', 'snapshot', 'assertVisible', 'assertExists', 'assertText', 'assertUrl', 'assertValue'] },
             selector: { type: ['string', 'array'] },
             value: { type: 'string' },
             url: { type: 'string' },

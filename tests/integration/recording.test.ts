@@ -11,7 +11,7 @@
 
 import { afterAll, afterEach, beforeAll, describe, expect, test } from 'bun:test';
 import { Recorder } from '../../src/recording/recorder.ts';
-import { withRetry } from '../utils/retry';
+import { waitUntil, withRetry } from '../utils/retry';
 import { TestContext } from './setup';
 
 const ctx = new TestContext();
@@ -155,8 +155,19 @@ describe('Recording Integration', () => {
       // Navigate to form page
       await page.goto(`${baseUrl}/form.html`);
 
-      // Wait for recorder script to be injected on new page
-      await sleep(100);
+      // Wait for recorder script to be injected on new page instead of
+      // relying on a fixed sleep that races with faster navigation.
+      await waitUntil(
+        async () =>
+          (await page.evaluate(
+            () => (window as { __recorderInstalled?: boolean }).__recorderInstalled
+          )) === true,
+        {
+          timeout: 2000,
+          interval: 50,
+          message: 'Recorder script was not injected after navigation',
+        }
+      );
 
       // Click something on the new page
       await simulateClick(page, '#name');

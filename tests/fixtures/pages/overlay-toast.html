@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Overlay Toast Test</title>
+  <style>
+    #toast {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.5);
+      z-index: 1000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+      font-size: 24px;
+    }
+    #toast.hidden { display: none; }
+    #target-btn {
+      margin: 100px;
+      padding: 20px 40px;
+      font-size: 18px;
+    }
+    #result { margin: 20px; }
+  </style>
+</head>
+<body>
+  <button id="target-btn" onclick="document.getElementById('result').textContent = 'clicked'">Click Me</button>
+  <div id="result"></div>
+  <div id="toast">Loading...</div>
+  <script>
+    // Toast auto-dismisses after 200ms
+    setTimeout(() => {
+      document.getElementById('toast').classList.add('hidden');
+    }, 200);
+  </script>
+</body>
+</html>

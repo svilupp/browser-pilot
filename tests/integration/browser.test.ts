@@ -167,11 +167,13 @@ describe('Browser Integration', () => {
     await withRetry(async () => {
       await page.goto(`${baseUrl}/basic.html`);
 
+      const navPromise = page.waitForNavigation({ timeout: 2000, optional: true });
+
       // Click the form navigation link
       const clicked = await page.click('#nav-form', { optional: true, timeout: 5000 });
 
       if (clicked) {
-        await page.waitForNavigation({ timeout: 10000, optional: true });
+        await navPromise;
         const url = await page.url();
         expect(url).toContain('form.html');
       }

@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.0.12] - 2026-03-07
+
+### Added
+
+- Structured failure classification (`failureReason`, `suggestion`, `coveringElement`) on batch step results, keyboard modifier support (`press` with modifiers, `shortcut` action)
+- `bp run` workflow runner with 5 assertion actions and retry, click-through-overlay retry, viewport validation after scroll, and event-driven waits replacing hardcoded delays
+
 ## [0.0.11] - 2026-03-06
 
 ### Improved
@@ -36,4 +43,3 @@
 - `selectorUsed` reports actual matched selector
 - Overlay injection is idempotent
 - `submit('form')` uses `requestSubmit()`
-

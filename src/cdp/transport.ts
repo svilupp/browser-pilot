@@ -54,16 +54,34 @@ export function createTransport(wsUrl: string, options: TransportOptions = {}): 
               return;
             }
 
-            const onClose = () => {
+            let settled = false;
+            let fallbackTimer: ReturnType<typeof setTimeout> | undefined;
+            const finish = () => {
+              if (settled) return;
+              settled = true;
+              if (fallbackTimer) clearTimeout(fallbackTimer);
               ws.removeEventListener('close', onClose);
               resolveClose();
             };
 
-            ws.addEventListener('close', onClose);
-            ws.close();
+            const onClose = () => {
+              finish();
+            };
 
-            // Force resolve after timeout if close event doesn't fire
-            setTimeout(resolveClose, 5000);
+            ws.addEventListener('close', onClose);
+
+            try {
+              if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+                ws.close();
+              }
+            } catch {
+              finish();
+              return;
+            }
+
+            // Some runtimes delay or skip the close event for client-initiated
+            // disconnects. Don't impose a multi-second tax on every CLI call.
+            fallbackTimer = setTimeout(finish, 200);
           });
         },
 

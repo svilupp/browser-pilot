@@ -141,6 +141,13 @@ export const CHECK_ENABLED = `function() {
 export const CHECK_STABLE = `function() {
   var self = this;
   return new Promise(function(resolve) {
+    // If tab is backgrounded, RAF won't fire reliably — skip stability check
+    if (document.visibilityState === 'hidden') {
+      var rect = self.getBoundingClientRect();
+      resolve({ actionable: rect.width > 0 && rect.height > 0 });
+      return;
+    }
+
     var maxFrames = 30;
     var prev = null;
     var frame = 0;

@@ -115,6 +115,14 @@ console.log(result.steps);           // individual results
 { action: 'press', key: 'Enter' }
 { action: 'press', key: 'Escape' }
 { action: 'press', key: 'Tab' }
+
+// With modifiers
+{ action: 'press', key: 'a', modifiers: ['Control'] }
+{ action: 'press', key: 'z', modifiers: ['Meta', 'Shift'] }
+
+// Shortcut combo string
+{ action: 'shortcut', combo: 'Control+a' }
+{ action: 'shortcut', combo: 'Meta+Shift+z' }
 ```
 
 ### Focus & Hover
@@ -178,7 +186,27 @@ interface StepResult {
   error?: string;
   failedSelectors?: Array<{ selector: string; reason: string }>;
   result?: unknown;          // For snapshot, screenshot, evaluate
+
+  // Structured failure info (on failed steps)
+  failureReason?: FailureReason;   // Classified failure type
+  suggestion?: string;             // AI-friendly recovery suggestion
+  coveringElement?: { tag: string; id?: string; className?: string }; // When reason is 'covered'
+  hints?: FailureHint[];           // Alternative selectors to try
 }
+
+type FailureReason =
+  | 'missing'     // Element not found in DOM
+  | 'hidden'      // Element exists but not visible
+  | 'covered'     // Element blocked by another element
+  | 'disabled'    // Element is disabled
+  | 'readonly'    // Element is readonly
+  | 'detached'    // Element removed from DOM during action
+  | 'replaced'    // Element was replaced (unstable)
+  | 'notEditable' // Not an editable field
+  | 'timeout'     // Timed out waiting
+  | 'navigation'  // Navigation failed
+  | 'cdpError'    // Browser connection error
+  | 'unknown';    // Unclassified error
 ```
 
 ## Error Handling
@@ -270,6 +298,38 @@ const result = await page.batch([
 
 const linkCount = result.steps[0].result as number;
 ```
+
+## Assertions
+
+Assertion steps let you verify page state inside a batch, eliminating extra round trips:
+
+```typescript
+const result = await page.batch([
+  { action: 'goto', url: 'https://example.com/login' },
+  { action: 'fill', selector: '#email', value: 'user@example.com' },
+  { action: 'fill', selector: '#password', value: 'secret' },
+  { action: 'submit', selector: 'form' },
+  { action: 'assertUrl', expect: '/dashboard' },
+  { action: 'assertText', expect: 'Welcome', selector: 'h1' },
+]);
+// result.success is false if any assertion fails
+```
+
+Available assertions: `assertVisible`, `assertExists`, `assertText`, `assertUrl`, `assertValue`.
+
+## Retry
+
+Any step can include `retry` and `retryDelay` to handle flaky async content:
+
+```typescript
+const result = await page.batch([
+  { action: 'goto', url: 'https://example.com' },
+  { action: 'click', selector: '#load-more', retry: 3, retryDelay: 1000 },
+  { action: 'assertVisible', selector: '.results', retry: 5, retryDelay: 500 },
+]);
+```
+
+With `onFail: 'stop'` (the default), a failed assertion halts the batch immediately — useful for fast-fail validation after form submissions or navigations.
 
 ## Real-World Examples
 

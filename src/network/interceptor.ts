@@ -23,14 +23,18 @@ export class RequestInterceptor {
   private enabled = false;
   private handlers: Array<{ pattern: RequestPattern; handler: RequestHandler }> = [];
   private pendingRequests = new Map<string, PendingRequest>();
-  private boundHandleRequestPaused: (params: Record<string, unknown>) => Promise<void>;
-  private boundHandleAuthRequired: (params: Record<string, unknown>) => Promise<void>;
+  private boundHandleRequestPaused: (params: Record<string, unknown>) => void;
+  private boundHandleAuthRequired: (params: Record<string, unknown>) => void;
 
   constructor(cdp: CDPClient) {
     this.cdp = cdp;
-    // Bind handlers once to allow proper removal
-    this.boundHandleRequestPaused = this.handleRequestPaused.bind(this);
-    this.boundHandleAuthRequired = this.handleAuthRequired.bind(this);
+    // Wrap async handlers in void-returning arrows to allow proper removal
+    this.boundHandleRequestPaused = (params) => {
+      void this.handleRequestPaused(params);
+    };
+    this.boundHandleAuthRequired = (params) => {
+      void this.handleAuthRequired(params);
+    };
   }
 
   /**

@@ -677,43 +677,45 @@ export class AudioOutput {
       let lastSoundTime = 0;
       const startTime = Date.now();
 
-      const checkInterval = setInterval(async () => {
-        const elapsed = Date.now() - startTime;
+      const checkInterval = setInterval(() => {
+        void (async () => {
+          const elapsed = Date.now() - startTime;
 
-        // Check max duration (applies to both phases)
-        if (elapsed > maxDuration) {
-          clearInterval(checkInterval);
-          this.onDiagHandler?.(`max duration reached (${maxDuration}ms), stopping`);
-          resolve(await this.stop());
-          return;
-        }
-
-        // Check latest chunk for sound
-        const latest = this.chunks[this.chunks.length - 1];
-        if (latest) {
-          const rms = calculateRMS(latest.left);
-          if (rms > silenceThreshold) {
-            if (!heardAudio) {
-              heardAudio = true;
-              this.onDiagHandler?.('first audio detected — silence countdown begins');
-            }
-            lastSoundTime = Date.now();
+          // Check max duration (applies to both phases)
+          if (elapsed > maxDuration) {
+            clearInterval(checkInterval);
+            this.onDiagHandler?.(`max duration reached (${maxDuration}ms), stopping`);
+            resolve(await this.stop());
+            return;
           }
-        }
 
-        // Early exit if no audio arrives within noAudioTimeout
-        if (!heardAudio && elapsed > noAudioTimeout) {
-          clearInterval(checkInterval);
-          this.onDiagHandler?.(`no audio detected after ${noAudioTimeout}ms, stopping early`);
-          resolve(await this.stop());
-          return;
-        }
+          // Check latest chunk for sound
+          const latest = this.chunks[this.chunks.length - 1];
+          if (latest) {
+            const rms = calculateRMS(latest.left);
+            if (rms > silenceThreshold) {
+              if (!heardAudio) {
+                heardAudio = true;
+                this.onDiagHandler?.('first audio detected — silence countdown begins');
+              }
+              lastSoundTime = Date.now();
+            }
+          }
 
-        // Only apply silence timeout AFTER first audio detected
-        if (heardAudio && Date.now() - lastSoundTime > silenceTimeout) {
-          clearInterval(checkInterval);
-          resolve(await this.stop());
-        }
+          // Early exit if no audio arrives within noAudioTimeout
+          if (!heardAudio && elapsed > noAudioTimeout) {
+            clearInterval(checkInterval);
+            this.onDiagHandler?.(`no audio detected after ${noAudioTimeout}ms, stopping early`);
+            resolve(await this.stop());
+            return;
+          }
+
+          // Only apply silence timeout AFTER first audio detected
+          if (heardAudio && Date.now() - lastSoundTime > silenceTimeout) {
+            clearInterval(checkInterval);
+            resolve(await this.stop());
+          }
+        })();
       }, 200);
     });
   }

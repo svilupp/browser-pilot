@@ -30,8 +30,8 @@ export function jaroWinkler(a: string, b: string): number {
   // Calculate match window
   const matchWindow = Math.max(0, Math.floor(Math.max(s1.length, s2.length) / 2) - 1);
 
-  const s1Matches: boolean[] = new Array(s1.length).fill(false);
-  const s2Matches: boolean[] = new Array(s2.length).fill(false);
+  const s1Matches: boolean[] = Array.from({ length: s1.length }, () => false);
+  const s2Matches: boolean[] = Array.from({ length: s2.length }, () => false);
 
   let matches = 0;
   let transpositions = 0;

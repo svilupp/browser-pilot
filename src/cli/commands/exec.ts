@@ -2,15 +2,10 @@
  * Exec command - Execute actions on current session
  */
 
-import { addBatchToPage, connect, type Step, validateSteps } from '../../index.ts';
+import { type Step, validateSteps } from '../../index.ts';
+import { attachSession, resolveSession } from '../attach.ts';
 import { output } from '../index.ts';
-import {
-  deleteSession,
-  getDefaultSession,
-  loadSession,
-  type SessionData,
-  updateSession,
-} from '../session.ts';
+import { updateSession } from '../session.ts';
 import { getSessionLogger } from '../session-logger.ts';
 
 const EXEC_HELP = `
@@ -39,22 +34,6 @@ Examples:
 Run 'bp actions' for the complete action reference.
 Run 'bp quickstart' for getting started guide.
 `.trimEnd();
-
-/**
- * Validate that a session's browser is still alive
- * Tries to reach the browser's /json/version endpoint
- */
-async function validateSession(session: SessionData): Promise<boolean> {
-  try {
-    const wsUrl = new URL(session.wsUrl);
-    const protocol = wsUrl.protocol === 'wss:' ? 'https:' : 'http:';
-    const httpUrl = `${protocol}//${wsUrl.host}/json/version`;
-    const response = await fetch(httpUrl, { signal: AbortSignal.timeout(3000) });
-    return response.ok;
-  } catch {
-    return false;
-  }
-}
 
 interface ExecOptions {
   session?: string;
@@ -127,13 +106,13 @@ export async function execCommand(
   try {
     actions = JSON.parse(actionsJson);
   } catch {
-    const snippet = actionsJson!.substring(0, 80);
-    const looksLikeEvaluate = /evaluate/i.test(actionsJson!);
+    const snippet = actionsJson.substring(0, 80);
+    const looksLikeEvaluate = /evaluate/i.test(actionsJson);
     const evalTip = looksLikeEvaluate
       ? "\n\nTip: If you truly need raw JavaScript evaluation, use 'bp eval' instead — no JSON wrapping needed:\n  bp eval 'your.expression.here'\nUse high-level actions plus refs first whenever possible."
       : '';
     throw new Error(
-      `Invalid JSON: ${snippet}${actionsJson!.length > 80 ? '...' : ''}\n\n` +
+      `Invalid JSON: ${snippet}${actionsJson.length > 80 ? '...' : ''}\n\n` +
         "Actions must be valid JSON. Tip: use 'bp exec -f actions.json' for complex steps.\n" +
         `Run 'bp actions' for complete action reference.${evalTip}`
     );
@@ -147,47 +126,15 @@ export async function execCommand(
   }
 
   // Get session (only after actions are validated)
-  let session: SessionData | null;
-  if (globalOptions.session) {
-    session = await loadSession(globalOptions.session);
-  } else {
-    session = await getDefaultSession();
-    if (!session) {
-      throw new Error('No session found. Run "bp connect" first.');
-    }
-  }
-
-  // Validate session is still alive before connecting
-  const isValid = await validateSession(session);
-  if (!isValid) {
-    // Auto-cleanup stale session
-    await deleteSession(session.id);
-    throw new Error(
-      `Session "${session.id}" is no longer valid (browser may have closed).\n` +
-        `Session file has been cleaned up. Run "bp connect" to create a new session.`
-    );
-  }
+  const session = await resolveSession(globalOptions.session);
 
   // Get logger for this session (with optional export path)
   const logger = getSessionLogger(session.id, session.exportLog);
 
-  // Connect to browser
-  const browser = await connect({
-    provider: session.provider,
-    wsUrl: session.wsUrl,
-    debug: globalOptions.trace,
-  });
+  // Connect to browser (lazy — no preflight /json/version check)
+  const { browser, page } = await attachSession(session, { trace: globalOptions.trace });
 
   try {
-    const page = addBatchToPage(await browser.page(undefined, { targetId: session.targetId }));
-
-    // Hydrate ref map from session cache if URL matches
-    const currentUrlForCache = await page.url();
-    const refCache = session.metadata?.refCache;
-    if (refCache && refCache.url === currentUrlForCache) {
-      page.importRefMap(refCache.refMap);
-    }
-
     // Set up dialog handling if --dialog flag is provided
     if (execOptions.dialog) {
       await page.onDialog(async (dialog) => {

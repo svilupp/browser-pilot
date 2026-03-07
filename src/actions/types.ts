@@ -4,6 +4,20 @@
 
 import type { FailureHint } from '../browser/types.ts';
 
+export type FailureReason =
+  | 'missing'
+  | 'hidden'
+  | 'covered'
+  | 'disabled'
+  | 'readonly'
+  | 'detached'
+  | 'replaced'
+  | 'notEditable'
+  | 'timeout'
+  | 'navigation'
+  | 'cdpError'
+  | 'unknown';
+
 export type ActionType =
   | 'goto'
   | 'click'
@@ -14,6 +28,7 @@ export type ActionType =
   | 'uncheck'
   | 'submit'
   | 'press'
+  | 'shortcut'
   | 'focus'
   | 'hover'
   | 'scroll'
@@ -23,7 +38,12 @@ export type ActionType =
   | 'evaluate'
   | 'text'
   | 'switchFrame'
-  | 'switchToMain';
+  | 'switchToMain'
+  | 'assertVisible'
+  | 'assertExists'
+  | 'assertText'
+  | 'assertUrl'
+  | 'assertValue';
 
 export interface Step {
   /** Action type */
@@ -40,6 +60,12 @@ export interface Step {
 
   /** Key for press action */
   key?: string;
+
+  /** Key combo for shortcut action (e.g. "Control+a", "Meta+Shift+z") */
+  combo?: string;
+
+  /** Modifier keys for press action */
+  modifiers?: Array<'Control' | 'Shift' | 'Alt' | 'Meta'>;
 
   /** What to wait for (wait action) */
   waitFor?: 'visible' | 'hidden' | 'attached' | 'detached' | 'navigation' | 'networkIdle';
@@ -85,6 +111,15 @@ export interface Step {
   format?: 'png' | 'jpeg' | 'webp';
   quality?: number;
   fullPage?: boolean;
+
+  /** Expected value for assertion steps (substring match for assertText, exact for assertValue/assertUrl) */
+  expect?: string;
+
+  /** Retry count for assertion or action steps (default: 0 = no retry) */
+  retry?: number;
+
+  /** Delay between retries in ms (default: 500) */
+  retryDelay?: number;
 }
 
 export interface BatchOptions {
@@ -128,6 +163,15 @@ export interface StepResult {
 
   /** Failure hints when element not found */
   hints?: FailureHint[];
+
+  /** Structured failure classification */
+  failureReason?: FailureReason;
+
+  /** Element covering the target (when failureReason is 'covered') */
+  coveringElement?: { tag: string; id?: string; className?: string };
+
+  /** AI-friendly suggestion for what to try next */
+  suggestion?: string;
 }
 
 export interface BatchResult {

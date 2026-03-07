@@ -70,6 +70,16 @@ bp listen ws -m "*realtime*"   # WebSocket traffic (JSONL)
 bp listen http -m "*/api/*"    # HTTP traffic
 bp listen all -o trace.jsonl   # All traffic to file
 
+# Assertions (verify state without extra round trips)
+bp exec '[{"action":"assertUrl","expect":"/dashboard"}]'
+bp exec '[{"action":"assertText","expect":"Welcome","selector":"h1"}]'
+bp exec '[{"action":"assertVisible","selector":".success-message","retry":3,"retryDelay":1000}]'
+
+# Run a workflow file
+bp run workflow.json                      # Execute steps from file
+bp run checkout.json --on-fail continue   # Continue past failures
+bp run smoke-test.json --json             # JSON output
+
 # Session management
 bp list                    # List sessions
 bp list --json             # JSON output
@@ -299,6 +309,8 @@ Run `bp audio check` first. Then see [VOICE_AGENT_TESTING.md](./VOICE_AGENT_TEST
 11. **Voice transcript is silence?** - Run `bp audio check` first, then use `--verbose` to diagnose capture issues
 12. **Validate audio pipeline** - `bp audio check` shows overrides, AudioContexts, taps, and fake mic status
 13. **Debug a past session** - `bp list -s <name> --log-tail 50` shows recent actions; `cat $(bp list -s <name> --log-path)` dumps the full JSONL execution log
+14. **Use assertions to verify in one batch** - `assertUrl`, `assertText`, `assertVisible`, `assertExists`, `assertValue` let you verify state without a separate `bp eval` call
+15. **Use retry for flaky async content** - Any step supports `retry: N` and `retryDelay: ms` for bounded retries
 
 ---
 

@@ -28,9 +28,17 @@ import {
   waitForNetworkIdle as waitForIdle,
   waitForNavigation as waitForNav,
 } from '../wait/index.ts';
-import { ensureActionable } from './actionability.ts';
+import { ActionabilityError, ensureActionable } from './actionability.ts';
 import { generateHints } from './hint-generator.ts';
-import { type KeyDefinition, US_KEYBOARD } from './keyboard.ts';
+import {
+  computeModifierBitmask,
+  type KeyDefinition,
+  MODIFIER_CODES,
+  MODIFIER_KEY_CODES,
+  type ModifierKey,
+  parseShortcut,
+  US_KEYBOARD,
+} from './keyboard.ts';
 import {
   type ActionOptions,
   type ConsoleHandler,
@@ -137,6 +145,8 @@ export class Page {
   private frameExecutionContexts: Map<string, number> = new Map();
   /** Current frame's execution context ID (null = main frame default) */
   private currentFrameContextId: number | null = null;
+  /** Frame selector if context acquisition failed (cross-origin/sandboxed) */
+  private brokenFrame: string | null = null;
   /** Last matched selector from findElement (for selectorUsed tracking) */
   private _lastMatchedSelector: string | undefined;
   /** Last snapshot for stale ref recovery */
@@ -206,7 +216,9 @@ export class Page {
     });
 
     // Always listen for dialogs to prevent blocking - auto-dismiss by default
-    this.cdp.on('Page.javascriptDialogOpening', this.handleDialogOpening.bind(this));
+    this.cdp.on('Page.javascriptDialogOpening', (params) => {
+      void this.handleDialogOpening(params);
+    });
 
     await Promise.all([
       this.cdp.send('Page.enable'),
@@ -410,15 +422,31 @@ export class Page {
       // Input.dispatchMouseEvent still needs the page-level coordinates above.
       const hitTargetCoordinates = this.currentFrame ? undefined : { x: clickX, y: clickY };
 
-      // Hit target check with actual click coordinates
-      try {
-        await ensureActionable(this.cdp, objectId, ['hitTarget'], {
-          timeout: options.timeout ?? DEFAULT_TIMEOUT,
-          coordinates: hitTargetCoordinates,
-        });
-      } catch (e) {
-        if (options.optional) return false;
-        throw e;
+      // Hit target check with bounded retry for transient overlays
+      const HIT_TARGET_RETRIES = 3;
+      const HIT_TARGET_DELAY = 100;
+
+      for (let attempt = 0; attempt < HIT_TARGET_RETRIES; attempt++) {
+        try {
+          await ensureActionable(this.cdp, objectId, ['hitTarget'], {
+            timeout: options.timeout ?? DEFAULT_TIMEOUT,
+            coordinates: hitTargetCoordinates,
+          });
+          break;
+        } catch (e) {
+          if (options.optional) return false;
+          if (
+            e instanceof ActionabilityError &&
+            e.failureType === 'hitTarget' &&
+            attempt < HIT_TARGET_RETRIES - 1
+          ) {
+            await sleep(HIT_TARGET_DELAY);
+            // Re-scroll in case layout shifted
+            await this.cdp.send('DOM.scrollIntoViewIfNeeded', { nodeId: element.nodeId });
+            continue;
+          }
+          throw e;
+        }
       }
 
       await this.clickElement(element.nodeId);
@@ -564,8 +592,8 @@ export class Page {
       }
 
       // Actionability checks before typing
+      const objectId = await this.resolveObjectId(element.nodeId);
       try {
-        const objectId = await this.resolveObjectId(element.nodeId);
         await ensureActionable(this.cdp, objectId, ['visible', 'enabled'], {
           timeout: options.timeout ?? DEFAULT_TIMEOUT,
         });
@@ -626,6 +654,14 @@ export class Page {
         }
       }
 
+      // Optionally trigger blur
+      if (options.blur) {
+        await this.cdp.send('Runtime.callFunctionOn', {
+          objectId,
+          functionDeclaration: 'function() { this.blur(); }',
+        });
+      }
+
       return true;
     });
   }
@@ -653,7 +689,7 @@ export class Page {
       return this.selectCustom(selectorOrConfig, valueOrOptions as ActionOptions);
     }
 
-    const selector = selectorOrConfig as string | string[];
+    const selector = selectorOrConfig;
     const value = valueOrOptions as string | string[];
     const options = maybeOptions ?? {};
 
@@ -742,10 +778,13 @@ export class Page {
       // Click the trigger to open dropdown
       await this.click(trigger, options);
 
-      // Small delay for dropdown animation/render
-      await sleep(100);
-
+      // Wait for dropdown to appear (up to 500ms) instead of fixed delay
       const optionSelectors = Array.isArray(option) ? option : [option];
+      await waitForAnyElement(this.cdp, optionSelectors, {
+        state: 'visible',
+        timeout: 500,
+        contextId: this.currentFrameContextId ?? undefined,
+      }).catch(() => sleep(100)); // Fallback to brief delay if we can't detect
       const optionHandle = await this.evaluateInFrame<{ result: RemoteObject }>(
         `(() => {
           const selectors = ${JSON.stringify(optionSelectors)};
@@ -982,8 +1021,11 @@ export class Page {
           await this.waitForNavigation({ timeout: options.timeout ?? DEFAULT_TIMEOUT });
         } else if (shouldWait === 'auto') {
           await Promise.race([
-            this.waitForNavigation({ timeout: 1000, optional: true }),
-            sleep(500),
+            this.waitForNavigation({ timeout: 2000, optional: true }).then(
+              () => 'navigation' as const
+            ),
+            this.waitForDOMMutation({ timeout: 1000 }).then(() => 'mutation' as const),
+            sleep(1500).then(() => 'timeout' as const),
           ]);
         }
         return true;
@@ -1004,18 +1046,19 @@ export class Page {
             // No navigation, try click if method includes it
           }
         } else if (shouldWait === 'auto') {
-          // Race: navigation detection vs short delay for client-side handling
+          // Race: real navigation vs DOM mutation (client-side form) vs timeout
           const navigationDetected = await Promise.race([
-            this.waitForNavigation({ timeout: 1000, optional: true }).then((success) =>
+            this.waitForNavigation({ timeout: 2000, optional: true }).then((success) =>
               success ? 'nav' : null
             ),
-            sleep(500).then(() => 'timeout'),
+            this.waitForDOMMutation({ timeout: 1000 }).then(() => 'mutation'),
+            sleep(1500).then(() => 'timeout'),
           ]);
 
           if (navigationDetected === 'nav') {
             return true; // Navigation happened, we're done
           }
-          // Short delay passed - assume client-side form, try click if available
+          // DOM mutation or timeout — assume client-side handling, try click if available
         } else if (method === 'enter') {
           // waitForNavigation: false - don't wait
           return true;
@@ -1040,10 +1083,26 @@ export class Page {
   }
 
   /**
-   * Press a key
+   * Press a key, optionally with modifier keys held down
    */
-  async press(key: string): Promise<void> {
-    await this.dispatchKey(key);
+  async press(
+    key: string,
+    options?: { modifiers?: Array<'Control' | 'Shift' | 'Alt' | 'Meta'> }
+  ): Promise<void> {
+    const modifiers = options?.modifiers;
+    if (modifiers && modifiers.length > 0) {
+      await this.dispatchKeyWithModifiers(key, modifiers);
+    } else {
+      await this.dispatchKey(key);
+    }
+  }
+
+  /**
+   * Execute a keyboard shortcut (e.g. "Control+a", "Meta+Shift+z")
+   */
+  async shortcut(combo: string): Promise<void> {
+    const { modifiers, key } = parseShortcut(combo);
+    await this.dispatchKeyWithModifiers(key, modifiers);
   }
 
   /**
@@ -1077,9 +1136,10 @@ export class Page {
 
       await this.scrollIntoView(element.nodeId);
 
+      const objectId = await this.resolveObjectId(element.nodeId);
+
       // Actionability checks
       try {
-        const objectId = await this.resolveObjectId(element.nodeId);
         await ensureActionable(this.cdp, objectId, ['visible', 'stable'], {
           timeout: options.timeout ?? DEFAULT_TIMEOUT,
         });
@@ -1088,14 +1148,29 @@ export class Page {
         throw e;
       }
 
-      const box = await this.getBoxModel(element.nodeId);
-      if (!box) {
-        if (options.optional) return false;
-        throw new Error('Could not get element box model');
+      // Use getContentQuads for precise coordinates (handles CSS transforms)
+      let x: number;
+      let y: number;
+      try {
+        const { quads } = await this.cdp.send<{ quads: number[][] }>('DOM.getContentQuads', {
+          objectId,
+        });
+        if (quads?.length > 0) {
+          const quad = quads[0]!;
+          x = (quad[0]! + quad[2]! + quad[4]! + quad[6]!) / 4;
+          y = (quad[1]! + quad[3]! + quad[5]! + quad[7]!) / 4;
+        } else {
+          throw new Error('No quads');
+        }
+      } catch {
+        const box = await this.getBoxModel(element.nodeId);
+        if (!box) {
+          if (options.optional) return false;
+          throw new Error('Could not get element position');
+        }
+        x = box.content[0]! + box.width / 2;
+        y = box.content[1]! + box.height / 2;
       }
-
-      const x = box.content[0]! + box.width / 2;
-      const y = box.content[1]! + box.height / 2;
 
       await this.cdp.send('Input.dispatchMouseEvent', {
         type: 'mouseMoved',
@@ -1181,23 +1256,25 @@ export class Page {
     if (descResult.node.frameId) {
       const frameId = descResult.node.frameId;
       const { timeout = DEFAULT_TIMEOUT } = options;
-      const pollInterval = 50;
-      const deadline = Date.now() + timeout;
 
-      // Poll for the execution context until it's available or timeout
-      // Context creation events may arrive after DOM is ready, especially for
-      // iframes with dynamically loaded content
+      // Wait for execution context via event instead of polling
       let contextId = this.frameExecutionContexts.get(frameId);
-      while (!contextId && Date.now() < deadline) {
-        await new Promise((resolve) => setTimeout(resolve, pollInterval));
-        contextId = this.frameExecutionContexts.get(frameId);
+      if (!contextId) {
+        contextId = await this.waitForFrameContext(frameId, Math.min(timeout, 2000));
       }
 
       if (contextId) {
         this.currentFrameContextId = contextId;
+        this.brokenFrame = null;
+      } else {
+        // Context unavailable — mark as broken so evaluate() throws explicitly
+        const frameKey = Array.isArray(selector) ? selector[0]! : selector;
+        this.brokenFrame = frameKey;
+        console.warn(
+          `[browser-pilot] Frame "${frameKey}" execution context unavailable. ` +
+            'JS evaluation will fail in this frame. DOM operations may still work.'
+        );
       }
-      // Note: contextId may still be null for cross-origin iframes or other edge cases.
-      // Actions will still work via DOM methods, but evaluate() won't run in iframe context.
     }
 
     // Clear ref map since we're in a new context
@@ -1213,6 +1290,7 @@ export class Page {
     this.currentFrame = null;
     this.rootNodeId = null; // Will be re-fetched on next query
     this.currentFrameContextId = null;
+    this.brokenFrame = null;
     this.refMap.clear();
   }
 
@@ -1806,11 +1884,22 @@ export class Page {
 
           for (var i = 0; i < nodes.length; i++) {
             var currentTarget = nodes[i];
+
+            var phase = currentTarget === target ? 2 : capture ? 1 : 3;
+
+            // Invoke inline handler if present (e.g. onclick, oninput)
+            var inlineHandler = currentTarget['on' + type];
+            if (typeof inlineHandler === 'function') {
+              var inlineEvent = createEvent(type, target, currentTarget, path, phase);
+              inlineHandler.call(currentTarget, inlineEvent);
+              invoked = true;
+              if (inlineEvent.__stopped) break;
+            }
+
             var store = currentTarget && currentTarget.__bpEventListeners;
             var entries = store && store[type];
             if (!Array.isArray(entries) || entries.length === 0) continue;
 
-            var phase = currentTarget === target ? 2 : capture ? 1 : 3;
             var event = createEvent(type, target, currentTarget, path, phase);
 
             for (var j = 0; j < entries.length; j++) {
@@ -2008,7 +2097,7 @@ export class Page {
 
       return {
         role,
-        name: name as string | undefined,
+        name,
         value: value as string | undefined,
         ref,
         children: children.length > 0 ? children : undefined,
@@ -2597,11 +2686,17 @@ export class Page {
     };
 
     if (this.dialogHandler) {
+      const DIALOG_TIMEOUT = 5000;
       try {
-        await this.dialogHandler(dialog);
+        await Promise.race([
+          this.dialogHandler(dialog),
+          sleep(DIALOG_TIMEOUT).then(() => {
+            console.warn('[browser-pilot] Dialog handler timed out after 5s, auto-dismissing');
+            return dialog.dismiss();
+          }),
+        ]);
       } catch (e) {
         console.error('[Dialog handler error]', e);
-        // Auto-dismiss on error
         await dialog.dismiss();
       }
     } else {
@@ -2695,6 +2790,7 @@ export class Page {
     this.refMap.clear();
     this.currentFrame = null;
     this.currentFrameContextId = null;
+    this.brokenFrame = null;
     this.frameContexts.clear();
     this.dialogHandler = null;
 
@@ -2963,15 +3059,10 @@ export class Page {
         if (frameResult.node.contentDocument?.nodeId) {
           this.rootNodeId = frameResult.node.contentDocument.nodeId;
           if (frameResult.node.frameId) {
-            // Wait briefly for the new execution context if not yet available
-            // (Chrome may recreate it after destroying the old one)
+            // Wait for the execution context via event instead of polling
             let contextId = this.frameExecutionContexts.get(frameResult.node.frameId);
             if (!contextId) {
-              for (let i = 0; i < 10; i++) {
-                await sleep(100);
-                contextId = this.frameExecutionContexts.get(frameResult.node.frameId);
-                if (contextId) break;
-              }
+              contextId = await this.waitForFrameContext(frameResult.node.frameId, 1000);
             }
             this.currentFrameContextId = contextId ?? null;
           }
@@ -2998,6 +3089,15 @@ export class Page {
     expression: string,
     options: { returnByValue?: boolean; awaitPromise?: boolean } = {}
   ): Promise<T> {
+    // Guard against silent degradation in broken iframe contexts
+    if (this.brokenFrame && this.currentFrame) {
+      throw new Error(
+        `Cannot evaluate JavaScript in frame "${this.brokenFrame}": ` +
+          'execution context is unavailable (cross-origin or sandboxed iframe). ' +
+          'DOM operations (click, fill, etc.) may still work via CDP.'
+      );
+    }
+
     const params: Record<string, unknown> = {
       expression,
       returnByValue: options.returnByValue ?? true,
@@ -3012,10 +3112,46 @@ export class Page {
   }
 
   /**
-   * Scroll an element into view
+   * Scroll an element into view, with fallback to center-scroll if clipped by fixed headers
    */
   private async scrollIntoView(nodeId: number): Promise<void> {
     await this.cdp.send('DOM.scrollIntoViewIfNeeded', { nodeId });
+
+    // Validate element is actually in viewport; if not, try explicit center scroll
+    if (!(await this.isInViewport(nodeId))) {
+      const objectId = await this.resolveObjectId(nodeId);
+      await this.cdp.send('Runtime.callFunctionOn', {
+        objectId,
+        functionDeclaration: `function() { this.scrollIntoView({ block: 'center', inline: 'center' }); }`,
+      });
+    }
+  }
+
+  /**
+   * Check if element is within the visible viewport
+   */
+  private async isInViewport(nodeId: number): Promise<boolean> {
+    try {
+      const objectId = await this.resolveObjectId(nodeId);
+      const result = await this.cdp.send<{ result: { value: boolean } }>('Runtime.callFunctionOn', {
+        objectId,
+        functionDeclaration: `function() {
+          var rect = this.getBoundingClientRect();
+          return (
+            rect.top >= 0 &&
+            rect.left >= 0 &&
+            rect.bottom <= window.innerHeight &&
+            rect.right <= window.innerWidth &&
+            rect.width > 0 &&
+            rect.height > 0
+          );
+        }`,
+        returnByValue: true,
+      });
+      return result?.result?.value === true;
+    } catch {
+      return true; // Assume in viewport if check fails
+    }
   }
 
   /**
@@ -3118,13 +3254,13 @@ export class Page {
     return object.objectId;
   }
 
-  private async dispatchKeyDefinition(def: KeyDefinition): Promise<void> {
+  private async dispatchKeyDefinition(def: KeyDefinition, modifierBitmask = 0): Promise<void> {
     const downParams: Record<string, unknown> = {
       type: def.text !== undefined ? 'keyDown' : 'rawKeyDown',
       key: def.key,
       code: def.code,
       windowsVirtualKeyCode: def.keyCode,
-      modifiers: 0,
+      modifiers: modifierBitmask,
       autoRepeat: false,
       location: def.location ?? 0,
       isKeypad: false,
@@ -3141,7 +3277,7 @@ export class Page {
       key: def.key,
       code: def.code,
       windowsVirtualKeyCode: def.keyCode,
-      modifiers: 0,
+      modifiers: modifierBitmask,
       location: def.location ?? 0,
     });
   }
@@ -3153,12 +3289,53 @@ export class Page {
       return;
     }
 
-    if ([...key].length === 1) {
+    if (key.length === 1) {
       await this.cdp.send('Input.insertText', { text: key });
       return;
     }
 
     await this.dispatchKeyDefinition({ key, code: key, keyCode: 0 });
+  }
+
+  private async dispatchKeyWithModifiers(key: string, modifiers: ModifierKey[]): Promise<void> {
+    const mask = computeModifierBitmask(modifiers);
+
+    // Press modifier keys down
+    for (const mod of modifiers) {
+      await this.cdp.send('Input.dispatchKeyEvent', {
+        type: 'rawKeyDown',
+        key: mod,
+        code: MODIFIER_CODES[mod],
+        windowsVirtualKeyCode: MODIFIER_KEY_CODES[mod],
+        modifiers: mask,
+        location: 1,
+      });
+    }
+
+    // Dispatch the main key with modifiers held
+    const def = US_KEYBOARD[key];
+    if (def) {
+      await this.dispatchKeyDefinition(def, mask);
+    } else if (key.length === 1) {
+      // For single characters with modifiers, use dispatchKeyEvent instead of insertText
+      // so the modifiers are included in the event
+      await this.dispatchKeyDefinition({ key, code: key, keyCode: 0, text: key }, mask);
+    } else {
+      await this.dispatchKeyDefinition({ key, code: key, keyCode: 0 }, mask);
+    }
+
+    // Release modifier keys (reverse order)
+    for (let i = modifiers.length - 1; i >= 0; i--) {
+      const mod = modifiers[i]!;
+      await this.cdp.send('Input.dispatchKeyEvent', {
+        type: 'keyUp',
+        key: mod,
+        code: MODIFIER_CODES[mod],
+        windowsVirtualKeyCode: MODIFIER_KEY_CODES[mod],
+        modifiers: 0,
+        location: 1,
+      });
+    }
   }
 
   // ============ Audio I/O ============
@@ -3283,6 +3460,56 @@ export class Page {
       latencyMs: firstChunkTime !== null ? firstChunkTime - start : -1,
       totalMs: Date.now() - start,
     };
+  }
+
+  /**
+   * Wait for a DOM mutation in the current frame (used for detecting client-side form handling)
+   */
+  private async waitForDOMMutation(options: { timeout: number }): Promise<void> {
+    await this.evaluateInFrame(
+      `new Promise((resolve) => {
+        var observer = new MutationObserver(function() {
+          observer.disconnect();
+          resolve();
+        });
+        observer.observe(document.body, { childList: true, subtree: true });
+        setTimeout(function() { observer.disconnect(); resolve(); }, ${options.timeout});
+      })`
+    );
+  }
+
+  /**
+   * Wait for a frame execution context via Runtime.executionContextCreated event
+   */
+  private async waitForFrameContext(frameId: string, timeout: number): Promise<number | undefined> {
+    // Check if it appeared while we were setting up
+    const existing = this.frameExecutionContexts.get(frameId);
+    if (existing) return existing;
+
+    return new Promise<number | undefined>((resolve) => {
+      const timer = setTimeout(() => {
+        cleanup();
+        resolve(undefined);
+      }, timeout);
+
+      const handler = (params: Record<string, unknown>) => {
+        const context = params['context'] as {
+          id: number;
+          auxData?: { frameId?: string; isDefault?: boolean };
+        };
+        if (context.auxData?.frameId === frameId && context.auxData?.isDefault !== false) {
+          cleanup();
+          resolve(context.id);
+        }
+      };
+
+      const cleanup = () => {
+        clearTimeout(timer);
+        this.cdp.off('Runtime.executionContextCreated', handler);
+      };
+
+      this.cdp.on('Runtime.executionContextCreated', handler);
+    });
   }
 }
 
