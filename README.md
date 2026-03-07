@@ -400,6 +400,7 @@ bp listen ws -m "*voice*"  # monitor WebSocket traffic
 bp list                    # list all sessions
 bp close -s my-session     # close session
 bp actions                 # show complete action reference
+bp run workflow.json       # run a workflow file
 
 # Actions with inline assertions (no extra bp eval needed)
 bp exec '[

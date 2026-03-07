@@ -75,6 +75,11 @@ bp exec '[{"action":"assertUrl","expect":"/dashboard"}]'
 bp exec '[{"action":"assertText","expect":"Welcome","selector":"h1"}]'
 bp exec '[{"action":"assertVisible","selector":".success-message","retry":3,"retryDelay":1000}]'
 
+# Run a workflow file
+bp run workflow.json                      # Execute steps from file
+bp run checkout.json --on-fail continue   # Continue past failures
+bp run smoke-test.json --json             # JSON output
+
 # Session management
 bp list                    # List sessions
 bp list --json             # JSON output

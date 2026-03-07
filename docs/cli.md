@@ -405,7 +405,7 @@ The `exec` command accepts actions in JSON format:
 ```typescript
 interface Action {
   action: 'goto' | 'click' | 'fill' | 'type' | 'select' | 'check' |
-          'uncheck' | 'submit' | 'press' | 'focus' | 'hover' |
+          'uncheck' | 'submit' | 'press' | 'shortcut' | 'focus' | 'hover' |
           'scroll' | 'wait' | 'snapshot' | 'screenshot' |
           'assertVisible' | 'assertExists' | 'assertText' |
           'assertUrl' | 'assertValue';
@@ -426,6 +426,9 @@ interface Action {
   // Note: When targeting a <form> element directly, uses form.requestSubmit()
   clear?: boolean;        // fill (default: true)
   delay?: number;         // type (ms between keystrokes)
+  blur?: boolean;         // fill, type (trigger blur after input)
+  combo?: string;         // shortcut (e.g. "Control+a")
+  modifiers?: string[];   // press (e.g. ["Control", "Shift"])
   expect?: string;        // assertText, assertUrl, assertValue
   retry?: number;         // Retry count on failure (default: 0)
   retryDelay?: number;    // Delay between retries in ms (default: 500)
@@ -474,6 +477,71 @@ bp exec '{"action":"click","selector":"#dynamic-btn","retry":2}'
 ```
 
 The default `retryDelay` is 500ms. The step is attempted `retry + 1` times total (1 initial + N retries).
+
+### Keyboard Shortcuts
+
+The `press` action supports modifier keys, and the `shortcut` action provides a convenient combo string format:
+
+```bash
+# press with modifiers
+bp exec '{"action":"press","key":"a","modifiers":["Control"]}'
+bp exec '{"action":"press","key":"z","modifiers":["Meta","Shift"]}'
+
+# shortcut (combo string)
+bp exec '{"action":"shortcut","combo":"Control+a"}'
+bp exec '{"action":"shortcut","combo":"Meta+Shift+z"}'
+```
+
+Valid modifiers: `Control`, `Shift`, `Alt`, `Meta`.
+
+### Structured Failure Info
+
+When a step fails, the result includes structured failure data for programmatic consumption:
+
+```json
+{
+  "success": false,
+  "failureReason": "covered",
+  "coveringElement": { "tag": "div", "className": "modal-overlay" },
+  "suggestion": "Element is blocked by another element. Dismiss the covering element first.",
+  "hints": [{ "selector": "#alt-btn", "reason": "Similar element found" }]
+}
+```
+
+**`failureReason` values:** `missing`, `hidden`, `covered`, `disabled`, `readonly`, `detached`, `replaced`, `notEditable`, `timeout`, `navigation`, `cdpError`, `unknown`.
+
+Each failure includes a `suggestion` string guiding the agent toward recovery. When the failure is element-related, `hints` may contain alternative selectors.
+
+## Workflow Runner
+
+The `run` command executes a JSON workflow file:
+
+```bash
+bp run login-flow.json
+bp run checkout.json --on-fail continue --json
+bp run smoke-test.json --timeout 10000
+```
+
+Workflow files can be a bare JSON array or a `{ "steps": [...] }` wrapper:
+
+```json
+[
+  { "action": "goto", "url": "https://example.com/login" },
+  { "action": "fill", "selector": "#email", "value": "user@example.com" },
+  { "action": "fill", "selector": "#password", "value": "secret" },
+  { "action": "submit", "selector": "form" },
+  { "action": "assertUrl", "expect": "/dashboard" },
+  { "action": "assertText", "expect": "Welcome" }
+]
+```
+
+**Options:**
+- `--on-fail <stop|continue>` — How to handle failures (default: `stop`)
+- `--timeout <ms>` — Default timeout for all steps
+- `--json` — Output results as JSON
+- `-s, --session <id>` — Session to use (default: most recent)
+
+Steps are validated before execution. Exit code is 0 on success, 1 on failure.
 
 ## Session Storage
 

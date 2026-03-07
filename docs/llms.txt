@@ -44,6 +44,8 @@ Actions are JSON objects with `action` field. Selectors can be `string` or `stri
 | check | `{"action":"check","selector":"#agree"}` |
 | submit | `{"action":"submit","selector":"form"}` |
 | press | `{"action":"press","key":"Enter"}` |
+| press (modifiers) | `{"action":"press","key":"a","modifiers":["Control"]}` |
+| shortcut | `{"action":"shortcut","combo":"Control+a"}` |
 | wait | `{"action":"wait","waitFor":"networkIdle"}` |
 | snapshot | `{"action":"snapshot"}` |
 | assertVisible | `{"action":"assertVisible","selector":"#success"}` |

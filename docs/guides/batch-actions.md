@@ -115,6 +115,14 @@ console.log(result.steps);           // individual results
 { action: 'press', key: 'Enter' }
 { action: 'press', key: 'Escape' }
 { action: 'press', key: 'Tab' }
+
+// With modifiers
+{ action: 'press', key: 'a', modifiers: ['Control'] }
+{ action: 'press', key: 'z', modifiers: ['Meta', 'Shift'] }
+
+// Shortcut combo string
+{ action: 'shortcut', combo: 'Control+a' }
+{ action: 'shortcut', combo: 'Meta+Shift+z' }
 ```
 
 ### Focus & Hover
@@ -178,7 +186,27 @@ interface StepResult {
   error?: string;
   failedSelectors?: Array<{ selector: string; reason: string }>;
   result?: unknown;          // For snapshot, screenshot, evaluate
+
+  // Structured failure info (on failed steps)
+  failureReason?: FailureReason;   // Classified failure type
+  suggestion?: string;             // AI-friendly recovery suggestion
+  coveringElement?: { tag: string; id?: string; className?: string }; // When reason is 'covered'
+  hints?: FailureHint[];           // Alternative selectors to try
 }
+
+type FailureReason =
+  | 'missing'     // Element not found in DOM
+  | 'hidden'      // Element exists but not visible
+  | 'covered'     // Element blocked by another element
+  | 'disabled'    // Element is disabled
+  | 'readonly'    // Element is readonly
+  | 'detached'    // Element removed from DOM during action
+  | 'replaced'    // Element was replaced (unstable)
+  | 'notEditable' // Not an editable field
+  | 'timeout'     // Timed out waiting
+  | 'navigation'  // Navigation failed
+  | 'cdpError'    // Browser connection error
+  | 'unknown';    // Unclassified error
 ```
 
 ## Error Handling

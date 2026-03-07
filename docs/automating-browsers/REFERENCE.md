@@ -75,7 +75,12 @@ When targeting a submit button, uses the configured method (enter, click, or bot
 {"action": "press", "key": "Enter"}
 {"action": "press", "key": "Escape"}
 {"action": "press", "key": "Tab"}
+{"action": "press", "key": "a", "modifiers": ["Control"]}
+{"action": "shortcut", "combo": "Control+a"}
+{"action": "shortcut", "combo": "Meta+Shift+z"}
 ```
+
+Valid modifiers: `Control`, `Shift`, `Alt`, `Meta`.
 
 ### Focus/Hover
 

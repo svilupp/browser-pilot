@@ -198,9 +198,9 @@ await page.submit('#form', { waitForNavigation: true });   // Always wait for fu
 - `options.timeout?: number`
 - `options.optional?: boolean`
 
-### press(key)
+### press(key, options?)
 
-Press a keyboard key.
+Press a keyboard key, optionally with modifier keys held down.
 
 ```typescript
 await page.press('Enter');
@@ -208,9 +208,30 @@ await page.press('Escape');
 await page.press('Tab');
 await page.press('ArrowDown');
 await page.press('Backspace');
+
+// With modifiers
+await page.press('a', { modifiers: ['Control'] });      // Ctrl+A (select all)
+await page.press('z', { modifiers: ['Meta', 'Shift'] }); // Cmd+Shift+Z (redo on macOS)
 ```
 
+**Parameters:**
+- `key: string` - Key to press
+- `options.modifiers?: Array<'Control' | 'Shift' | 'Alt' | 'Meta'>` - Modifier keys to hold
+
 **Supported keys:** Enter, Tab, Escape, Backspace, Delete, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, and single characters.
+
+### shortcut(combo)
+
+Execute a keyboard shortcut from a combo string.
+
+```typescript
+await page.shortcut('Control+a');       // Select all
+await page.shortcut('Meta+Shift+z');    // Redo (macOS)
+await page.shortcut('Control+Shift+k'); // Delete line
+```
+
+**Parameters:**
+- `combo: string` - Shortcut combo in `Modifier+Key` format (e.g. `"Control+a"`, `"Meta+Shift+z"`). Valid modifiers: `Control`, `Shift`, `Alt`, `Meta`.
 
 ### focus(selector, options?)
 
