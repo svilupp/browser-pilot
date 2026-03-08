@@ -121,6 +121,11 @@ export interface PageSnapshot {
   text: string;
 }
 
+export interface SnapshotOptions {
+  /** Restrict the snapshot to these accessibility roles */
+  roles?: string[];
+}
+
 export interface SnapshotNode {
   /** Accessibility role */
   role: string;
@@ -151,6 +156,31 @@ export interface InteractiveElement {
   selector: string;
   /** Whether the element is disabled */
   disabled?: boolean;
+  /** Whether the element is checked */
+  checked?: boolean;
+  /** Current value where relevant */
+  value?: string;
+}
+
+export interface FormOption {
+  value: string;
+  text: string;
+  selected: boolean;
+  disabled: boolean;
+}
+
+export interface FormField {
+  tag: string;
+  type: string;
+  id?: string;
+  name?: string;
+  value?: string | string[] | null;
+  checked?: boolean;
+  required: boolean;
+  disabled: boolean;
+  label?: string;
+  placeholder?: string;
+  options?: FormOption[];
 }
 
 // Failure hint for element not found errors

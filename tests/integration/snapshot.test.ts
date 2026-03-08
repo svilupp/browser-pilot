@@ -96,6 +96,34 @@ describe('Snapshot and Screenshot', () => {
     });
   });
 
+  test('should use ref: notation in text snapshots', async () => {
+    const { page, baseUrl } = ctx.get();
+
+    await withRetry(async () => {
+      await page.goto(`${baseUrl}/form.html`);
+
+      const snapshot = await page.snapshot();
+
+      expect(snapshot.text).toContain('ref:e');
+      expect(snapshot.text).not.toContain('[ref=');
+    });
+  });
+
+  test('should filter snapshots by accessibility role', async () => {
+    const { page, baseUrl } = ctx.get();
+
+    await withRetry(async () => {
+      await page.goto(`${baseUrl}/checkboxes.html`);
+
+      const snapshot = await page.snapshot({ roles: ['radio'] });
+
+      expect(snapshot.accessibilityTree.length).toBeGreaterThan(0);
+      expect(snapshot.accessibilityTree.every((node) => node.role === 'radio')).toBe(true);
+      expect(snapshot.text).toContain('radio');
+      expect(snapshot.text).not.toContain('[ref=');
+    });
+  });
+
   // === Screenshot Tests ===
 
   test('should take PNG screenshot', async () => {

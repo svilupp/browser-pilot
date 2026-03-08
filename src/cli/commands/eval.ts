@@ -23,6 +23,7 @@ Usage:
 
 Options:
   -f, --file <path>    Read JavaScript from a file
+  --wrap               Wrap the expression in an async IIFE
   -s, --session <id>   Session to use (default: most recent)
   -f, --format <fmt>   Output format: json | pretty (default: pretty)
   --json               Alias for -f json
@@ -37,6 +38,7 @@ Examples:
 
 interface EvalOptions {
   file?: string;
+  wrap?: boolean;
 }
 
 function parseEvalArgs(args: string[]): { expression: string | undefined; options: EvalOptions } {
@@ -47,12 +49,28 @@ function parseEvalArgs(args: string[]): { expression: string | undefined; option
     const arg = args[i]!;
     if (arg === '-f' || arg === '--file') {
       options.file = args[++i];
+    } else if (arg === '--wrap') {
+      options.wrap = true;
     } else if (!expression && !arg.startsWith('-')) {
       expression = arg;
     }
   }
 
   return { expression, options };
+}
+
+function normalizeEvalExpression(expression: string, wrap = false): string {
+  const trimmed = expression.trim();
+  const needsWrap = wrap || trimmed.includes('=>') || /\bawait\b/.test(trimmed);
+  if (!needsWrap) {
+    return trimmed;
+  }
+
+  if (wrap || /\bawait\b/.test(trimmed)) {
+    return `(async () => (${trimmed}))()`;
+  }
+
+  return `(() => (${trimmed}))()`;
 }
 
 export async function evalCommand(
@@ -100,7 +118,10 @@ export async function evalCommand(
   const { browser, page } = await attachSession(session, { trace: globalOptions.trace });
 
   try {
-    const step: Step = { action: 'evaluate', value: expression };
+    const step: Step = {
+      action: 'evaluate',
+      value: normalizeEvalExpression(expression, evalOptions.wrap),
+    };
     const result = await page.batch([step]);
     const stepResult = result.steps[0]!;
 

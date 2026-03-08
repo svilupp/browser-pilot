@@ -4,7 +4,7 @@
 
 import { type Step, validateSteps } from '../../index.ts';
 import { attachSession, resolveSession } from '../attach.ts';
-import { output } from '../index.ts';
+import { output, renderOutput } from '../index.ts';
 import { updateSession } from '../session.ts';
 import { getSessionLogger } from '../session-logger.ts';
 
@@ -18,6 +18,7 @@ Usage:
 
 Options:
   -f, --file <path>    Read actions from a JSON file
+  -o, --output <path>  Write command output to a file instead of stdout
   --dialog <mode>      Handle native dialogs: accept | dismiss
   -s, --session <id>   Session to use (default: most recent)
   -f, --format <fmt>   Output format: json | pretty (default: pretty)
@@ -38,6 +39,7 @@ Run 'bp quickstart' for getting started guide.
 interface ExecOptions {
   session?: string;
   output?: 'json' | 'pretty';
+  outputFile?: string;
   trace?: boolean;
   dialog?: 'accept' | 'dismiss';
 }
@@ -60,12 +62,44 @@ function parseExecArgs(args: string[]): {
       }
     } else if (arg === '-f' || arg === '--file') {
       options.file = args[++i];
+    } else if (arg === '-o' || arg === '--output') {
+      options.outputFile = args[++i];
     } else if (!actionsJson && !arg.startsWith('-')) {
       actionsJson = arg;
     }
   }
 
   return { actionsJson, options };
+}
+
+async function getCurrentUrlSafe(
+  page: { url(): Promise<string> },
+  fallback: string
+): Promise<string> {
+  try {
+    return await page.url();
+  } catch {
+    return fallback;
+  }
+}
+
+async function captureFinalUrl(
+  page: { url(): Promise<string> },
+  steps: Step[],
+  fallback: string
+): Promise<string> {
+  const currentUrl = await getCurrentUrlSafe(page, fallback);
+  if (currentUrl !== fallback) {
+    return currentUrl;
+  }
+
+  const mightNavigate = steps.some((step) => step.action === 'click' || step.action === 'submit');
+  if (!mightNavigate) {
+    return currentUrl;
+  }
+
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  return getCurrentUrlSafe(page, currentUrl);
 }
 
 export async function execCommand(
@@ -149,8 +183,14 @@ export async function execCommand(
     // Execute actions
     const steps = Array.isArray(actions) ? actions : [actions];
     const urlBefore = await page.url();
+    const currentTargetId = page.targetId;
+    const closesCurrentTarget = steps.some(
+      (step) => step.action === 'closeTab' && (!step.targetId || step.targetId === currentTargetId)
+    );
     const result = await page.batch(steps);
-    const urlAfter = await page.url();
+    const urlAfter = closesCurrentTarget
+      ? urlBefore
+      : await captureFinalUrl(page, steps, urlBefore);
 
     // Log each step result
     for (const stepResult of result.steps) {
@@ -178,9 +218,16 @@ export async function execCommand(
     });
 
     // Update session with current URL
-    const currentUrl = await page.url();
+    const currentUrl = closesCurrentTarget
+      ? urlBefore
+      : await captureFinalUrl(page, steps, urlAfter);
     const hasSnapshot = steps.some((step) => step.action === 'snapshot');
-    if (hasSnapshot) {
+    if (closesCurrentTarget) {
+      await updateSession(session.id, {
+        currentUrl,
+        targetId: undefined,
+      });
+    } else if (hasSnapshot) {
       await updateSession(session.id, {
         currentUrl,
         metadata: {
@@ -206,16 +253,21 @@ export async function execCommand(
       result: s.result,
     }));
 
-    output(
-      {
-        success: result.success,
-        stoppedAtIndex: result.stoppedAtIndex,
-        steps: outputSteps,
-        totalDurationMs: result.totalDurationMs,
-        currentUrl,
-      },
-      globalOptions.format
-    );
+    const payload = {
+      success: result.success,
+      stoppedAtIndex: result.stoppedAtIndex,
+      steps: outputSteps,
+      totalDurationMs: result.totalDurationMs,
+      currentUrl,
+    };
+
+    if (execOptions.outputFile) {
+      const fs = await import('node:fs/promises');
+      await fs.writeFile(execOptions.outputFile, renderOutput(payload, globalOptions.format));
+      process.stderr.write(`Wrote output to ${execOptions.outputFile}\n`);
+    } else {
+      output(payload, globalOptions.format);
+    }
 
     // Tip: suggest bp eval only as an escape hatch when evaluate steps fail
     const failedEval = result.steps.find((s) => s.action === 'evaluate' && !s.success);

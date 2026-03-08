@@ -15,10 +15,24 @@ function createMockPage() {
   const calls: Array<{ method: string; args: unknown[] }> = [];
   const refMap = new Map<string, number>();
   let evaluateResult: unknown;
+  const cdpCalls: Array<{ method: string; params?: Record<string, unknown> }> = [];
 
   const page = {
     calls,
     refMap,
+    targetId: 'page-target-1',
+    cdpClient: {
+      async send(method: string, params?: Record<string, unknown>) {
+        cdpCalls.push({ method, params });
+        if (method === 'Target.createTarget') {
+          return { targetId: 'new-target-123' };
+        }
+        return {};
+      },
+    },
+    get cdpCalls() {
+      return cdpCalls;
+    },
 
     setEvaluateResult(result: unknown) {
       evaluateResult = result;
@@ -109,6 +123,22 @@ function createMockPage() {
       };
     },
 
+    async forms() {
+      calls.push({ method: 'forms', args: [] });
+      return [
+        {
+          tag: 'input',
+          type: 'text',
+          id: 'name',
+          name: 'name',
+          value: '',
+          required: true,
+          disabled: false,
+          label: 'Name',
+        },
+      ];
+    },
+
     async screenshot(options?: unknown) {
       calls.push({ method: 'screenshot', args: [options] });
       return 'base64data';
@@ -136,6 +166,7 @@ function createMockPage() {
       calls.length = 0;
       refMap.clear();
       evaluateResult = undefined;
+      cdpCalls.length = 0;
     },
   };
 
@@ -360,5 +391,73 @@ describe('Error Messages', () => {
 
     expect(result.success).toBe(false);
     expect(result.steps[0]?.error).toContain('Valid actions:');
+  });
+});
+
+describe('Forms and Tabs', () => {
+  test('should execute forms action', async () => {
+    const page = createMockPage();
+    const executor = new BatchExecutor(page as unknown as Page);
+
+    const result = await executor.execute([{ action: 'forms' }]);
+
+    expect(result.success).toBe(true);
+    expect(page.calls[0]?.method).toBe('forms');
+    expect(result.steps[0]?.result).toEqual([
+      expect.objectContaining({
+        id: 'name',
+        label: 'Name',
+        type: 'text',
+      }),
+    ]);
+  });
+
+  test('should create a new tab without switching page context', async () => {
+    const page = createMockPage();
+    const executor = new BatchExecutor(page as unknown as Page);
+
+    const result = await executor.execute([{ action: 'newTab', url: 'https://example.com' }]);
+
+    expect(result.success).toBe(true);
+    expect(page.cdpCalls[0]).toEqual({
+      method: 'Target.createTarget',
+      params: { url: 'https://example.com' },
+    });
+    expect(result.steps[0]?.result).toEqual({ targetId: 'new-target-123' });
+    expect(page.targetId).toBe('page-target-1');
+  });
+
+  test('should close the current tab by default', async () => {
+    const page = createMockPage();
+    const executor = new BatchExecutor(page as unknown as Page);
+
+    const result = await executor.execute([{ action: 'closeTab' }]);
+
+    expect(result.success).toBe(true);
+    expect(page.cdpCalls[0]).toEqual({
+      method: 'Target.closeTarget',
+      params: { targetId: 'page-target-1' },
+    });
+    expect(result.steps[0]?.result).toEqual({
+      targetId: 'page-target-1',
+      closedCurrent: true,
+    });
+  });
+
+  test('should close a provided target ID', async () => {
+    const page = createMockPage();
+    const executor = new BatchExecutor(page as unknown as Page);
+
+    const result = await executor.execute([{ action: 'closeTab', targetId: 'other-target' }]);
+
+    expect(result.success).toBe(true);
+    expect(page.cdpCalls[0]).toEqual({
+      method: 'Target.closeTarget',
+      params: { targetId: 'other-target' },
+    });
+    expect(result.steps[0]?.result).toEqual({
+      targetId: 'other-target',
+      closedCurrent: false,
+    });
   });
 });

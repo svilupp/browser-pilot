@@ -50,6 +50,22 @@ describe('Checkbox and Radio Interactions', () => {
     });
   });
 
+  test('should fall back to clicking the associated label', async () => {
+    const { page, baseUrl } = ctx.get();
+
+    await withRetry(async () => {
+      await page.goto(`${baseUrl}/label-checkbox.html`);
+
+      await page.check('#agree');
+      await expectChecked(page, '#agree', true);
+      await expectElementText(page, '#state', 'checked');
+
+      await page.uncheck('#agree');
+      await expectChecked(page, '#agree', false);
+      await expectElementText(page, '#state', 'unchecked');
+    });
+  });
+
   test('should check multiple checkboxes', async () => {
     const { page, baseUrl } = ctx.get();
 

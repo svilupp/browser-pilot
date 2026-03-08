@@ -20,9 +20,12 @@ Usage:
 
 Options:
   -p, --provider <type>   Provider: generic | browserbase | browserless (default: generic)
-  --url <ws-url>          WebSocket URL (auto-discovered for generic provider)
+  --url <value>           Browser WebSocket URL, or page URL when used with --new-tab
+  --browser-url <ws-url>  Explicit browser WebSocket URL
+  --page-url <url>        URL to open in the attached page/new tab
   -n, --name <id>         Custom session name (default: auto-generated)
   -r, --resume <id>       Resume an existing session by ID
+  --new-tab               Create and attach to a fresh tab instead of reusing an existing one
   --target-url <str>      Filter targets to those whose URL contains this string
   --api-key <key>         API key for cloud providers
   --project-id <id>       Project ID for BrowserBase provider
@@ -37,13 +40,17 @@ Examples:
   bp connect --url ws://localhost:9222/devtools  # Explicit WebSocket URL
   bp connect --resume dev                       # Resume a previous session
   bp connect --target-url localhost:3000         # Attach to tab matching URL
+  bp connect --new-tab --url https://example.com # Create and attach to a fresh tab
 `.trimEnd();
 
 interface ConnectOptions {
   provider?: ProviderType;
   url?: string;
+  browserUrl?: string;
+  pageUrl?: string;
   name?: string;
   resume?: string;
+  newTab?: boolean;
   targetUrl?: string;
   apiKey?: string;
   projectId?: string;
@@ -60,10 +67,16 @@ function parseConnectArgs(args: string[]): ConnectOptions {
       options.provider = args[++i] as ProviderType;
     } else if (arg === '--url') {
       options.url = args[++i];
+    } else if (arg === '--browser-url') {
+      options.browserUrl = args[++i];
+    } else if (arg === '--page-url') {
+      options.pageUrl = args[++i];
     } else if (arg === '--name' || arg === '-n') {
       options.name = args[++i];
     } else if (arg === '--resume' || arg === '-r') {
       options.resume = args[++i];
+    } else if (arg === '--new-tab') {
+      options.newTab = true;
     } else if (arg === '--target-url') {
       options.targetUrl = args[++i];
     } else if (arg === '--api-key') {
@@ -109,7 +122,20 @@ export async function connectCommand(
 
   // Determine provider and connection details
   const provider: ProviderType = options.provider ?? 'generic';
-  let wsUrl = options.url;
+  let wsUrl = options.browserUrl ?? options.url;
+  let pageUrl = options.pageUrl;
+
+  if (
+    options.newTab &&
+    options.url &&
+    !options.url.startsWith('ws://') &&
+    !options.url.startsWith('wss://')
+  ) {
+    pageUrl = options.url;
+    if (!options.browserUrl) {
+      wsUrl = undefined;
+    }
+  }
 
   // Auto-discover WebSocket URL for generic provider
   if (provider === 'generic' && !wsUrl) {
@@ -133,8 +159,12 @@ export async function connectCommand(
 
   // Connect to browser
   const browser = await connect(connectOptions);
-  const pageOptions = options.targetUrl ? { targetUrl: options.targetUrl } : undefined;
-  const page = await browser.page(undefined, pageOptions);
+  const page = options.newTab
+    ? await browser.newPage(pageUrl ?? 'about:blank')
+    : await browser.page(
+        undefined,
+        options.targetUrl ? { targetUrl: options.targetUrl } : undefined
+      );
   const currentUrl = await page.url();
 
   // Generate session ID

@@ -110,7 +110,7 @@ describe.skipIf(!!process.env['CI'])('CLI Snapshot Inspect', () => {
         expect(result.exitCode).toBe(0);
         expect(result.stdout).toContain('Overlay injected');
         // Text format should include refs
-        expect(result.stdout).toMatch(/\[ref=e\d+\]/);
+        expect(result.stdout).toMatch(/ref:e\d+/);
 
         // Cleanup
         await runCLI(['close', '-s', sessionName]).catch(() => {});

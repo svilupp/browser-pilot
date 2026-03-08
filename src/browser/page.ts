@@ -7,7 +7,7 @@ import { AudioInput } from '../audio/input.ts';
 import { AudioOutput } from '../audio/output.ts';
 import type { CaptureResult, RoundTripOptions, RoundTripResult } from '../audio/types.ts';
 import type { CDPClient } from '../cdp/client.ts';
-import type { BoxModel, RemoteObject } from '../cdp/protocol.ts';
+import type { BoxModel, ExceptionDetails, RemoteObject } from '../cdp/protocol.ts';
 import type { DeviceDescriptor } from '../emulation/index.ts';
 import {
   type RequestHandler,
@@ -39,6 +39,7 @@ import {
   parseShortcut,
   US_KEYBOARD,
 } from './keyboard.ts';
+import { buildSpecialSelectorLookupExpression } from './special-selectors.ts';
 import {
   type ActionOptions,
   type ConsoleHandler,
@@ -55,11 +56,14 @@ import {
   type ErrorHandler,
   type FileInput,
   type FillOptions,
+  type FormField,
   type GeolocationOptions,
+  type InteractiveElement,
   type NetworkIdleOptions,
   type PageError,
   type PageSnapshot,
   type SnapshotNode,
+  type SnapshotOptions,
   type SubmitOptions,
   TimeoutError,
   type TypeOptions,
@@ -393,6 +397,13 @@ export class Page {
           timeout: options.timeout ?? DEFAULT_TIMEOUT,
         });
       } catch (e) {
+        if (
+          e instanceof ActionabilityError &&
+          e.failureType === 'hitTarget' &&
+          (await this.tryClickAssociatedLabel(objectId))
+        ) {
+          return true;
+        }
         if (options.optional) return false;
         throw e;
       }
@@ -895,7 +906,12 @@ export class Page {
       });
 
       if (!after.result.value) {
-        throw new Error('Clicking the checkbox did not change its state');
+        if (await this.tryToggleViaLabel(object.objectId, true)) {
+          return true;
+        }
+        throw new Error(
+          'Clicking the checkbox did not change its state. Tried the associated label too.'
+        );
       }
 
       return true;
@@ -963,7 +979,12 @@ export class Page {
       });
 
       if (after.result.value) {
-        throw new Error('Clicking the checkbox did not change its state');
+        if (await this.tryToggleViaLabel(object.objectId, false)) {
+          return true;
+        }
+        throw new Error(
+          'Clicking the checkbox did not change its state. Tried the associated label too.'
+        );
       }
 
       return true;
@@ -1384,11 +1405,11 @@ export class Page {
 
     const result = await this.cdp.send<{
       result: RemoteObject;
-      exceptionDetails?: { text: string };
+      exceptionDetails?: ExceptionDetails;
     }>('Runtime.evaluate', params);
 
     if (result.exceptionDetails) {
-      throw new Error(`Evaluation failed: ${result.exceptionDetails.text}`);
+      throw new Error(this.formatEvaluationError(result.exceptionDetails));
     }
 
     return result.result.value as T;
@@ -1457,6 +1478,77 @@ export class Page {
 
       return result.result.value ?? '';
     });
+  }
+
+  /**
+   * Enumerate form controls on the page with labels and current state.
+   */
+  async forms(): Promise<FormField[]> {
+    const result = await this.evaluateInFrame<{ result: { value: FormField[] } }>(
+      `(() => {
+        function normalize(value) {
+          return String(value == null ? '' : value).replace(/\\s+/g, ' ').trim();
+        }
+
+        function labelFor(el) {
+          if (!el) return '';
+          if (el.labels && el.labels.length) {
+            return normalize(
+              Array.from(el.labels)
+                .map((label) => label.innerText || label.textContent || '')
+                .join(' ')
+            );
+          }
+          var ariaLabel = normalize(el.getAttribute && el.getAttribute('aria-label'));
+          if (ariaLabel) return ariaLabel;
+          if (el.id) {
+            var byFor = document.querySelector('label[for="' + el.id.replace(/"/g, '\\\\"') + '"]');
+            if (byFor) return normalize(byFor.innerText || byFor.textContent || '');
+          }
+          var closest = el.closest && el.closest('label');
+          if (closest) return normalize(closest.innerText || closest.textContent || '');
+          return '';
+        }
+
+        return Array.from(document.querySelectorAll('input, select, textarea')).map((el) => {
+          var tag = el.tagName.toLowerCase();
+          var type = tag === 'input' ? (el.type || 'text').toLowerCase() : tag;
+          var value = null;
+
+          if (tag === 'select') {
+            value = el.multiple
+              ? Array.from(el.selectedOptions).map((opt) => opt.value)
+              : el.value || null;
+          } else if (tag === 'textarea' || tag === 'input') {
+            value = typeof el.value === 'string' ? el.value : null;
+          }
+
+          return {
+            tag: tag,
+            type: type,
+            id: el.id || undefined,
+            name: el.getAttribute('name') || undefined,
+            value: value,
+            checked: 'checked' in el ? !!el.checked : undefined,
+            required: !!el.required,
+            disabled: !!el.disabled,
+            label: labelFor(el) || undefined,
+            placeholder: normalize(el.getAttribute && el.getAttribute('placeholder')) || undefined,
+            options:
+              tag === 'select'
+                ? Array.from(el.options).map((opt) => ({
+                    value: opt.value || '',
+                    text: normalize(opt.text || opt.label || ''),
+                    selected: !!opt.selected,
+                    disabled: !!opt.disabled,
+                  }))
+                : undefined,
+          };
+        });
+      })()`
+    );
+
+    return result.result.value ?? [];
   }
 
   // ============ File Handling ============
@@ -2031,7 +2123,8 @@ export class Page {
   /**
    * Get an accessibility tree snapshot of the page
    */
-  async snapshot(): Promise<PageSnapshot> {
+  async snapshot(options: SnapshotOptions = {}): Promise<PageSnapshot> {
+    const roleFilter = new Set((options.roles ?? []).map((role) => role.trim().toLowerCase()));
     const [url, title, axTree] = await Promise.all([
       this.url(),
       this.title(),
@@ -2074,7 +2167,7 @@ export class Page {
       const node = nodeMap.get(nodeId);
       if (!node) return null;
 
-      const role = node.role?.value ?? 'generic';
+      const role = (node.role?.value ?? 'generic').toLowerCase();
       const name = node.name?.value;
       const value = node.value?.value;
       const ref = nodeRefs.get(nodeId)!;
@@ -2098,7 +2191,7 @@ export class Page {
       return {
         role,
         name,
-        value: value as string | undefined,
+        value: value !== undefined ? String(value) : undefined,
         ref,
         children: children.length > 0 ? children : undefined,
         disabled,
@@ -2108,9 +2201,30 @@ export class Page {
 
     // Find root nodes (nodes without parents that are in the list)
     const rootNodes = nodes.filter((n) => !n.parentId || !nodeMap.has(n.parentId));
-    const accessibilityTree = rootNodes
+    let accessibilityTree = rootNodes
       .map((n) => buildNode(n.nodeId))
       .filter((n): n is SnapshotNode => n !== null);
+
+    if (roleFilter.size > 0) {
+      const filteredAccessibilityTree: SnapshotNode[] = [];
+      for (const node of nodes) {
+        if (!roleFilter.has((node.role?.value ?? 'generic').toLowerCase())) {
+          continue;
+        }
+
+        const snapshotNode = buildNode(node.nodeId);
+        if (!snapshotNode) {
+          continue;
+        }
+
+        filteredAccessibilityTree.push({
+          ...snapshotNode,
+          children: undefined,
+        });
+      }
+
+      accessibilityTree = filteredAccessibilityTree;
+    }
 
     // Extract interactive elements
     const interactiveRoles = new Set([
@@ -2133,22 +2247,20 @@ export class Page {
       'treeitem',
     ]);
 
-    const interactiveElements: Array<{
-      ref: string;
-      role: string;
-      name: string;
-      selector: string;
-      disabled?: boolean;
-    }> = [];
+    const interactiveElements: InteractiveElement[] = [];
 
     for (const node of nodes) {
-      const role = node.role?.value;
-      if (role && interactiveRoles.has(role)) {
+      const role = (node.role?.value ?? '').toLowerCase();
+      if (role && interactiveRoles.has(role) && (roleFilter.size === 0 || roleFilter.has(role))) {
         const ref = nodeRefs.get(node.nodeId)!;
         const name = (node.name?.value as string) ?? '';
         const disabled = node.properties?.find((p) => p.name === 'disabled')?.value.value as
           | boolean
           | undefined;
+        const checked = node.properties?.find((p) => p.name === 'checked')?.value.value as
+          | boolean
+          | undefined;
+        const value = node.value?.value;
 
         // Generate a selector based on backendDOMNodeId
         // This is a simplified approach - in production you'd want more robust selectors
@@ -2162,20 +2274,26 @@ export class Page {
           name,
           selector,
           disabled,
+          checked,
+          value: value !== undefined ? String(value) : undefined,
         });
       }
     }
 
     // Generate text representation
+    const formatNode = (node: SnapshotNode, depth = 0): string => {
+      let line = `${'  '.repeat(depth)}- ${node.role}`;
+      if (node.name) line += ` "${node.name}"`;
+      line += ` ref:${node.ref}`;
+      if (node.disabled) line += ' (disabled)';
+      if (node.checked !== undefined) line += node.checked ? ' (checked)' : ' (unchecked)';
+      return line;
+    };
+
     const formatTree = (nodes: SnapshotNode[], depth = 0): string => {
       const lines: string[] = [];
       for (const node of nodes) {
-        let line = `${'  '.repeat(depth)}- ${node.role}`;
-        if (node.name) line += ` "${node.name}"`;
-        line += ` [ref=${node.ref}]`;
-        if (node.disabled) line += ' (disabled)';
-        if (node.checked !== undefined) line += node.checked ? ' (checked)' : ' (unchecked)';
-        lines.push(line);
+        lines.push(formatNode(node, depth));
         if (node.children) {
           lines.push(formatTree(node.children, depth + 1));
         }
@@ -2183,7 +2301,10 @@ export class Page {
       return lines.join('\n');
     };
 
-    const text = formatTree(accessibilityTree);
+    const text =
+      roleFilter.size > 0
+        ? accessibilityTree.map((node) => formatNode(node)).join('\n')
+        : formatTree(accessibilityTree);
 
     const result: PageSnapshot = {
       url,
@@ -2193,7 +2314,9 @@ export class Page {
       interactiveElements,
       text,
     };
-    this.lastSnapshot = result; // Store for stale ref recovery
+    if (roleFilter.size === 0) {
+      this.lastSnapshot = result; // Store for stale ref recovery
+    }
     return result;
   }
 
@@ -2871,7 +2994,7 @@ export class Page {
 
   /**
    * Find an element using single or multiple selectors
-   * Supports ref: prefix for ref-based selectors (e.g., "ref:e4")
+   * Supports ref:, text:, and role: selectors.
    */
   private async findElement(
     selectors: string | string[],
@@ -2952,13 +3075,13 @@ export class Page {
       }
     }
 
-    // Filter out ref: selectors for CSS-based waiting
-    const cssSelectors = selectorList.filter((s) => !s.startsWith('ref:'));
-    if (cssSelectors.length === 0) {
+    // Filter out ref: selectors for runtime waiting/querying.
+    const runtimeSelectors = selectorList.filter((s) => !s.startsWith('ref:'));
+    if (runtimeSelectors.length === 0) {
       return null; // All were ref selectors and none worked
     }
 
-    const result = await waitForAnyElement(this.cdp, cssSelectors, {
+    const result = await waitForAnyElement(this.cdp, runtimeSelectors, {
       state: 'visible',
       timeout,
       contextId: this.currentFrameContextId ?? undefined,
@@ -2966,6 +3089,15 @@ export class Page {
 
     if (!result.success || !result.selector) {
       return null;
+    }
+
+    const specialSelectorMatch = await this.resolveSpecialSelector(result.selector);
+    if (specialSelectorMatch) {
+      this._lastMatchedSelector = result.selector;
+      return {
+        ...specialSelectorMatch,
+        waitedMs: result.waitedMs,
+      };
     }
 
     // Get the node using deep query (pierces shadow DOM)
@@ -3028,6 +3160,158 @@ export class Page {
       selector: result.selector,
       waitedMs: result.waitedMs,
     };
+  }
+
+  private formatEvaluationError(details: ExceptionDetails): string {
+    const description =
+      (typeof details.exception?.description === 'string' && details.exception.description) ||
+      (typeof details.exception?.value === 'string' && details.exception.value) ||
+      details.text ||
+      'Uncaught';
+
+    return `Evaluation failed: ${description}`;
+  }
+
+  private async resolveSpecialSelector(
+    selector: string,
+    options: { includeHidden?: boolean } = {}
+  ): Promise<ElementInfo | null> {
+    const expression = buildSpecialSelectorLookupExpression(selector, options);
+    if (!expression) return null;
+
+    const result = await this.evaluateInFrame<{ result: RemoteObject }>(expression, {
+      returnByValue: false,
+    });
+
+    if (!result.result.objectId) {
+      return null;
+    }
+
+    const resolved = await this.objectIdToNode(result.result.objectId);
+    if (!resolved) {
+      return null;
+    }
+
+    return {
+      nodeId: resolved.nodeId,
+      backendNodeId: resolved.backendNodeId,
+      selector,
+      waitedMs: 0,
+    };
+  }
+
+  private async readCheckedState(objectId: string): Promise<boolean> {
+    const result = await this.cdp.send<{ result: { value: boolean } }>('Runtime.callFunctionOn', {
+      objectId,
+      functionDeclaration: 'function() { return !!this.checked; }',
+      returnByValue: true,
+    });
+    return result.result.value === true;
+  }
+
+  private async readInputType(objectId: string): Promise<string | null> {
+    const result = await this.cdp.send<{ result: { value: string | null } }>(
+      'Runtime.callFunctionOn',
+      {
+        objectId,
+        functionDeclaration:
+          'function() { return this instanceof HTMLInputElement ? String(this.type || "").toLowerCase() : null; }',
+        returnByValue: true,
+      }
+    );
+    return result.result.value ?? null;
+  }
+
+  private async getAssociatedLabelNodeId(objectId: string): Promise<number | null> {
+    const result = await this.cdp.send<{ result: RemoteObject }>('Runtime.callFunctionOn', {
+      objectId,
+      functionDeclaration: `function() {
+        if (!(this instanceof HTMLInputElement)) return null;
+
+        if (this.id) {
+          var labels = Array.from(document.querySelectorAll('label'));
+          for (var i = 0; i < labels.length; i++) {
+            if (labels[i].htmlFor === this.id) return labels[i];
+          }
+        }
+
+        return this.closest('label');
+      }`,
+      returnByValue: false,
+    });
+
+    if (!result.result.objectId) {
+      return null;
+    }
+
+    return (await this.objectIdToNode(result.result.objectId))?.nodeId ?? null;
+  }
+
+  private async objectIdToNode(
+    objectId: string
+  ): Promise<{ nodeId: number; backendNodeId: number } | null> {
+    const describeResult = await this.cdp.send<{
+      node: { nodeId: number; backendNodeId: number };
+    }>('DOM.describeNode', {
+      objectId,
+      depth: 0,
+    });
+
+    const backendNodeId = describeResult.node.backendNodeId;
+    if (!backendNodeId) {
+      return null;
+    }
+
+    if (describeResult.node.nodeId) {
+      return {
+        nodeId: describeResult.node.nodeId,
+        backendNodeId,
+      };
+    }
+
+    await this.ensureRootNode();
+
+    const pushResult = await this.cdp.send<{ nodeIds: number[] }>(
+      'DOM.pushNodesByBackendIdsToFrontend',
+      {
+        backendNodeIds: [backendNodeId],
+      }
+    );
+
+    const nodeId = pushResult.nodeIds?.[0];
+    if (!nodeId) {
+      return null;
+    }
+
+    return { nodeId, backendNodeId };
+  }
+
+  private async tryClickAssociatedLabel(objectId: string): Promise<boolean> {
+    const inputType = await this.readInputType(objectId);
+    if (inputType !== 'checkbox' && inputType !== 'radio') {
+      return false;
+    }
+
+    const labelNodeId = await this.getAssociatedLabelNodeId(objectId);
+    if (!labelNodeId) {
+      return false;
+    }
+
+    try {
+      await this.scrollIntoView(labelNodeId);
+      await this.clickElement(labelNodeId);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private async tryToggleViaLabel(objectId: string, desiredChecked: boolean): Promise<boolean> {
+    if (!(await this.tryClickAssociatedLabel(objectId))) {
+      return false;
+    }
+
+    return (await this.readCheckedState(objectId)) === desiredChecked;
   }
 
   /**

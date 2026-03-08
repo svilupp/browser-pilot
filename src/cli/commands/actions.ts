@@ -73,12 +73,27 @@ CONTENT EXTRACTION
   {"action": "snapshot"}
     Get accessibility tree (best for understanding page structure).
 
+  {"action": "forms"}
+    List form controls with labels, values, checked state, and options metadata.
+
+  {"action": "text"}
+    Extract visible page text.
+
   {"action": "screenshot"}
   {"action": "screenshot", "fullPage": true, "format": "jpeg", "quality": 80}
     Capture screenshot. Formats: png | jpeg | webp.
 
   {"action": "evaluate", "value": "document.title"}
     Run JavaScript and return result.
+
+TAB MANAGEMENT
+  {"action": "newTab"}
+  {"action": "newTab", "url": "https://example.com"}
+    Create a new tab and optionally navigate it. Returns { targetId }.
+
+  {"action": "closeTab"}
+  {"action": "closeTab", "targetId": "TARGET_ID"}
+    Close the current tab or a specific target by ID.
 
 IFRAME NAVIGATION
   {"action": "switchFrame", "selector": "iframe#checkout"}
@@ -111,12 +126,18 @@ COMMON OPTIONS (all actions)
 
 REF SELECTORS (from snapshot)
   After taking a snapshot, use refs directly:
-    bp snapshot -s dev --format text   # Shows: button "Submit" [ref=e4]
+    bp snapshot -s dev --format text   # Shows: button "Submit" ref:e4
     bp exec '{"action":"click","selector":"ref:e4"}'
 
   Refs are stable until navigation. Prefix with "ref:" to use.
   CLI caches refs per session+URL after snapshot, so they can be reused across exec calls.
   Example: {"action":"fill","selector":"ref:e23","value":"hello"}
+
+TEXT / ROLE SELECTORS
+  text:Continue              Match by accessible text/name (partial match)
+  text:="Save Draft"         Exact text match
+  role:button:Continue       Match by role and optional accessible name
+  role:textbox:Email         Useful when stable CSS selectors are missing
 
 MULTI-SELECTOR PATTERN
   All selectors accept arrays: ["#id", ".class", "[aria-label=X]"]
@@ -129,6 +150,14 @@ SELECTOR PRIORITY (Most to Least Reliable)
   3. #id                  - Reliable if IDs are stable
   4. [aria-label="..."]   - Good for buttons without testids
   5. Multi-selector array - Fallback pattern for compatibility
+
+ASSERTIONS
+  {"action":"assertVisible","selector":"#success"}
+  {"action":"assertExists","selector":"#mounted-node"}
+  {"action":"assertText","expect":"Welcome back"}
+  {"action":"assertUrl","expect":"/dashboard"}
+  {"action":"assertValue","selector":"#email","expect":"user@example.com"}
+    Assertion steps verify state inline inside a batch workflow.
 
 SHADOW DOM
   Selectors automatically pierce shadow DOM (1-2 levels). No special syntax needed.

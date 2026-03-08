@@ -76,6 +76,11 @@ const ACTION_ALIASES: Record<string, ActionType> = {
   pic: 'screenshot',
   frame: 'switchFrame',
   iframe: 'switchFrame',
+  formslist: 'forms',
+  newtab: 'newTab',
+  opentab: 'newTab',
+  createtab: 'newTab',
+  closetab: 'closeTab',
   assert_visible: 'assertVisible',
   assert_exists: 'assertExists',
   assert_text: 'assertText',
@@ -114,6 +119,7 @@ const PROPERTY_ALIASES: Record<string, string> = {
   address: 'url',
   page: 'url',
   path: 'url',
+  tabId: 'targetId',
 };
 
 // --- Action rules ---
@@ -229,6 +235,10 @@ const ACTION_RULES: Record<ActionType, ActionRule> = {
       fullPage: { type: 'boolean' },
     },
   },
+  forms: {
+    required: {},
+    optional: {},
+  },
   evaluate: {
     required: { value: { type: 'string' } },
     optional: {},
@@ -242,6 +252,18 @@ const ACTION_RULES: Record<ActionType, ActionRule> = {
   switchFrame: {
     required: { selector: { type: 'string|string[]' } },
     optional: {},
+  },
+  newTab: {
+    required: {},
+    optional: {
+      url: { type: 'string' },
+    },
+  },
+  closeTab: {
+    required: {},
+    optional: {
+      targetId: { type: 'string' },
+    },
   },
   switchToMain: {
     required: {},
@@ -288,6 +310,7 @@ const KNOWN_STEP_FIELDS = new Set([
   'selector',
   'url',
   'value',
+  'targetId',
   'key',
   'combo',
   'modifiers',
@@ -475,17 +498,26 @@ export function validateSteps(steps: unknown[]): ValidationResult {
     // Detect unknown properties
     for (const key of Object.keys(obj)) {
       if (key === 'action') continue;
-      if (!KNOWN_STEP_FIELDS.has(key)) {
-        const suggestion = suggestProperty(key);
-        errors.push({
-          stepIndex: i,
-          field: key,
-          message: suggestion
-            ? `unknown property "${key}". Did you mean "${suggestion}"?`
-            : `unknown property "${key}".`,
-          suggestion: suggestion ? `Did you mean "${suggestion}"?` : undefined,
-        });
+      if (KNOWN_STEP_FIELDS.has(key)) continue;
+
+      const canonical = PROPERTY_ALIASES[key];
+      if (canonical) {
+        if (!(canonical in obj)) {
+          obj[canonical] = obj[key];
+        }
+        delete obj[key];
+        continue;
       }
+
+      const suggestion = suggestProperty(key);
+      errors.push({
+        stepIndex: i,
+        field: key,
+        message: suggestion
+          ? `unknown property "${key}". Did you mean "${suggestion}"?`
+          : `unknown property "${key}".`,
+        suggestion: suggestion ? `Did you mean "${suggestion}"?` : undefined,
+      });
     }
 
     // Check required params

@@ -3,13 +3,16 @@
  * browser-pilot CLI - Browser automation for AI agents
  *
  * Key workflow:
- *   1. bp snapshot -i               → Get interactive elements with refs [ref=e4]
+ *   1. bp snapshot -i               → Get interactive elements with refs ref:e4
  *   2. bp exec '{"selector":"ref:e4",...}'  → Use refs for reliable targeting
  *
  * Commands:
  *   quickstart  Getting started guide
  *   connect     Create browser session
  *   exec        Execute actions (supports --dialog accept|dismiss)
+ *   page        Show a compact overview of the current page
+ *   forms       List form controls on the current page
+ *   targets     List available page tabs in the connected browser
  *   audio       Audio I/O for voice agent testing
  *   snapshot    Get page snapshot with element refs
  *   text        Extract text content
@@ -30,13 +33,16 @@ import { connectCommand } from './commands/connect.ts';
 import { diagnoseCommand } from './commands/diagnose.ts';
 import { evalCommand } from './commands/eval.ts';
 import { execCommand } from './commands/exec.ts';
+import { formsCommand } from './commands/forms.ts';
 import { listCommand } from './commands/list.ts';
 import { listenCommand } from './commands/listen.ts';
+import { pageCommand } from './commands/page.ts';
 import { quickstartCommand } from './commands/quickstart.ts';
 import { recordCommand } from './commands/record.ts';
 import { runCommand } from './commands/run.ts';
 import { screenshotCommand } from './commands/screenshot.ts';
 import { snapshotCommand } from './commands/snapshot.ts';
+import { targetsCommand } from './commands/targets.ts';
 import { textCommand } from './commands/text.ts';
 
 const HELP = `
@@ -50,6 +56,9 @@ Commands:
   connect     Create browser session
   exec        Execute actions
   eval        Evaluate JavaScript expression
+  page        Show a compact page overview
+  forms       List form controls on the page
+  targets     List available browser tabs
   run         Run a workflow file (JSON steps)
   record      Record browser actions to JSON
   audio       Audio I/O for voice agent testing
@@ -131,37 +140,53 @@ export function parseGlobalOptions(args: string[]): {
 }
 
 export function output(data: unknown, format: 'json' | 'pretty' = 'pretty'): void {
-  if (format === 'json') {
-    console.log(JSON.stringify(data, null, 2));
-  } else {
-    if (typeof data === 'string') {
-      console.log(data);
-    } else if (typeof data === 'object' && data !== null) {
-      // Pretty print objects
-      const { truncated } = prettyPrint(data as Record<string, unknown>);
-      if (truncated) {
-        console.log('\n(Output truncated. Use --json for full data)');
-      }
-    } else {
-      console.log(data);
-    }
-  }
+  const text = renderOutput(data, format);
+  process.stdout.write(text.endsWith('\n') ? text : `${text}\n`);
 }
 
-function prettyPrint(obj: Record<string, unknown>, indent = 0): { truncated: boolean } {
+export function renderOutput(data: unknown, format: 'json' | 'pretty' = 'pretty'): string {
+  if (format === 'json') {
+    return JSON.stringify(data, null, 2);
+  }
+
+  if (typeof data === 'string') {
+    return data;
+  }
+
+  if (Array.isArray(data)) {
+    return JSON.stringify(data, null, 2);
+  }
+
+  if (typeof data === 'object' && data !== null) {
+    const lines: string[] = [];
+    const { truncated } = prettyPrint(data as Record<string, unknown>, lines);
+    if (truncated) {
+      lines.push('', '(Output truncated. Use --json for full data)');
+    }
+    return lines.join('\n');
+  }
+
+  return String(data);
+}
+
+function prettyPrint(
+  obj: Record<string, unknown>,
+  lines: string[],
+  indent = 0
+): { truncated: boolean } {
   const prefix = '  '.repeat(indent);
   let truncated = false;
 
   for (const [key, value] of Object.entries(obj)) {
     if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
-      console.log(`${prefix}${key}:`);
-      const result = prettyPrint(value as Record<string, unknown>, indent + 1);
+      lines.push(`${prefix}${key}:`);
+      const result = prettyPrint(value as Record<string, unknown>, lines, indent + 1);
       if (result.truncated) truncated = true;
     } else if (Array.isArray(value)) {
-      console.log(`${prefix}${key}: [${value.length} items]`);
+      lines.push(`${prefix}${key}: [${value.length} items]`);
       truncated = true;
     } else {
-      console.log(`${prefix}${key}: ${value}`);
+      lines.push(`${prefix}${key}: ${value}`);
     }
   }
 
@@ -200,6 +225,18 @@ async function main(): Promise<void> {
 
       case 'eval':
         await evalCommand(remaining, options);
+        break;
+
+      case 'page':
+        await pageCommand(remaining, options);
+        break;
+
+      case 'forms':
+        await formsCommand(remaining, options);
+        break;
+
+      case 'targets':
+        await targetsCommand(remaining, options);
         break;
 
       case 'snapshot':

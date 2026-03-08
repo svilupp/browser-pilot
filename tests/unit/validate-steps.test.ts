@@ -25,9 +25,12 @@ describe('validateSteps', () => {
         { action: 'scroll', direction: 'down' },
         { action: 'wait', timeout: 1000 },
         { action: 'snapshot' },
+        { action: 'forms' },
         { action: 'screenshot' },
         { action: 'evaluate', value: 'document.title' },
         { action: 'text' },
+        { action: 'newTab' },
+        { action: 'closeTab' },
         { action: 'switchFrame', selector: '#frame' },
         { action: 'switchToMain' },
       ];
@@ -161,19 +164,40 @@ describe('validateSteps', () => {
   });
 
   describe('unknown properties', () => {
-    test('expression → value suggestion', () => {
-      const result = validateSteps([{ action: 'evaluate', expression: 'document.title' }]);
-      expect(result.valid).toBe(false);
-      const propErr = result.errors.find((e) => e.field === 'expression');
-      expect(propErr).toBeDefined();
-      expect(propErr!.message).toContain('Did you mean "value"');
+    test('expression → value auto-resolves', () => {
+      const step = { action: 'evaluate', expression: 'document.title' } as Record<string, unknown>;
+      const result = validateSteps([step]);
+      expect(result.valid).toBe(true);
+      expect(result.errors).toHaveLength(0);
+      expect(step['value']).toBe('document.title');
+      expect('expression' in step).toBe(false);
     });
 
-    test('href → url suggestion', () => {
-      const result = validateSteps([{ action: 'goto', href: 'https://example.com' }]);
-      expect(result.valid).toBe(false);
-      const propErr = result.errors.find((e) => e.field === 'href');
-      expect(propErr!.message).toContain('Did you mean "url"');
+    test('href → url auto-resolves', () => {
+      const step = { action: 'goto', href: 'https://example.com' } as Record<string, unknown>;
+      const result = validateSteps([step]);
+      expect(result.valid).toBe(true);
+      expect(step['url']).toBe('https://example.com');
+      expect('href' in step).toBe(false);
+    });
+
+    test('target → selector auto-resolves', () => {
+      const step = { action: 'click', target: '#submit' } as Record<string, unknown>;
+      const result = validateSteps([step]);
+      expect(result.valid).toBe(true);
+      expect(step['selector']).toBe('#submit');
+    });
+
+    test('canonical field wins on alias conflict', () => {
+      const step = {
+        action: 'evaluate',
+        value: 'document.body',
+        expression: 'document.title',
+      } as Record<string, unknown>;
+      const result = validateSteps([step]);
+      expect(result.valid).toBe(true);
+      expect(step['value']).toBe('document.body');
+      expect('expression' in step).toBe(false);
     });
 
     test('typo selctor → selector via Levenshtein', () => {

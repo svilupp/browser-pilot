@@ -118,6 +118,15 @@ Complex patterns (custom dropdowns, multi-step forms) are composed from primitiv
 ### Lazy Session Attach (CLI)
 `bp exec` and `bp eval` no longer do preflight `/json/version` validation. They connect directly via WebSocket and clean up stale sessions on failure. Implementation: `src/cli/attach.ts`.
 
+### CLI Discovery Surface
+The CLI now includes lightweight page-inspection commands in addition to `snapshot`:
+- `bp page` — compact overview: URL, title, headings, form fields, interactive controls
+- `bp forms` — structured form metadata only
+- `bp targets` — list browser tabs/targets with URLs and IDs
+- `bp connect --new-tab [--page-url <url>]` — create and attach to a fresh tab
+
+Snapshot text output now uses `ref:e12` notation, which is also the selector syntax agents should reuse in later commands. Refs are cached per session+URL after a snapshot.
+
 ## Audio I/O Pattern
 
 Voice agent testing via JS injection (works on already-running browsers, no special launch flags required).
@@ -206,6 +215,8 @@ Any step can include `retry` (number, default 0) and `retryDelay` (ms, default 5
 Accessibility tree extraction via `Accessibility.getFullAXTree`. Nodes get refs (e1, e2...) for identification.
 - Implementation: `src/browser/page.ts:825-967`
 - Types: `src/browser/types.ts:100-145`
+
+`Page.snapshot({ roles })` supports role-filtered snapshots, and `Page.forms()` enumerates `input`, `select`, and `textarea` controls with label/value metadata for CLI discovery commands and the `forms` batch action.
 
 ## Error Types & Failure Classification
 

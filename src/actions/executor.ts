@@ -378,6 +378,10 @@ export class BatchExecutor {
         return { value: snapshot };
       }
 
+      case 'forms': {
+        return { value: await this.page.forms() };
+      }
+
       case 'screenshot': {
         const data = await this.page.screenshot({
           format: step.format,
@@ -399,6 +403,23 @@ export class BatchExecutor {
         const selector = Array.isArray(step.selector) ? step.selector[0] : step.selector;
         const text = await this.page.text(selector);
         return { text, selectorUsed: selector };
+      }
+
+      case 'newTab': {
+        const { targetId } = await this.page.cdpClient.send<{ targetId: string }>(
+          'Target.createTarget',
+          {
+            url: step.url ?? 'about:blank',
+          },
+          null
+        );
+        return { value: { targetId } };
+      }
+
+      case 'closeTab': {
+        const targetId = step.targetId ?? this.page.targetId;
+        await this.page.cdpClient.send('Target.closeTarget', { targetId }, null);
+        return { value: { targetId, closedCurrent: targetId === this.page.targetId } };
       }
 
       case 'switchFrame': {
@@ -522,10 +543,15 @@ export class BatchExecutor {
           snap: 'snapshot',
           accessibility: 'snapshot',
           a11y: 'snapshot',
+          formslist: 'forms',
           image: 'screenshot',
           pic: 'screenshot',
           frame: 'switchFrame',
           iframe: 'switchFrame',
+          newtab: 'newTab',
+          opentab: 'newTab',
+          createtab: 'newTab',
+          closetab: 'closeTab',
           assert_visible: 'assertVisible',
           assert_exists: 'assertExists',
           assert_text: 'assertText',
@@ -540,7 +566,7 @@ export class BatchExecutor {
         const suggestion = aliases[action.toLowerCase()];
         const hint = suggestion ? ` Did you mean "${suggestion}"?` : '';
         const valid =
-          'goto, click, fill, type, select, check, uncheck, submit, press, shortcut, focus, hover, scroll, wait, snapshot, screenshot, evaluate, text, switchFrame, switchToMain, assertVisible, assertExists, assertText, assertUrl, assertValue';
+          'goto, click, fill, type, select, check, uncheck, submit, press, shortcut, focus, hover, scroll, wait, snapshot, forms, screenshot, evaluate, text, newTab, closeTab, switchFrame, switchToMain, assertVisible, assertExists, assertText, assertUrl, assertValue';
         throw new Error(`Unknown action "${action}".${hint}\n\nValid actions: ${valid}`);
       }
     }
