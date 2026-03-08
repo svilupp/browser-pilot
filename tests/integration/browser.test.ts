@@ -82,6 +82,21 @@ describe('Browser Integration', () => {
     });
   });
 
+  test('should surface detailed evaluation errors', async () => {
+    const { page, baseUrl } = ctx.get();
+
+    await withRetry(async () => {
+      await page.goto(`${baseUrl}/basic.html`);
+
+      try {
+        await page.evaluate('missingVariable.test');
+        throw new Error('Expected evaluation to fail');
+      } catch (error) {
+        expect((error as Error).message).toContain('ReferenceError');
+      }
+    });
+  });
+
   test('should wait for element', async () => {
     const { page, baseUrl } = ctx.get();
 
@@ -109,6 +124,33 @@ describe('Browser Integration', () => {
     });
   });
 
+  test('should enumerate form fields with metadata', async () => {
+    const { page, baseUrl } = ctx.get();
+
+    await withRetry(async () => {
+      await page.goto(`${baseUrl}/react-form.html`);
+      const forms = await page.forms();
+
+      expect(forms.length).toBeGreaterThan(0);
+      expect(forms).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: 'username',
+            label: 'Username (controlled)',
+            type: 'text',
+          }),
+          expect.objectContaining({
+            id: 'country',
+            type: 'select',
+            options: expect.arrayContaining([
+              expect.objectContaining({ text: 'United States', value: 'us' }),
+            ]),
+          }),
+        ])
+      );
+    });
+  });
+
   test('should handle multi-selector click', async () => {
     const { page, baseUrl } = ctx.get();
 
@@ -122,6 +164,38 @@ describe('Browser Integration', () => {
       });
 
       expect(clicked).toBe(true);
+    });
+  });
+
+  test('should click elements using text selectors', async () => {
+    const { page, baseUrl } = ctx.get();
+
+    await withRetry(async () => {
+      await page.goto(`${baseUrl}/basic.html`);
+
+      const clicked = await page.click('text:show dynamic content', { timeout: 5000 });
+
+      expect(clicked).toBe(true);
+      const visible = await page.evaluate(
+        'document.getElementById("dynamic")?.classList.contains("visible")'
+      );
+      expect(visible).toBe(true);
+    });
+  });
+
+  test('should click elements using role selectors', async () => {
+    const { page, baseUrl } = ctx.get();
+
+    await withRetry(async () => {
+      await page.goto(`${baseUrl}/basic.html`);
+
+      const clicked = await page.click('role:button:Show Dynamic Content', { timeout: 5000 });
+
+      expect(clicked).toBe(true);
+      const visible = await page.evaluate(
+        'document.getElementById("dynamic")?.classList.contains("visible")'
+      );
+      expect(visible).toBe(true);
     });
   });
 

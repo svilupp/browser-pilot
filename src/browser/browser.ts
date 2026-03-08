@@ -115,7 +115,11 @@ export class Browser {
     if (cached) return cached;
 
     // Get available targets
-    const targets = await this.cdp.send<{ targetInfos: TargetInfo[] }>('Target.getTargets');
+    const targets = await this.cdp.send<{ targetInfos: TargetInfo[] }>(
+      'Target.getTargets',
+      undefined,
+      null
+    );
     let pageTargets = targets.targetInfos.filter((t) => t.type === 'page');
 
     // Apply URL filter if provided
@@ -145,18 +149,26 @@ export class Browser {
         targetId =
           pickBestTarget(pageTargets) ??
           (
-            await this.cdp.send<{ targetId: string }>('Target.createTarget', {
-              url: 'about:blank',
-            })
+            await this.cdp.send<{ targetId: string }>(
+              'Target.createTarget',
+              {
+                url: 'about:blank',
+              },
+              null
+            )
           ).targetId;
       }
     } else if (pageTargets.length > 0) {
       targetId = pickBestTarget(pageTargets)!;
     } else {
       // Create a new page
-      const result = await this.cdp.send<{ targetId: string }>('Target.createTarget', {
-        url: 'about:blank',
-      });
+      const result = await this.cdp.send<{ targetId: string }>(
+        'Target.createTarget',
+        {
+          url: 'about:blank',
+        },
+        null
+      );
       targetId = result.targetId;
     }
 
@@ -197,9 +209,13 @@ export class Browser {
    * Create a new page (tab)
    */
   async newPage(url = 'about:blank'): Promise<Page> {
-    const result = await this.cdp.send<{ targetId: string }>('Target.createTarget', {
-      url,
-    });
+    const result = await this.cdp.send<{ targetId: string }>(
+      'Target.createTarget',
+      {
+        url,
+      },
+      null
+    );
 
     await this.cdp.attachToTarget(result.targetId);
 
@@ -220,17 +236,26 @@ export class Browser {
     const page = this.pages.get(name);
     if (!page) return;
 
-    // Get the target ID for this page
-    const targets = await this.cdp.send<{ targetInfos: TargetInfo[] }>('Target.getTargets');
-    const pageTargets = targets.targetInfos.filter((t) => t.type === 'page');
-
-    if (pageTargets.length > 0) {
-      await this.cdp.send('Target.closeTarget', {
-        targetId: pageTargets[0]!.targetId,
-      });
-    }
-
+    await this.cdp.send(
+      'Target.closeTarget',
+      {
+        targetId: page.targetId,
+      },
+      null
+    );
     this.pages.delete(name);
+  }
+
+  /**
+   * List all page targets in the connected browser.
+   */
+  async listTargets(): Promise<TargetInfo[]> {
+    const { targetInfos } = await this.cdp.send<{ targetInfos: TargetInfo[] }>(
+      'Target.getTargets',
+      undefined,
+      null
+    );
+    return targetInfos.filter((target) => target.type === 'page');
   }
 
   /**

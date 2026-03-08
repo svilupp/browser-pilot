@@ -167,10 +167,10 @@ console.log(snapshot.interactiveElements);
 
 // Text representation for LLMs
 console.log(snapshot.text);
-// - main [ref=e1]
-//   - heading "Welcome" [ref=e2]
-//   - button "Get Started" [ref=e3]
-//   - textbox [ref=e4] placeholder="Email"
+// - main ref:e1
+//   - heading "Welcome" ref:e2
+//   - button "Get Started" ref:e3
+//   - textbox ref:e4 placeholder="Email"
 ```
 
 ### Ref-Based Selectors
@@ -179,7 +179,7 @@ After taking a snapshot, use element refs directly as selectors:
 
 ```typescript
 const snapshot = await page.snapshot();
-// Output shows: button "Submit" [ref=e4]
+// Output shows: button "Submit" ref:e4
 
 // Click using the ref - no fragile CSS needed
 await page.click('ref:e4');
@@ -383,12 +383,18 @@ bp exec -s my-session '[
 
 # Get page state (note the refs in output)
 bp snapshot -s my-session --format text
-# Output: button "Submit" [ref=e4], textbox "Email" [ref=e5], ...
+# Output: button "Submit" ref:e4, textbox "Email" ref:e5, ...
 
 # Use refs from snapshot for reliable targeting
 # Refs are cached per session+URL after snapshot
 bp exec -s my-session '{"action":"click","selector":"ref:e4"}'
 bp exec -s my-session '{"action":"fill","selector":"ref:e5","value":"test@example.com"}'
+
+# Quick discovery commands
+bp page -s my-session          # URL, title, headings, forms, interactive controls
+bp forms -s my-session         # Structured form metadata only
+bp targets -s my-session       # Browser tabs with targetIds
+bp connect --new-tab --url https://example.com --name fresh
 
 # Handle native dialogs (alert/confirm/prompt)
 bp exec --dialog accept '{"action":"click","selector":"#delete-btn"}'
@@ -423,7 +429,7 @@ The CLI is designed for AI agent tool calls. The recommended workflow:
 ```bash
 # Step 1: Get page state with refs
 bp snapshot --format text
-# Output shows: button "Add to Cart" [ref=e12], textbox "Search" [ref=e5]
+# Output shows: button "Add to Cart" ref:e12, textbox "Search" ref:e5
 
 # Step 2: Use refs to interact (stable, no CSS guessing)
 bp exec '[

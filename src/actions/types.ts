@@ -34,9 +34,12 @@ export type ActionType =
   | 'scroll'
   | 'wait'
   | 'snapshot'
+  | 'forms'
   | 'screenshot'
   | 'evaluate'
   | 'text'
+  | 'newTab'
+  | 'closeTab'
   | 'switchFrame'
   | 'switchToMain'
   | 'assertVisible'
@@ -57,6 +60,9 @@ export interface Step {
 
   /** Value for fill, type, select, evaluate actions */
   value?: string | string[];
+
+  /** Target ID for tab operations */
+  targetId?: string;
 
   /** Key for press action */
   key?: string;

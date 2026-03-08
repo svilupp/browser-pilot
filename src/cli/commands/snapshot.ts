@@ -7,7 +7,7 @@ import { injectRefOverlay, removeRefOverlay } from '../../browser/overlay.ts';
 import { diffSnapshots, formatDiffPretty } from '../../browser/snapshot-diff.ts';
 import type { PageSnapshot } from '../../browser/types.ts';
 import { connect } from '../../index.ts';
-import { output } from '../index.ts';
+import { output, renderOutput } from '../index.ts';
 import { getDefaultSession, loadSession, type SessionData, updateSession } from '../session.ts';
 
 const SNAPSHOT_HELP = `
@@ -18,7 +18,9 @@ Usage:
 
 Options:
   -i, --interactive      Show only interactive elements (buttons, inputs, links)
-  -f, --format <type>    Output format: full | interactive | text (default: full)
+  -f, --format <type>    Output format: full | interactive | text (default: text)
+  --role <roles>         Filter snapshot to accessibility roles (for example: radio,checkbox)
+  -o, --output <path>    Write command output to a file instead of stdout
   -d, --diff <file>      Compare current page against a saved snapshot JSON
   --inspect              Inject visual ref labels onto the page (auto-removes after 10s)
   --keep                 Keep visual ref labels visible (use with --inspect)
@@ -29,33 +31,48 @@ Options:
   -h, --help             Show this help
 
 Examples:
+  bp snapshot                       # Full accessibility tree as readable text
   bp snapshot -i                    # Interactive elements only (best for AI agents)
-  bp snapshot --format text         # Full accessibility tree as text
+  bp snapshot --role radio,checkbox # Focus on specific control roles
   bp snapshot --json > page.json    # Save full snapshot to file
   bp snapshot --diff before.json    # Show what changed since before.json
   bp snapshot --inspect             # Visual ref labels on the page
 `.trimEnd();
 
 interface SnapshotOptions {
-  format?: 'full' | 'interactive' | 'text';
+  format: 'full' | 'interactive' | 'text';
+  formatExplicit?: boolean;
   diffFile?: string;
+  outputFile?: string;
+  roles?: string[];
   inspect?: boolean;
   keep?: boolean;
   help?: boolean;
 }
 
 function parseSnapshotArgs(args: string[]): SnapshotOptions {
-  const options: SnapshotOptions = {};
+  const options: SnapshotOptions = {
+    format: 'text',
+  };
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]!;
 
     if (arg === '--format' || arg === '-f') {
       options.format = args[++i] as SnapshotOptions['format'];
+      options.formatExplicit = true;
     } else if (arg === '--diff' || arg === '-d') {
       options.diffFile = args[++i];
     } else if (arg === '--interactive' || arg === '-i') {
       options.format = 'interactive';
+      options.formatExplicit = true;
+    } else if (arg === '--role') {
+      options.roles = args[++i]
+        ?.split(',')
+        .map((role) => role.trim().toLowerCase())
+        .filter(Boolean);
+    } else if (arg === '--output' || arg === '-o') {
+      options.outputFile = args[++i];
     } else if (arg === '--inspect') {
       options.inspect = true;
     } else if (arg === '--keep') {
@@ -66,6 +83,11 @@ function parseSnapshotArgs(args: string[]): SnapshotOptions {
   }
 
   return options;
+}
+
+function writeInfo(message: string, asStderr = false): void {
+  const stream = asStderr ? process.stderr : process.stdout;
+  stream.write(message.endsWith('\n') ? message : `${message}\n`);
 }
 
 /**
@@ -106,7 +128,8 @@ export async function snapshotCommand(
 
   try {
     const page = await browser.page(undefined, { targetId: session.targetId });
-    const snapshot = await page.snapshot();
+    const snapshot = await page.snapshot(options.roles?.length ? { roles: options.roles } : {});
+    const infoToStderr = globalOptions.format === 'json' || !!options.outputFile;
 
     // Update session with current URL
     await updateSession(session.id, {
@@ -130,10 +153,13 @@ export async function snapshotCommand(
       const beforeSnapshot: PageSnapshot = JSON.parse(beforeContent);
       const diff = diffSnapshots(beforeSnapshot, snapshot);
 
-      if (globalOptions.format === 'json') {
+      if (options.outputFile) {
+        fs.writeFileSync(options.outputFile, renderOutput(diff, globalOptions.format));
+        writeInfo(`Wrote output to ${options.outputFile}`, true);
+      } else if (globalOptions.format === 'json') {
         output(diff, 'json');
       } else {
-        console.log(formatDiffPretty(diff));
+        writeInfo(formatDiffPretty(diff));
       }
       return;
     }
@@ -141,33 +167,43 @@ export async function snapshotCommand(
     // Handle inspect mode
     if (options.inspect) {
       await injectRefOverlay(page, snapshot);
-      console.log('Overlay injected. Element refs are now visible on the page.');
+      writeInfo('Overlay injected. Element refs are now visible on the page.', infoToStderr);
 
       if (options.keep) {
-        console.log(
-          'Overlay will remain visible. Use removeRefOverlay() or refresh the page to remove.'
+        writeInfo(
+          'Overlay will remain visible. Use removeRefOverlay() or refresh the page to remove.',
+          infoToStderr
         );
       } else {
-        console.log('Overlay will be removed in 10 seconds...');
+        writeInfo('Overlay will be removed in 10 seconds...', infoToStderr);
         await sleep(10000);
         await removeRefOverlay(page);
-        console.log('Overlay removed.');
+        writeInfo('Overlay removed.', infoToStderr);
       }
     }
 
-    // Output based on format
-    switch (options.format) {
-      case 'interactive':
-        output(snapshot.interactiveElements, globalOptions.format);
-        break;
+    const shouldForceFullJson = globalOptions.format === 'json' && !options.formatExplicit;
+    let payload: PageSnapshot | PageSnapshot['interactiveElements'] | string = snapshot;
 
-      case 'text':
-        // For text format, output the text representation directly
-        console.log(snapshot.text);
-        break;
-      default:
-        output(snapshot, globalOptions.format);
-        break;
+    if (!shouldForceFullJson) {
+      switch (options.format) {
+        case 'interactive':
+          payload = snapshot.interactiveElements;
+          break;
+        case 'text':
+          payload = snapshot.text;
+          break;
+        default:
+          payload = snapshot;
+          break;
+      }
+    }
+
+    if (options.outputFile) {
+      fs.writeFileSync(options.outputFile, renderOutput(payload, globalOptions.format));
+      writeInfo(`Wrote output to ${options.outputFile}`, true);
+    } else {
+      output(payload, globalOptions.format);
     }
   } finally {
     await browser.disconnect();

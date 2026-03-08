@@ -2,6 +2,7 @@
  * Wait strategy implementations
  */
 
+import { buildSpecialSelectorPredicateExpression } from '../browser/special-selectors.ts';
 import type { CDPClient } from '../cdp/client.ts';
 
 export type WaitState = 'visible' | 'hidden' | 'attached' | 'detached';
@@ -68,18 +69,21 @@ async function isElementVisible(
   selector: string,
   contextId?: number
 ): Promise<boolean> {
+  const specialExpression = buildSpecialSelectorPredicateExpression(selector);
   const params: Record<string, unknown> = {
-    expression: `(() => {
-      ${DEEP_QUERY_SCRIPT}
-      const el = deepQuery(${JSON.stringify(selector)});
-      if (!el) return false;
-      const style = getComputedStyle(el);
-      if (style.display === 'none') return false;
-      if (style.visibility === 'hidden') return false;
-      if (parseFloat(style.opacity) === 0) return false;
-      const rect = el.getBoundingClientRect();
-      return rect.width > 0 && rect.height > 0;
-    })()`,
+    expression:
+      specialExpression ??
+      `(() => {
+        ${DEEP_QUERY_SCRIPT}
+        const el = deepQuery(${JSON.stringify(selector)});
+        if (!el) return false;
+        const style = getComputedStyle(el);
+        if (style.display === 'none') return false;
+        if (style.visibility === 'hidden') return false;
+        if (parseFloat(style.opacity) === 0) return false;
+        const rect = el.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0;
+      })()`,
     returnByValue: true,
   };
 
@@ -101,11 +105,16 @@ async function isElementAttached(
   selector: string,
   contextId?: number
 ): Promise<boolean> {
+  const specialExpression = buildSpecialSelectorPredicateExpression(selector, {
+    includeHidden: true,
+  });
   const params: Record<string, unknown> = {
-    expression: `(() => {
-      ${DEEP_QUERY_SCRIPT}
-      return deepQuery(${JSON.stringify(selector)}) !== null;
-    })()`,
+    expression:
+      specialExpression ??
+      `(() => {
+        ${DEEP_QUERY_SCRIPT}
+        return deepQuery(${JSON.stringify(selector)}) !== null;
+      })()`,
     returnByValue: true,
   };
 

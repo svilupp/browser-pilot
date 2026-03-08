@@ -2,7 +2,7 @@
 
 ## [0.0.13] - 2026-03-08
 
-### Planned
+### Added
 
 - Multi-tab support (`newTab`, `closeTab` actions, `--new-tab` flag, `listTargets` API), text-based selectors (`text:`, `role:`), label fallback for check/click, `bp page` and `bp forms` commands, snapshot UX overhaul (text default, `--role` filter, `ref:` notation fix), property alias auto-resolution, eval error improvements, and `closePage()` bug fix
 

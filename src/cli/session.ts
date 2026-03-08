@@ -93,7 +93,7 @@ export async function loadSession(id: string): Promise<SessionData> {
  */
 export async function updateSession(
   id: string,
-  updates: Partial<Pick<SessionData, 'currentUrl' | 'lastActivity' | 'metadata'>>
+  updates: Partial<Pick<SessionData, 'currentUrl' | 'lastActivity' | 'metadata' | 'targetId'>>
 ): Promise<SessionData> {
   const session = await loadSession(id);
   const mergedMetadata =

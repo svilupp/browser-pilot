@@ -166,7 +166,7 @@ describe.skipIf(!!process.env['CI'])('CLI Snapshot Output', () => {
       });
     }, 60000);
 
-    test('--format text should show readable accessibility tree', async () => {
+    test('default output should be readable text with ref selectors', async () => {
       const sessionName = generateSessionName();
 
       await withRetry(async () => {
@@ -184,18 +184,45 @@ describe.skipIf(!!process.env['CI'])('CLI Snapshot Output', () => {
           JSON.stringify({ action: 'goto', url: `${baseUrl}/form.html` }),
         ]);
 
-        // Take snapshot with text format
-        const result = await runCLI(['snapshot', '-s', sessionName, '--format', 'text']);
+        // Take snapshot with default format
+        const result = await runCLI(['snapshot', '-s', sessionName]);
 
         expect(result.exitCode).toBe(0);
 
         // Text format should include element refs
-        expect(result.stdout).toMatch(/\[ref=e\d+\]/);
+        expect(result.stdout).toMatch(/ref:e\d+/);
+        expect(result.stdout).not.toContain('[ref=');
 
         // Should include form elements
         expect(result.stdout).toContain('Contact Form');
 
         // Cleanup
+        await runCLI(['close', '-s', sessionName]).catch(() => {});
+      });
+    }, 60000);
+
+    test('--role should filter text output by accessibility role', async () => {
+      const sessionName = generateSessionName();
+
+      await withRetry(async () => {
+        const wsUrl = await getWebSocketUrl();
+        const baseUrl = getBaseUrl();
+
+        await runCLI(['connect', '--provider', 'generic', '--url', wsUrl, '--name', sessionName]);
+        await runCLI([
+          'exec',
+          '-s',
+          sessionName,
+          JSON.stringify({ action: 'goto', url: `${baseUrl}/checkboxes.html` }),
+        ]);
+
+        const result = await runCLI(['snapshot', '-s', sessionName, '--role', 'radio']);
+
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout).toContain('radio');
+        expect(result.stdout).not.toContain('[ref=');
+        expect(result.stdout).not.toContain('- checkbox');
+
         await runCLI(['close', '-s', sessionName]).catch(() => {});
       });
     }, 60000);
@@ -269,7 +296,7 @@ describe.skipIf(!!process.env['CI'])('CLI Snapshot Output', () => {
         await runCLI(['connect', '--provider', 'generic', '--url', wsUrl, '--name', sessionName]);
 
         // Navigate and snapshot
-        await runCLI([
+        const snapshotResult = await runCLI([
           'exec',
           '-s',
           sessionName,
@@ -278,6 +305,26 @@ describe.skipIf(!!process.env['CI'])('CLI Snapshot Output', () => {
           JSON.stringify([{ action: 'goto', url: `${baseUrl}/form.html` }, { action: 'snapshot' }]),
         ]);
 
+        expect(snapshotResult.exitCode).toBe(0);
+
+        const snapshotJson = snapshotResult.json as {
+          steps?: Array<{
+            action?: string;
+            result?: {
+              interactiveElements?: Array<{
+                ref: string;
+                role: string;
+              }>;
+            };
+          }>;
+        };
+        const interactiveElements =
+          snapshotJson.steps?.find((step) => step.action === 'snapshot')?.result
+            ?.interactiveElements ?? [];
+        const textboxRef = interactiveElements.find((element) => element.role === 'textbox')?.ref;
+
+        expect(textboxRef).toBeDefined();
+
         // Use ref selector in next command
         const result = await runCLI([
           'exec',
@@ -285,13 +332,10 @@ describe.skipIf(!!process.env['CI'])('CLI Snapshot Output', () => {
           sessionName,
           '-f',
           'json',
-          JSON.stringify({ action: 'fill', selector: 'ref:e1', value: 'test' }),
+          JSON.stringify({ action: 'fill', selector: `ref:${textboxRef}`, value: 'test' }),
         ]);
 
-        // Should either succeed or fail with element not found (not invalid ref error)
-        if (result.exitCode !== 0) {
-          expect(result.stderr).not.toContain('Invalid ref');
-        }
+        expect(result.exitCode).toBe(0);
 
         // Cleanup
         await runCLI(['close', '-s', sessionName]).catch(() => {});

@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Label Checkbox Test</title>
+  <style>
+    body {
+      font-family: sans-serif;
+      padding: 24px;
+    }
+
+    .checkbox-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    label {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      padding: 12px 16px;
+      border: 1px solid #333;
+      border-radius: 8px;
+      cursor: pointer;
+      user-select: none;
+    }
+  </style>
+</head>
+<body>
+  <h1>Label Checkbox Test</h1>
+
+  <div class="checkbox-row">
+    <input type="checkbox" id="agree" name="agree">
+    <label for="agree" id="agree-label">I agree to the policy</label>
+  </div>
+
+  <p id="state">unchecked</p>
+
+  <script>
+    const checkbox = document.getElementById('agree');
+    const state = document.getElementById('state');
+
+    function render() {
+      state.textContent = checkbox.checked ? 'checked' : 'unchecked';
+    }
+
+    checkbox.addEventListener('click', (event) => {
+      event.preventDefault();
+    });
+
+    document.getElementById('agree-label').addEventListener('click', (event) => {
+      event.preventDefault();
+      checkbox.checked = !checkbox.checked;
+      checkbox.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+
+    checkbox.addEventListener('change', render);
+    render();
+  </script>
+</body>
+</html>

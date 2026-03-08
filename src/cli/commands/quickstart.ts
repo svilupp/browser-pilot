@@ -17,13 +17,13 @@ STEP 3: GET PAGE SNAPSHOT
   bp snapshot -i
 
   Shows only interactive elements (buttons, inputs, links) with refs:
-    button "Sign In" [ref=e2]
-    textbox "Email" [ref=e3]
-    link "Forgot password?" [ref=e6]
+    button "Sign In" ref:e2
+    textbox "Email" ref:e3
+    link "Forgot password?" ref:e6
 
   Other formats:
     bp snapshot --format text    # Full accessibility tree (all elements)
-    bp snapshot                  # Full snapshot as JSON
+    bp snapshot --json           # Full snapshot as JSON
 
 STEP 4: INTERACT USING REFS
   bp exec '{"action":"fill","selector":"ref:e3","value":"test@example.com"}'
@@ -41,6 +41,13 @@ FOR AI AGENTS
   Add --json for machine-readable output:
     bp snapshot -i --json
     bp exec '{"action":"click","selector":"ref:e3"}' --json
+
+PAGE DISCOVERY SHORTCUTS
+  bp page              # URL, title, headings, forms, and interactive controls
+  bp forms             # Structured list of form fields only
+  bp targets           # All available browser tabs
+  bp connect --new-tab --url https://example.com
+                      # Start from a fresh tab instead of reusing one
 
 TIPS
   • Refs (e1, e2...) are stable within a page - prefer them over CSS selectors

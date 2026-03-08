@@ -16,7 +16,7 @@ export interface CDPClient {
   send<T = unknown>(
     method: string,
     params?: Record<string, unknown>,
-    sessionId?: string
+    sessionId?: string | null
   ): Promise<T>;
 
   /** Subscribe to a CDP event */
@@ -150,14 +150,14 @@ export async function createCDPClient(
     async send<T = unknown>(
       method: string,
       params?: Record<string, unknown>,
-      sessionId?: string
+      sessionId?: string | null
     ): Promise<T> {
       if (!connected) {
         throw new Error('CDP client is not connected');
       }
 
       const id = ++messageId;
-      const effectiveSessionId = sessionId ?? currentSessionId;
+      const effectiveSessionId = sessionId === null ? undefined : (sessionId ?? currentSessionId);
 
       const request: CDPRequest = { id, method };
       if (params !== undefined) {

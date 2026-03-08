@@ -19,6 +19,9 @@ describe('CLI Help Completeness', () => {
     const requiredCommands = [
       'connect',
       'exec',
+      'page',
+      'forms',
+      'targets',
       'snapshot',
       'text',
       'screenshot',
