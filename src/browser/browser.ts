@@ -72,6 +72,7 @@ export class Browser {
   private cdp: CDPClient;
   private providerSession: ProviderSession;
   private pages = new Map<string, Page>();
+  private pageCounter = 0;
 
   private constructor(
     cdp: CDPClient,
@@ -223,7 +224,7 @@ export class Browser {
     await page.init();
 
     // Generate unique name for the page
-    const name = `page-${this.pages.size + 1}`;
+    const name = `page-${++this.pageCounter}`;
     this.pages.set(name, page);
 
     return page;
