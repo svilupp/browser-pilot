@@ -237,14 +237,21 @@ export class Browser {
     const page = this.pages.get(name);
     if (!page) return;
 
-    await this.cdp.send(
-      'Target.closeTarget',
-      {
-        targetId: page.targetId,
-      },
-      null
-    );
+    const targetId = page.targetId;
+    await this.cdp.send('Target.closeTarget', { targetId }, null);
     this.pages.delete(name);
+
+    // Wait for the browser to actually destroy the target
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline) {
+      const { targetInfos } = await this.cdp.send<{ targetInfos: TargetInfo[] }>(
+        'Target.getTargets',
+        undefined,
+        null
+      );
+      if (!targetInfos.some((t) => t.targetId === targetId)) return;
+      await new Promise((r) => setTimeout(r, 50));
+    }
   }
 
   /**
