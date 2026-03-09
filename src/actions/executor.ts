@@ -2,12 +2,28 @@
  * Batch action executor
  */
 
+import * as fs from 'node:fs';
+import { join } from 'node:path';
+import {
+  getHighlightLabel,
+  injectActionHighlight,
+  removeActionHighlight,
+  stepToHighlightKind,
+} from '../browser/action-highlight.ts';
 import { ActionabilityError } from '../browser/actionability.ts';
 import { generateHints } from '../browser/hint-generator.ts';
 import type { Page } from '../browser/page.ts';
 import { ElementNotFoundError, NavigationError, TimeoutError } from '../browser/types.ts';
 import { CDPError } from '../cdp/protocol.ts';
-import type { BatchOptions, BatchResult, FailureReason, Step, StepResult } from './types.ts';
+import type { RecordingFrame, RecordingManifest } from '../recording/manifest.ts';
+import type {
+  ActionType,
+  BatchOptions,
+  BatchResult,
+  FailureReason,
+  Step,
+  StepResult,
+} from './types.ts';
 
 const DEFAULT_TIMEOUT = 30000;
 
@@ -101,6 +117,31 @@ export class BatchExecutor {
     const results: StepResult[] = [];
     const startTime = Date.now();
 
+    // Recording setup
+    const record = options.record;
+    const recordFrames: RecordingFrame[] = [];
+    let screenshotDir: string | undefined;
+    const defaultSkipActions: ActionType[] = ['wait', 'snapshot', 'forms', 'text'];
+    const skipActions = new Set(record?.skipActions ?? defaultSkipActions);
+    const recordFormat = record?.format ?? 'webp';
+    const recordQuality = record?.quality ?? 40;
+
+    if (record) {
+      const baseDir = record.outputDir ?? join(process.cwd(), '.browser-pilot');
+      screenshotDir = join(baseDir, 'screenshots');
+      fs.mkdirSync(screenshotDir, { recursive: true });
+    }
+
+    // Capture start URL for manifest
+    let startUrl = '';
+    if (record) {
+      try {
+        startUrl = await this.page.url();
+      } catch {
+        /* best-effort */
+      }
+    }
+
     for (let i = 0; i < steps.length; i++) {
       const step = steps[i]!;
       const stepStart = Date.now();
@@ -116,9 +157,10 @@ export class BatchExecutor {
         }
 
         try {
+          this.page.resetLastActionPosition();
           const result = await this.executeStep(step, timeout);
 
-          results.push({
+          const stepResult: StepResult = {
             index: i,
             action: step.action,
             selector: step.selector,
@@ -127,7 +169,25 @@ export class BatchExecutor {
             durationMs: Date.now() - stepStart,
             result: result.value,
             text: result.text,
-          });
+            timestamp: Date.now(),
+            coordinates: this.page.getLastActionCoordinates() ?? undefined,
+            boundingBox: this.page.getLastActionBoundingBox() ?? undefined,
+          };
+
+          // Recording: capture screenshot after successful step
+          if (record && screenshotDir && !skipActions.has(step.action)) {
+            await this.captureRecordingFrame(
+              step,
+              stepResult,
+              screenshotDir,
+              recordFrames,
+              recordFormat,
+              recordQuality,
+              record.highlights !== false
+            );
+          }
+
+          results.push(stepResult);
           succeeded = true;
           break;
         } catch (error) {
@@ -157,7 +217,7 @@ export class BatchExecutor {
           }
         }
 
-        results.push({
+        const failedResult: StepResult = {
           index: i,
           action: step.action,
           selector: step.selector,
@@ -168,7 +228,23 @@ export class BatchExecutor {
           failureReason: reason,
           coveringElement,
           suggestion: getSuggestion(reason),
-        });
+          timestamp: Date.now(),
+        };
+
+        // Recording: capture screenshot for failed steps too (most valuable for debugging)
+        if (record && screenshotDir && !skipActions.has(step.action)) {
+          await this.captureRecordingFrame(
+            step,
+            failedResult,
+            screenshotDir,
+            recordFrames,
+            recordFormat,
+            recordQuality,
+            record.highlights !== false
+          );
+        }
+
+        results.push(failedResult);
 
         // Stop execution on failure (unless optional or onFail: 'continue')
         if (onFail === 'stop' && !step.optional) {
@@ -184,11 +260,153 @@ export class BatchExecutor {
 
     const allSuccess = results.every((r) => r.success || steps[r.index]?.optional);
 
+    // Write recording manifest
+    let recordingManifest: string | undefined;
+    if (record && screenshotDir && recordFrames.length > 0) {
+      recordingManifest = await this.writeRecordingManifest(
+        screenshotDir,
+        recordFrames,
+        startTime,
+        startUrl,
+        allSuccess,
+        recordFormat,
+        recordQuality
+      );
+    }
+
     return {
       success: allSuccess,
       steps: results,
       totalDurationMs: Date.now() - startTime,
+      recordingManifest,
     };
+  }
+
+  /**
+   * Capture a recording screenshot frame with optional highlight overlay
+   */
+  private async captureRecordingFrame(
+    step: Step,
+    stepResult: StepResult,
+    screenshotDir: string,
+    frames: RecordingFrame[],
+    format: 'png' | 'jpeg' | 'webp',
+    quality: number,
+    highlights: boolean
+  ): Promise<void> {
+    try {
+      const ts = Date.now();
+      const seq = String(frames.length + 1).padStart(4, '0');
+      const filename = `${seq}-${ts}-${stepResult.action}.${format}`;
+      const filepath = join(screenshotDir, filename);
+
+      // Inject highlight overlay
+      if (highlights) {
+        const kind = stepToHighlightKind(stepResult);
+        if (kind) {
+          await injectActionHighlight(this.page, {
+            kind,
+            bbox: stepResult.boundingBox,
+            point: stepResult.coordinates,
+            label: getHighlightLabel(step, stepResult),
+          });
+        }
+      }
+
+      // Capture screenshot
+      const base64 = await this.page.screenshot({ format, quality });
+      const buffer = Buffer.from(base64, 'base64');
+      fs.writeFileSync(filepath, buffer);
+      stepResult.screenshotPath = filepath;
+
+      // Remove highlight
+      if (highlights) {
+        await removeActionHighlight(this.page);
+      }
+
+      // Capture page URL and title for frame metadata
+      let pageUrl: string | undefined;
+      let pageTitle: string | undefined;
+      try {
+        pageUrl = await this.page.url();
+        pageTitle = await this.page.title();
+      } catch {
+        /* best-effort */
+      }
+
+      frames.push({
+        seq: frames.length + 1,
+        timestamp: ts,
+        action: stepResult.action,
+        selector: stepResult.selectorUsed,
+        value: typeof step.value === 'string' ? step.value : undefined,
+        url: step.url,
+        coordinates: stepResult.coordinates,
+        boundingBox: stepResult.boundingBox,
+        success: stepResult.success,
+        durationMs: stepResult.durationMs,
+        error: stepResult.error,
+        screenshot: filename,
+        pageUrl,
+        pageTitle,
+      });
+    } catch {
+      // Screenshot capture is best-effort — don't abort the batch
+    }
+  }
+
+  /**
+   * Write recording manifest to disk
+   */
+  private async writeRecordingManifest(
+    screenshotDir: string,
+    frames: RecordingFrame[],
+    startTime: number,
+    startUrl: string,
+    success: boolean,
+    format: 'png' | 'jpeg' | 'webp',
+    quality: number
+  ): Promise<string> {
+    let endUrl = startUrl;
+    let viewport = { width: 1280, height: 720 };
+
+    try {
+      endUrl = await this.page.url();
+    } catch {
+      /* best-effort */
+    }
+
+    try {
+      const metrics = await this.page.cdpClient.send<{
+        cssVisualViewport: { clientWidth: number; clientHeight: number };
+      }>('Page.getLayoutMetrics');
+      viewport = {
+        width: metrics.cssVisualViewport.clientWidth,
+        height: metrics.cssVisualViewport.clientHeight,
+      };
+    } catch {
+      /* use default */
+    }
+
+    const manifest: RecordingManifest = {
+      version: 1,
+      recordedAt: new Date(startTime).toISOString(),
+      sessionId: '',
+      startUrl,
+      endUrl,
+      viewport,
+      format,
+      quality,
+      totalDurationMs: Date.now() - startTime,
+      success,
+      frames,
+    };
+
+    // Write manifest alongside screenshots directory
+    const manifestDir = join(screenshotDir, '..');
+    const manifestPath = join(manifestDir, 'recording.json');
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+    return manifestPath;
   }
 
   /**

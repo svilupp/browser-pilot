@@ -128,12 +128,30 @@ export interface Step {
   retryDelay?: number;
 }
 
+export interface RecordOptions {
+  /** Base directory for screenshots. Defaults to session log directory. */
+  outputDir?: string;
+  /** Image format. Default: 'webp' */
+  format?: 'png' | 'jpeg' | 'webp';
+  /** Image quality 0-100 (webp/jpeg only). Default: 40 */
+  quality?: number;
+  /** Inject visual highlights before capture. Default: true */
+  highlights?: boolean;
+  /** Also capture BEFORE each action (doubles frame count). Default: false */
+  captureBefore?: boolean;
+  /** Actions to skip capturing (observation-only actions). Default: ['wait', 'snapshot', 'forms', 'text'] */
+  skipActions?: ActionType[];
+}
+
 export interface BatchOptions {
   /** Default timeout for all steps (ms) */
   timeout?: number;
 
   /** How to handle failures */
   onFail?: 'stop' | 'continue';
+
+  /** Enable screenshot recording */
+  record?: RecordOptions;
 }
 
 export interface StepResult {
@@ -178,6 +196,18 @@ export interface StepResult {
 
   /** AI-friendly suggestion for what to try next */
   suggestion?: string;
+
+  /** Absolute timestamp (ms since epoch) when this step completed */
+  timestamp?: number;
+
+  /** Viewport coordinates where the action occurred (center of interacted element) */
+  coordinates?: { x: number; y: number };
+
+  /** Element bounding box at time of action (viewport-relative) */
+  boundingBox?: { x: number; y: number; width: number; height: number };
+
+  /** Path to screenshot file captured after this step (when recording enabled) */
+  screenshotPath?: string;
 }
 
 export interface BatchResult {
@@ -192,4 +222,7 @@ export interface BatchResult {
 
   /** Total execution time in ms */
   totalDurationMs: number;
+
+  /** Path to recording manifest (when record option provided) */
+  recordingManifest?: string;
 }

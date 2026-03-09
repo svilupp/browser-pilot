@@ -2,8 +2,13 @@
  * Clean command - Remove stale sessions
  */
 
+import * as fs from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { output } from '../index.ts';
 import { deleteSessionFull, listSessions } from '../session.ts';
+
+const SESSION_DIR = join(homedir(), '.browser-pilot', 'sessions');
 
 const CLEAN_HELP = `
 bp clean - Remove stale browser sessions
@@ -13,6 +18,7 @@ Usage:
 
 Options:
   --max-age <hours>    Remove sessions older than N hours (default: 24)
+  --max-size <size>    Remove oldest sessions until total size < limit (e.g. "100MB", "1GB")
   --dry-run            Show what would be removed without deleting
   --all                Remove all sessions regardless of age
   -f, --format <fmt>   Output format: json | pretty (default: pretty)
@@ -20,17 +26,88 @@ Options:
   -h, --help           Show this help
 
 Examples:
-  bp clean                # Remove sessions older than 24 hours
-  bp clean --max-age 4    # Remove sessions older than 4 hours
-  bp clean --dry-run      # Preview what would be cleaned
-  bp clean --all          # Remove all sessions
+  bp clean                   # Remove sessions older than 24 hours
+  bp clean --max-age 4       # Remove sessions older than 4 hours
+  bp clean --max-size 100MB  # Remove oldest sessions until under 100MB
+  bp clean --dry-run         # Preview what would be cleaned
+  bp clean --all             # Remove all sessions
 `.trimEnd();
 
 interface CleanOptions {
   maxAge?: number; // hours
+  maxSize?: number; // bytes
   dryRun?: boolean;
   all?: boolean;
   help?: boolean;
+}
+
+/**
+ * Parse a human-readable size string (e.g. "100MB", "1GB", "500KB") to bytes
+ */
+function parseSize(sizeStr: string): number {
+  const match = sizeStr.match(/^(\d+(?:\.\d+)?)\s*(KB|MB|GB|TB)$/i);
+  if (!match) {
+    throw new Error(`Invalid size format: "${sizeStr}". Use e.g. "100MB", "1GB", "500KB".`);
+  }
+  const value = parseFloat(match[1]!);
+  const unit = match[2]!.toUpperCase();
+  const multipliers: Record<string, number> = {
+    KB: 1024,
+    MB: 1024 * 1024,
+    GB: 1024 * 1024 * 1024,
+    TB: 1024 * 1024 * 1024 * 1024,
+  };
+  return Math.floor(value * multipliers[unit]!);
+}
+
+/**
+ * Calculate total size of a session (JSON file + log directory)
+ */
+function getSessionSize(sessionId: string): number {
+  let total = 0;
+
+  // Session JSON file
+  const jsonPath = join(SESSION_DIR, `${sessionId}.json`);
+  try {
+    total += fs.statSync(jsonPath).size;
+  } catch {
+    /* missing */
+  }
+
+  // Session directory (recursive)
+  const dirPath = join(SESSION_DIR, sessionId);
+  try {
+    total += getDirSize(dirPath);
+  } catch {
+    /* missing */
+  }
+
+  return total;
+}
+
+/**
+ * Recursively compute directory size
+ */
+function getDirSize(dirPath: string): number {
+  let total = 0;
+  try {
+    const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+    for (const entry of entries) {
+      const fullPath = join(dirPath, entry.name);
+      if (entry.isDirectory()) {
+        total += getDirSize(fullPath);
+      } else if (entry.isFile()) {
+        try {
+          total += fs.statSync(fullPath).size;
+        } catch {
+          /* skip */
+        }
+      }
+    }
+  } catch {
+    /* skip */
+  }
+  return total;
 }
 
 function parseCleanArgs(args: string[]): CleanOptions {
@@ -41,6 +118,10 @@ function parseCleanArgs(args: string[]): CleanOptions {
     if (arg === '--max-age') {
       const value = args[++i];
       options.maxAge = parseInt(value ?? '24', 10);
+    } else if (arg === '--max-size') {
+      const value = args[++i];
+      if (!value) throw new Error('--max-size requires a value (e.g. "100MB")');
+      options.maxSize = parseSize(value);
     } else if (arg === '--dry-run') {
       options.dryRun = true;
     } else if (arg === '--all') {
@@ -64,6 +145,65 @@ export async function cleanCommand(
     return;
   }
 
+  // --max-size mode: remove oldest sessions until under limit
+  if (options.maxSize !== undefined) {
+    const sessions = await listSessions();
+    // Sessions are sorted most-recent-first; compute sizes
+    const sessionsWithSize = sessions.map((s) => ({
+      ...s,
+      size: getSessionSize(s.id),
+    }));
+
+    let totalSize = sessionsWithSize.reduce((sum, s) => sum + s.size, 0);
+    // Remove from oldest (end of list) until under limit
+    // Never remove all sessions — always keep at least 1
+    const toRemove: typeof sessionsWithSize = [];
+    for (let i = sessionsWithSize.length - 1; i > 0 && totalSize > options.maxSize; i--) {
+      const session = sessionsWithSize[i]!;
+      toRemove.push(session);
+      totalSize -= session.size;
+    }
+
+    if (toRemove.length === 0) {
+      const totalMB = (
+        sessionsWithSize.reduce((sum, s) => sum + s.size, 0) /
+        (1024 * 1024)
+      ).toFixed(1);
+      output(
+        { message: `Total size ${totalMB}MB is already under limit`, cleaned: 0 },
+        globalOptions.format
+      );
+      return;
+    }
+
+    if (options.dryRun) {
+      output(
+        {
+          message: `Would clean ${toRemove.length} session(s)`,
+          sessions: toRemove.map((s) => s.id),
+          dryRun: true,
+        },
+        globalOptions.format
+      );
+      return;
+    }
+
+    for (const session of toRemove) {
+      await deleteSessionFull(session.id);
+    }
+
+    output(
+      {
+        message: `Cleaned ${toRemove.length} session(s)`,
+        cleaned: toRemove.length,
+        sessions: toRemove.map((s) => s.id),
+      },
+      globalOptions.format
+    );
+    return;
+  }
+
+  // Default --max-age mode
   const maxAgeMs = (options.maxAge ?? 24) * 60 * 60 * 1000; // Default 24 hours
   const now = Date.now();
 
