@@ -28,6 +28,9 @@ export interface CDPClient {
   /** Subscribe to all events (for debugging/logging) */
   onAny(handler: (method: string, params: Record<string, unknown>) => void): void;
 
+  /** Unsubscribe from all-event handler */
+  offAny(handler: (method: string, params: Record<string, unknown>) => void): void;
+
   /** Close the CDP connection */
   close(): Promise<void>;
 
@@ -52,15 +55,37 @@ type EventHandler = (params: Record<string, unknown>) => void;
 type AnyEventHandler = (method: string, params: Record<string, unknown>) => void;
 
 /**
+ * Create a CDP client from an already-connected transport.
+ * Used by the daemon fast-path (Unix socket transport).
+ */
+export function createCDPClientFromTransport(
+  transport: import('./transport.ts').Transport,
+  options: CDPClientOptions = {}
+): CDPClient {
+  return buildCDPClient(transport, options);
+}
+
+/**
  * Create a new CDP client connected to the given WebSocket URL
  */
 export async function createCDPClient(
   wsUrl: string,
   options: CDPClientOptions = {}
 ): Promise<CDPClient> {
-  const { debug = false, timeout = 30000 } = options;
+  const { timeout = 30000 } = options;
 
   const transport = await createTransport(wsUrl, { timeout });
+  return buildCDPClient(transport, options);
+}
+
+/**
+ * Internal: build a CDPClient from a Transport instance.
+ */
+function buildCDPClient(
+  transport: import('./transport.ts').Transport,
+  options: CDPClientOptions = {}
+): CDPClient {
+  const { debug = false, timeout = 30000 } = options;
 
   let messageId = 0;
   let currentSessionId: string | undefined;
@@ -217,6 +242,10 @@ export async function createCDPClient(
 
     onAny(handler: AnyEventHandler) {
       anyEventHandlers.add(handler);
+    },
+
+    offAny(handler: AnyEventHandler) {
+      anyEventHandlers.delete(handler);
     },
 
     async close() {

@@ -40,10 +40,10 @@ bd close <id>                       # Complete work
 
 ```
 Browser.connect() → CDPClient → WebSocket → Provider (BrowserBase/Browserless/Generic)
-     ↓
-   Page → Actions (click/fill/submit) → Wait Strategies → CDP Commands
-     ↓
-BatchExecutor → Executes Step[] sequentially with timing/error tracking
+     ↓                    ↑
+   Page → Actions    Daemon (optional, holds WS open)
+     ↓                    ↑
+BatchExecutor        CLI → Unix socket → Daemon → Chrome
 ```
 
 Entry: `src/index.ts` exports `Browser`, `Page`, types, providers.
@@ -113,10 +113,38 @@ Complex patterns (custom dropdowns, multi-step forms) are composed from primitiv
 | CLI audio command | `src/cli/commands/audio.ts` (subcommands: setup, play, capture, roundtrip, check) |
 | CLI listen command | `src/cli/commands/listen.ts` (network traffic monitor: ws, http, all) |
 | CLI session attach helper | `src/cli/attach.ts` |
+| CLI daemon spawn helper | `src/cli/daemon-spawn.ts` |
+| CLI daemon command | `src/cli/commands/daemon.ts` |
+| Daemon entry point | `src/daemon/index.ts` |
+| Daemon server (Unix socket) | `src/daemon/server.ts` |
+| Daemon lifecycle (logging, heartbeat, signals) | `src/daemon/lifecycle.ts` |
+| Daemon transport (client-side) | `src/daemon/transport.ts` |
+| Daemon types & constants | `src/daemon/types.ts` |
 | Step validation + aliases | `src/actions/validate.ts` |
 
 ### Lazy Session Attach (CLI)
-`bp exec` and `bp eval` no longer do preflight `/json/version` validation. They connect directly via WebSocket and clean up stale sessions on failure. Implementation: `src/cli/attach.ts`.
+`bp exec` and `bp eval` try the daemon fast-path first (Unix socket), then fall back to direct WebSocket. Stale daemons are auto-cleaned. Implementation: `src/cli/attach.ts`.
+
+### WebSocket Daemon
+`bp connect` spawns a background daemon that holds the CDP WebSocket open. Subsequent CLI commands connect via Unix socket (~5-15ms) instead of re-establishing WebSocket (~280-1030ms).
+
+```
+bp connect                          # Spawns daemon by default
+bp connect --no-daemon              # Direct WS only (file-based sessions)
+bp connect --daemon-idle 30         # Custom idle timeout (minutes)
+bp daemon status                    # Check daemon health
+bp daemon stop                      # Stop daemon for default session
+bp daemon logs                      # View daemon log
+```
+
+- **Daemon-per-session**: Each `bp connect` spawns one daemon tied to the named session
+- **60-minute max age**: Sockets older than 60 min are auto-purged, falling back to direct WS
+- **Transparent failover**: If daemon is dead/stale, CLI falls back to direct WebSocket silently
+- **Centralized logging**: All daemon ops logged to `~/.browser-pilot/sessions/{id}/daemon.log`
+- **Heartbeat**: Daemon updates session file every 30s; stale heartbeat triggers fallback
+- **Platform**: Linux, macOS, GitHub Actions (Unix sockets). Cloudflare Workers use direct WS (no `node:net`)
+- Implementation: `src/daemon/` (server, lifecycle, transport, types), `src/cli/daemon-spawn.ts`
+- Proposal: `PROPOSAL_websocket_daemon.md`
 
 ### CLI Discovery Surface
 The CLI now includes lightweight page-inspection commands in addition to `snapshot`:

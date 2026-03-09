@@ -414,12 +414,33 @@ What remains:
 - **Cloudflare Workers**: Daemon is Node.js/Bun only (uses `node:net`). Workers continue with direct WS.
 - **Session resumption semantics**: `bp connect --resume` still reads the session file. Daemon is a bonus.
 
-### Open Questions
+### Resolved Design Decisions
 
-1. **Default on or off?** Proposal says daemon is default-on with `--no-daemon` opt-out. Alternative: default-off with `--daemon` opt-in for v1, flip default after proving stability.
+1. **Default on.** Daemon spawns by default on `bp connect`. Use `--no-daemon` to opt out.
 
-2. **Event forwarding scope**: Should the daemon forward *all* CDP events to connected clients, or only events they've subscribed to? All-events is simpler but noisier. Subscription-based adds protocol complexity but saves bandwidth.
+2. **Event forwarding: all events.** Daemon broadcasts all CDP events to all connected clients. Unix socket bandwidth is local and free. Keeps the daemon a simple transparent proxy.
 
-3. **Multi-page support**: Current daemon attaches to one target. If a client needs a different target, should the daemon support dynamic re-attachment, or should each target get its own daemon?
+3. **One daemon per named session** (`bp connect -n <name>`). Each `bp connect` invocation spawns its own daemon tied to the session. If you re-connect the same session, old daemon is stopped first.
 
-4. **Daemon auto-restart**: If the daemon dies mid-session, should `bp exec` try to restart it, or just fall back to direct WS? Restarting adds complexity; fallback is simpler and already works.
+4. **No auto-restart.** If daemon dies, CLI falls back to direct WebSocket silently. Keep it simple. All fallback events are logged centrally to `daemon.log` for debugging.
+
+5. **60-minute max socket age.** Daemons and sockets older than 60 minutes are automatically purged. CLI falls back to direct WebSocket when a stale daemon is detected.
+
+6. **Centralized daemon logging.** All daemon operations (startup, shutdown, client connections, CDP errors, heartbeat failures, idle timeouts) logged to `~/.browser-pilot/sessions/{id}/daemon.log`. Viewable via `bp daemon logs`.
+
+7. **Cloudflare Workers / workerd.** Completely unaffected. Daemon uses `node:net` which doesn't exist in workerd. Session files have no `daemon` field, so CLI never attempts the daemon path.
+
+### Implementation Status
+
+Phase 1 (MVP) is implemented:
+- `src/daemon/` — types, server, lifecycle, transport, entry point
+- `src/cdp/client.ts` — `offAny()`, `createCDPClientFromTransport()`
+- `src/browser/browser.ts` — `Browser.fromCDP()` for daemon transport
+- `src/cli/attach.ts` — daemon-first with transparent fallback
+- `src/cli/daemon-spawn.ts` — subprocess spawning + ready-wait
+- `src/cli/commands/connect.ts` — `--no-daemon`, `--daemon-idle`
+- `src/cli/commands/close.ts` — daemon stop on session close
+- `src/cli/commands/clean.ts` — daemon stop on stale session cleanup
+- `src/cli/commands/daemon.ts` — `bp daemon status/stop/logs`
+- `src/cli/commands/list.ts` — daemon status in session list
+- `src/cli/session.ts` — `SessionData.daemon` field, `getSessionFilePath()`
