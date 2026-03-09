@@ -8,6 +8,7 @@ description: Record browser workflows and convert them into reliable, fully auto
 Record a workflow once, then produce a self-contained automation recipe: a markdown document with every step needed to replay it — browser-pilot commands, curl equivalents where possible, wait strategies, and multi-selector fallback chains.
 
 > For browser-pilot action reference, see the `automate-browser-actions-and-testing` skill. This skill focuses on the **recording-to-automation pipeline**.
+> For replay screenshot trails during validation, see [Action Recording Guide](../guides/action-recording.md).
 
 ## The Pipeline
 
@@ -56,7 +57,7 @@ Perform the workflow manually in the browser. The recorder captures:
 | Captured | Details |
 |----------|---------|
 | Clicks | Multiple selector strategies per element (role+name, text, aria-label, testid, id, CSS path) |
-| Inputs | Final debounced values, passwords redacted |
+| Inputs | Final debounced values, sensitive fields redacted (`password`, `hidden`, `one-time-code`, `cc-*`) |
 | Selects | Dropdowns, checkboxes, radio buttons |
 | Submits | Form submissions, Enter key |
 | Navigations | URL changes with timing |
@@ -209,13 +210,16 @@ curl -X POST "https://api.example.com/orders" \
 
 ## Phase 5: Validate
 
-Replay the automation and iterate:
+Replay the automation and iterate. Enable session-level recording to capture screenshots across all exec calls:
 
 ```bash
-# Replay the recorded steps directly
+# Connect with recording enabled — all exec calls produce screenshots
+bp connect --record --name validation
+
+# Replay the recorded steps
 bp exec -f recording.json --json
 
-# Or replay specific steps from your recipe
+# Replay specific steps from your recipe
 bp exec '[
   {"action":"goto","url":"https://example.com"},
   {"action":"click","selector":["role=button[name=\u0027Submit\u0027]","#submit","button[type=submit]"]},
@@ -223,11 +227,16 @@ bp exec '[
 ]' --json
 ```
 
+Frames from multiple exec calls accumulate in the same `recording.json` manifest, so you get a complete visual trail of the validation session.
+
 Check results:
 ```bash
 result=$(bp exec -f recording.json --json)
 echo "$result" | jq '.success'
 echo "$result" | jq '.steps[] | select(.success == false) | {action, error, hints}'
+
+# Inspect the accumulated replay frames
+cat ~/.browser-pilot/sessions/validation/recording.json | jq '.frames[] | {action, success, screenshot, value}'
 ```
 
 Use failure hints to fix selectors:

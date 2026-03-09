@@ -73,7 +73,7 @@ If you don't have a WAV file to send:
 
 ```bash
 # Requires OPENAI_API_KEY
-uv run docs/skill/generate-audio.py "Hello, what can you help me with?" -o prompt.wav
+uv run docs/automating-browsers/generate-audio.py "Hello, what can you help me with?" -o prompt.wav
 ```
 
 ## What Success Looks Like

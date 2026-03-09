@@ -331,6 +331,32 @@ const result = await page.batch([
 
 With `onFail: 'stop'` (the default), a failed assertion halts the batch immediately — useful for fast-fail validation after form submissions or navigations.
 
+## Recording
+
+Capture a screenshot after each action step by passing `record` in `BatchOptions`:
+
+```typescript
+const result = await page.batch([
+  { action: 'goto', url: 'https://example.com/login' },
+  { action: 'fill', selector: '#email', value: 'user@example.com' },
+  { action: 'submit', selector: 'form' },
+], {
+  record: {
+    outputDir: './artifacts/replay',
+    format: 'webp',
+    quality: 40,
+    highlights: true,  // inject visual overlays showing each action
+  },
+});
+
+// Path to the recording.json manifest
+console.log(result.recordingManifest);
+```
+
+Sensitive field values (passwords, OTPs, card numbers) are automatically redacted in both the manifest and the screenshot overlays.
+
+**Session-level recording:** Use `bp connect --record` to enable recording for all `bp exec` calls in the session. Frames from multiple exec calls accumulate in the same `recording.json` manifest. See the [Action Recording Guide](./action-recording.md) for full details.
+
 ## Real-World Examples
 
 ### E-commerce Checkout

@@ -232,3 +232,35 @@ describe('Error Messages', () => {
     expect(result.stderr).toContain('bp actions');
   });
 });
+
+describe('Command Help', () => {
+  test('bp exec --help documents replay recording options', async () => {
+    const result = await runCLI(['exec', '--help']);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('--record');
+    expect(result.stdout).toContain('--record-dir');
+    expect(result.stdout).toContain('--record-format');
+    expect(result.stdout).toContain('--record-quality');
+    expect(result.stdout).toContain('--no-highlights');
+    expect(result.stdout).toContain('Sensitive fields');
+  });
+
+  test('bp connect --help documents recording options', async () => {
+    const result = await runCLI(['connect', '--help']);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('--record');
+    expect(result.stdout).toContain('--record-format');
+    expect(result.stdout).toContain('--record-quality');
+    expect(result.stdout).toContain('--no-highlights');
+  });
+
+  test('bp clean --help documents size-based cleanup', async () => {
+    const result = await runCLI(['clean', '--help']);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('--max-size');
+    expect(result.stdout).toContain('100MB');
+  });
+});

@@ -5,6 +5,7 @@
 ### Added
 
 - WebSocket daemon for persistent CDP connections — `bp connect` now spawns a background daemon that holds the WebSocket open, reducing per-command overhead from ~280-1030ms to ~5-15ms via Unix socket fast-path (`bp daemon status/stop/logs`, `--no-daemon`, `--daemon-idle`)
+- Session-level recording — `bp connect --record` enables screenshot recording for all subsequent exec calls with accumulative frame history across the full session, plus per-exec `--record` override, sensitive field redaction, and `bp clean --max-size` for disk management
 
 ## [0.0.13] - 2026-03-08
 

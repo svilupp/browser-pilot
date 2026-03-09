@@ -9,7 +9,7 @@
  * Commands:
  *   quickstart  Getting started guide
  *   connect     Create browser session
- *   exec        Execute actions (supports --dialog accept|dismiss)
+ *   exec        Execute actions (supports --dialog and --record)
  *   page        Show a compact overview of the current page
  *   forms       List form controls on the current page
  *   targets     List available page tabs in the connected browser
@@ -85,8 +85,10 @@ Options:
 Examples:
   bp connect --provider generic --name dev
   bp exec '{"action":"goto","url":"https://example.com"}'
+  bp exec --record '[{"action":"click","selector":"#checkout"}]'
   bp snapshot -i
   bp exec '{"action":"click","selector":"ref:e3"}'
+  bp clean --max-size 500MB
   bp eval 'document.title'
   bp audio roundtrip -i prompt.wav --transcribe --silence-timeout 5000
 

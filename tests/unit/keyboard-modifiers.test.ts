@@ -186,6 +186,16 @@ describe('press with modifiers dispatches correct sequence', () => {
       getLastMatchedSelector() {
         return undefined;
       },
+      getLastActionCoordinates() {
+        return null;
+      },
+      getLastActionBoundingBox() {
+        return null;
+      },
+      getLastActionTargetMetadata() {
+        return null;
+      },
+      resetLastActionPosition() {},
     };
 
     return page;

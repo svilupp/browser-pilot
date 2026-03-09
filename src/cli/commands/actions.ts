@@ -159,6 +159,19 @@ ASSERTIONS
   {"action":"assertValue","selector":"#email","expect":"user@example.com"}
     Assertion steps verify state inline inside a batch workflow.
 
+EXECUTION RECORDING
+  Replay with a screenshot trail:
+    bp exec --record --file workflow.json
+    bp exec --record '[{"action":"click","selector":"#checkout"}]'
+
+  Artifacts:
+    recording.json            Manifest for the latest recorded run
+    screenshots/*.webp        One screenshot per captured step
+
+  Sensitive inputs are redacted automatically when the field is marked as
+  password/hidden or uses secret-style autocomplete hints such as
+  current-password, one-time-code, or cc-number.
+
 SHADOW DOM
   Selectors automatically pierce shadow DOM (1-2 levels). No special syntax needed.
   For deeper nesting (3+ levels), use refs from snapshot - they work at any depth.

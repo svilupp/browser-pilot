@@ -28,6 +28,14 @@ function createMockPage(
   let callCount = 0;
   // For retry tests: fail N times then succeed
   let failUntilAttempt = 0;
+  let lastActionCoordinates: { x: number; y: number } | null = null;
+  let lastActionBoundingBox: { x: number; y: number; width: number; height: number } | null = null;
+  let lastActionTargetMetadata: {
+    tagName?: string;
+    inputType?: string;
+    autocomplete?: string;
+    sensitiveValue?: boolean;
+  } | null = null;
 
   const page = {
     calls,
@@ -158,6 +166,24 @@ function createMockPage(
       return lastMatchedSelector;
     },
 
+    getLastActionCoordinates() {
+      return lastActionCoordinates;
+    },
+
+    getLastActionBoundingBox() {
+      return lastActionBoundingBox;
+    },
+
+    getLastActionTargetMetadata() {
+      return lastActionTargetMetadata;
+    },
+
+    resetLastActionPosition() {
+      lastActionCoordinates = null;
+      lastActionBoundingBox = null;
+      lastActionTargetMetadata = null;
+    },
+
     // --- Test helpers ---
 
     setWaitForResult(value: boolean) {
@@ -191,6 +217,9 @@ function createMockPage(
       callCount = 0;
       failUntilAttempt = 0;
       lastMatchedSelector = undefined;
+      lastActionCoordinates = null;
+      lastActionBoundingBox = null;
+      lastActionTargetMetadata = null;
     },
   };
 

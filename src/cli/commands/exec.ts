@@ -2,7 +2,9 @@
  * Exec command - Execute actions on current session
  */
 
-import { type Step, validateSteps } from '../../index.ts';
+import * as nodeFs from 'node:fs';
+import { basename, dirname, join, resolve } from 'node:path';
+import { type RecordOptions, type Step, validateSteps } from '../../index.ts';
 import { attachSession, resolveSession } from '../attach.ts';
 import { output, renderOutput } from '../index.ts';
 import { updateSession } from '../session.ts';
@@ -24,11 +26,20 @@ Options:
   -f, --format <fmt>   Output format: json | pretty (default: pretty)
   --json               Alias for -f json
   --trace              Enable debug tracing
+
+Recording:
+  --record                    Enable screenshot recording
+  --record-dir <path>         Override screenshot output directory
+  --record-format <fmt>       Screenshot format: webp (default), png, jpeg
+  --record-quality <n>        Quality 0-100 (default: 40)
+  --no-highlights             Disable visual highlights on screenshots
+                              Sensitive fields (passwords, OTPs, card inputs) are redacted
+
   -h, --help           Show this help
 
 Examples:
   bp exec '{"action":"goto","url":"https://example.com"}'
-  bp exec '[{"action":"fill","selector":"#email","value":"me@test.com"},{"action":"submit","selector":"form"}]'
+  bp exec --record '[{"action":"fill","selector":"#email","value":"me@test.com"},{"action":"submit","selector":"form"}]'
   bp exec --dialog accept '{"action":"click","selector":"#delete-btn"}'
   bp exec -f login-steps.json
 
@@ -42,6 +53,11 @@ interface ExecOptions {
   outputFile?: string;
   trace?: boolean;
   dialog?: 'accept' | 'dismiss';
+  record?: boolean;
+  recordDir?: string;
+  recordFormat?: 'png' | 'jpeg' | 'webp';
+  recordQuality?: number;
+  noHighlights?: boolean;
 }
 
 function parseExecArgs(args: string[]): {
@@ -64,6 +80,27 @@ function parseExecArgs(args: string[]): {
       options.file = args[++i];
     } else if (arg === '-o' || arg === '--output') {
       options.outputFile = args[++i];
+    } else if (arg === '--record') {
+      options.record = true;
+    } else if (arg === '--record-dir') {
+      options.recordDir = args[++i];
+      options.record = true; // --record-dir implies --record
+    } else if (arg === '--record-format') {
+      const fmt = args[++i];
+      if (fmt !== 'png' && fmt !== 'jpeg' && fmt !== 'webp') {
+        throw new Error('--record-format must be "png", "jpeg", or "webp"');
+      }
+      options.recordFormat = fmt;
+      options.record = true;
+    } else if (arg === '--record-quality') {
+      const q = parseInt(args[++i] ?? '', 10);
+      if (Number.isNaN(q) || q < 0 || q > 100) {
+        throw new Error('--record-quality must be 0-100');
+      }
+      options.recordQuality = q;
+      options.record = true;
+    } else if (arg === '--no-highlights') {
+      options.noHighlights = true;
     } else if (!actionsJson && !arg.startsWith('-')) {
       actionsJson = arg;
     }
@@ -100,6 +137,36 @@ async function captureFinalUrl(
 
   await new Promise((resolve) => setTimeout(resolve, 200));
   return getCurrentUrlSafe(page, currentUrl);
+}
+
+/**
+ * Mirror recording files to export directory (dual-write pattern)
+ */
+function mirrorRecordingToExport(recordingManifest: string, exportLogPath: string): void {
+  try {
+    const sourceDir = dirname(recordingManifest);
+    const exportDir = dirname(exportLogPath);
+
+    // Copy recording.json
+    const manifestName = basename(recordingManifest);
+    const exportManifestPath = join(exportDir, manifestName);
+    nodeFs.copyFileSync(recordingManifest, exportManifestPath);
+
+    // Copy screenshots directory
+    const sourceScreenshotsDir = join(sourceDir, 'screenshots');
+    const exportScreenshotsDir = join(exportDir, 'screenshots');
+
+    if (nodeFs.existsSync(sourceScreenshotsDir)) {
+      nodeFs.rmSync(exportScreenshotsDir, { force: true, recursive: true });
+      nodeFs.mkdirSync(exportScreenshotsDir, { recursive: true });
+      const files = nodeFs.readdirSync(sourceScreenshotsDir);
+      for (const file of files) {
+        nodeFs.copyFileSync(join(sourceScreenshotsDir, file), join(exportScreenshotsDir, file));
+      }
+    }
+  } catch (err) {
+    console.warn(`[browser-pilot] Failed to mirror recording to export path: ${err}`);
+  }
 }
 
 export async function execCommand(
@@ -166,6 +233,26 @@ export async function execCommand(
   // Get logger for this session (with optional export path)
   const logger = getSessionLogger(session.id, session.exportLog);
 
+  // Build record options: CLI --record flag takes priority, then session-level settings
+  const sessionRecord = session.metadata?.record;
+  const shouldRecord = execOptions.record || !!sessionRecord;
+  let recordOptions: RecordOptions | undefined;
+  if (shouldRecord) {
+    recordOptions = {
+      sessionId: session.id,
+      format: execOptions.recordFormat ?? sessionRecord?.format ?? 'webp',
+      quality: execOptions.recordQuality ?? sessionRecord?.quality ?? 40,
+      highlights: execOptions.noHighlights ? false : (sessionRecord?.highlights ?? true),
+    };
+    if (execOptions.recordDir) {
+      recordOptions.outputDir = resolve(execOptions.recordDir);
+    } else {
+      // Default: session log directory
+      const { homedir } = await import('node:os');
+      recordOptions.outputDir = join(homedir(), '.browser-pilot', 'sessions', session.id);
+    }
+  }
+
   // Connect to browser (lazy — no preflight /json/version check)
   const { browser, page } = await attachSession(session, { trace: globalOptions.trace });
 
@@ -188,12 +275,14 @@ export async function execCommand(
     const closesCurrentTarget = steps.some(
       (step) => step.action === 'closeTab' && (!step.targetId || step.targetId === currentTargetId)
     );
-    const result = await page.batch(steps);
+    const result = await page.batch(steps, {
+      record: recordOptions,
+    });
     const urlAfter = closesCurrentTarget
       ? urlBefore
       : await captureFinalUrl(page, steps, urlBefore);
 
-    // Log each step result
+    // Log each step result (with optional screenshot reference)
     for (const stepResult of result.steps) {
       logger.logCommand(
         stepResult.action,
@@ -203,15 +292,21 @@ export async function execCommand(
           error: stepResult.error,
           hints: stepResult.hints,
         },
-        stepResult.durationMs
+        stepResult.durationMs,
+        stepResult.screenshotPath ? basename(stepResult.screenshotPath) : undefined
       );
+    }
+
+    // Mirror recording to export path if configured
+    if (result.recordingManifest && session.exportLog) {
+      mirrorRecordingToExport(result.recordingManifest, session.exportLog);
     }
 
     // Log overall execution
     logger.log({
       type: 'event',
       cmd: 'batch',
-      args: { stepCount: steps.length },
+      args: { stepCount: steps.length, recording: !!recordOptions },
       status: result.success ? 'success' : 'failed',
       durationMs: result.totalDurationMs,
       urlBefore,
@@ -260,6 +355,7 @@ export async function execCommand(
       steps: outputSteps,
       totalDurationMs: result.totalDurationMs,
       currentUrl,
+      ...(result.recordingManifest ? { recordingManifest: result.recordingManifest } : {}),
     };
 
     if (execOptions.outputFile) {
@@ -268,6 +364,14 @@ export async function execCommand(
       process.stderr.write(`Wrote output to ${execOptions.outputFile}\n`);
     } else {
       output(payload, globalOptions.format);
+    }
+
+    // Print recording summary
+    if (result.recordingManifest) {
+      const frameCount = result.steps.filter((s) => s.screenshotPath).length;
+      process.stderr.write(
+        `\nRecording: ${frameCount} screenshots saved to ${dirname(result.recordingManifest)}\n`
+      );
     }
 
     // Tip: suggest bp eval only as an escape hatch when evaluate steps fail

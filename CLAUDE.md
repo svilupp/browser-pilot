@@ -1,8 +1,8 @@
 # browser-pilot
 
-Lightweight CDP-based browser automation for AI agents. Zero production dependencies. Works in Node.js, Bun, and Cloudflare Workers.
+**IMPORTANT: Never commit or push code unless the user explicitly asks you to.**
 
-> **Use `bd` for task tracking.** Run `bd onboard` to get started, then `bd ready` to find work.
+Lightweight CDP-based browser automation for AI agents. Zero production dependencies. Works in Node.js, Bun, and Cloudflare Workers.
 
 ## Commands
 
@@ -19,22 +19,6 @@ bun run dev:bp              # Run CLI from source (no build needed)
 Before PR: run `bun run check:quiet`
 
 > **Dev tip:** Use `bun run dev:bp` (or `bun ./src/cli/index.ts`) instead of `bp` during development to avoid stale binaries.
-
-## Agent Workflow
-
-```bash
-bd ready                            # Find available work
-bd show <id>                        # View issue details
-bd update <id> --status in_progress # Claim work
-bd close <id>                       # Complete work
-```
-
-**Session completion (mandatory):**
-1. File issues for remaining work
-2. Run quality gates: `bun check && bun test`
-3. Update/close issues
-4. Push changes: `git pull --rebase && bd sync && git push`
-5. Verify: `git status` shows "up to date with origin"
 
 ## Architecture
 
@@ -121,6 +105,9 @@ Complex patterns (custom dropdowns, multi-step forms) are composed from primitiv
 | Daemon transport (client-side) | `src/daemon/transport.ts` |
 | Daemon types & constants | `src/daemon/types.ts` |
 | Step validation + aliases | `src/actions/validate.ts` |
+| Action highlight overlays | `src/browser/action-highlight.ts` |
+| Recording manifest types | `src/recording/manifest.ts` |
+| Recording redaction helpers | `src/recording/redaction.ts` |
 
 ### Lazy Session Attach (CLI)
 `bp exec` and `bp eval` try the daemon fast-path first (Unix socket), then fall back to direct WebSocket. Stale daemons are auto-cleaned. Implementation: `src/cli/attach.ts`.
@@ -154,6 +141,9 @@ The CLI now includes lightweight page-inspection commands in addition to `snapsh
 - `bp connect --new-tab [--page-url <url>]` — create and attach to a fresh tab
 
 Snapshot text output now uses `ref:e12` notation, which is also the selector syntax agents should reuse in later commands. Refs are cached per session+URL after a snapshot.
+
+### Exec Recording
+`bp exec --record` writes a lightweight screenshot trail for the latest replay into the session directory (or `--record-dir` when provided): `recording.json` plus `screenshots/`. `bp connect --record` enables session-level recording for all subsequent exec calls — recording is accumulative across exec calls (frames append, not replace). Session-level settings are stored in `session.metadata.record`. Sensitive field values are redacted based on the field's actual input settings (`password`, `hidden`, `one-time-code`, `cc-number`, etc.). `bp clean --max-size 500MB` trims old sessions by total disk usage and now stops any attached daemons before deletion.
 
 ## Audio I/O Pattern
 

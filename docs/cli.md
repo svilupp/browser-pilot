@@ -35,6 +35,10 @@ bp connect [options]
 - `--export-log <path>` - Duplicate logs to specified file for local analysis
 - `--no-daemon` - Skip daemon creation (direct WebSocket only)
 - `--daemon-idle <mins>` - Daemon idle timeout in minutes (default: 60)
+- `--record` - Enable screenshot recording for all subsequent `bp exec` calls in this session
+- `--record-format <type>` - Screenshot format for session recording: `webp`, `png`, `jpeg`
+- `--record-quality <n>` - Screenshot quality for session recording (0-100, for `webp`/`jpeg`)
+- `--no-highlights` - Disable action overlays on session recording screenshots
 
 **Examples:**
 
@@ -53,11 +57,17 @@ bp connect --resume my-session
 
 # Without daemon (direct WebSocket only)
 bp connect --provider generic --name dev --no-daemon
+
+# Enable recording for all exec calls in this session
+bp connect --provider generic --name dev --record
+bp connect --record --record-format webp --record-quality 40
 ```
 
 ### exec
 
 Execute actions on the current session.
+
+> **Full guide:** [Action Recording Guide](./guides/action-recording.md) — when to use `bp record` vs `bp exec --record`, artifact layout, and redaction behavior.
 
 ```bash
 bp exec <actions> [options]
@@ -65,8 +75,14 @@ bp exec <actions> [options]
 
 **Options:**
 - `-s, --session <id>` - Session to use (uses most recent if not specified)
+- `--file <path>` - Read actions from a JSON file
 - `-f, --format <format>` - Output format: `json`, `pretty` (default: `pretty`)
 - `--trace` - Enable tracing output
+- `--record` - Capture a screenshot trail while replaying
+- `--record-dir <path>` - Override the replay recording output directory
+- `--record-format <type>` - Screenshot format: `webp`, `png`, `jpeg`
+- `--record-quality <n>` - Screenshot quality for `webp`/`jpeg` (0-100)
+- `--no-highlights` - Disable action overlays on replay screenshots
 
 **Examples:**
 
@@ -80,11 +96,22 @@ bp exec '[
   {"action":"submit","selector":"form"}
 ]'
 
+# Replay with screenshots + recording.json
+bp exec --record --file workflow.json
+
 # With session and JSON output
 bp exec -s my-session --json '{"action":"snapshot"}'
 ```
 
 **Preferred agent workflow:** use `bp snapshot -i` first, target `ref:eN` values in `bp exec` actions, and fall back to `bp diagnose` if an action fails. Reserve raw JavaScript evaluation for inspection/debugging after the high-level actions have already failed.
+
+**Replay recording notes:**
+- `bp exec --record` writes `recording.json` plus `screenshots/` for the latest replay
+- Recording can also be enabled at the session level via `bp connect --record` — all subsequent `bp exec` calls in that session are recorded automatically
+- When session-level recording is active, frames from multiple `bp exec` calls accumulate in the same `recording.json` manifest
+- Per-call `--record` flags on `bp exec` override session-level defaults
+- Sensitive fields are redacted automatically based on field metadata (`password`, `hidden`, `one-time-code`, `cc-*`)
+- Failed replays still write the manifest so you can inspect the captured trail
 
 ### snapshot
 
@@ -269,9 +296,39 @@ bp exec --file recording.json
 ```
 
 **Notes:**
-- Password fields are automatically redacted as `[REDACTED]`
+- Sensitive fields are automatically redacted as `[REDACTED]` based on field settings such as `type="password"`, `type="hidden"`, and secret/autofill hints like `autocomplete="one-time-code"` or `cc-number`
 - Selectors are multi-selector arrays ordered by reliability
 - Press Ctrl+C to stop recording and save
+
+### clean
+
+Remove old sessions, logs, and replay artifacts.
+
+```bash
+bp clean [options]
+```
+
+**Options:**
+- `--max-age <hours>` - Remove sessions older than N hours (default: `24`)
+- `--max-size <size>` - Remove oldest sessions until total size drops below the limit
+- `--dry-run` - Show what would be removed without deleting
+- `--all` - Remove all sessions
+
+**Examples:**
+
+```bash
+# Age-based cleanup
+bp clean
+bp clean --max-age 4
+
+# Size-based cleanup
+bp clean --max-size 500MB
+bp clean --max-size 1GB --dry-run
+```
+
+**Notes:**
+- `--max-size` removes the oldest sessions first and keeps the newest session
+- Attached daemons are stopped before their sessions are deleted
 
 ### audio
 

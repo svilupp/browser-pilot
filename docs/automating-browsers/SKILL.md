@@ -9,6 +9,7 @@ compatibility: Requires browser-pilot CLI (bp). Install with `bun add browser-pi
 Control web browsers via the `bp` CLI. Execute actions, extract content, and automate workflows.
 
 > For complete action reference, patterns, and troubleshooting, see [REFERENCE.md](./REFERENCE.md).
+> For replay screenshot trails and redaction behavior, see [Action Recording Guide](../guides/action-recording.md).
 
 ## The Workflow: Snapshot → Ref
 
@@ -57,6 +58,7 @@ bp snapshot --format text              # Full accessibility tree
 bp exec '[{"action":"goto","url":"..."}]'
 bp exec '[{"action":"click","selector":"ref:e4"}]'
 bp exec -f actions.json               # Read actions from file
+bp exec --record -f actions.json      # Replay with recording.json + screenshots
 echo '{"action":"snapshot"}' | bp exec # Pipe from stdin
 
 # Evaluate JavaScript (inspection / escape hatch)
@@ -220,6 +222,30 @@ When an element isn't found, errors include suggested alternatives:
 
 Hints are action-aware—`click` suggests buttons/links, `fill` suggests inputs. Use the suggested selector in your next attempt.
 
+## Replay Recording
+
+Capture a lightweight screenshot trail while replaying workflows. The recommended approach is session-level recording:
+
+```bash
+# Enable recording for the entire session
+bp connect --record --name my-session
+bp exec -f actions.json                    # screenshots captured automatically
+bp exec '[{"action":"click","selector":"#checkout"}]'  # frames append to same manifest
+```
+
+You can also enable recording on individual exec calls:
+
+```bash
+bp exec --record -f actions.json
+bp exec --record --record-dir ./artifacts/replay '[{"action":"click","selector":"#checkout"}]'
+```
+
+Artifacts:
+- `recording.json` — manifest with all captured frames (accumulative across exec calls with session-level recording)
+- `screenshots/` with one image per captured step
+
+Sensitive fields are redacted automatically when the target field is marked as `password`, `hidden`, `one-time-code`, or card-style autofill metadata such as `cc-number`.
+
 ## Voice Agent Testing
 
 Test audio-based AI agents (voice assistants, phone agents, audio chatbots) by injecting microphone input and capturing spoken responses.
@@ -281,7 +307,7 @@ bp audio roundtrip -i prompt.wav --send-selector "#send-btn" --transcribe
 bp audio capture --transcribe --silence-timeout 1500
 
 # Generate test audio from text
-uv run docs/skill/generate-audio.py "Hello, what can you help me with?" -o prompt.wav
+uv run docs/automating-browsers/generate-audio.py "Hello, what can you help me with?" -o prompt.wav
 
 # Multi-turn conversation
 bp audio roundtrip -s vt -i greeting.wav --transcribe --silence-timeout 1500
@@ -318,6 +344,7 @@ Run `bp audio check` first. Then see [VOICE_AGENT_TESTING.md](./VOICE_AGENT_TEST
 14. **Use assertions to verify in one batch** - `assertUrl`, `assertText`, `assertVisible`, `assertExists`, `assertValue` let you verify state without a separate `bp eval` call
 15. **Use retry for flaky async content** - Any step supports `retry: N` and `retryDelay: ms` for bounded retries
 16. **Daemon reduces CLI overhead** - `bp connect` auto-spawns a daemon (~5-15ms per command vs ~280-1030ms direct WS); use `bp daemon status` to check health
+17. **Use `bp connect --record` for proof** - Session-level recording captures screenshots across all exec calls into one manifest; per-exec `--record` also works for one-off replays
 
 ---
 

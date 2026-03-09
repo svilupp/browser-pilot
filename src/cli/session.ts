@@ -47,9 +47,20 @@ export interface LogStats {
   last?: string;
 }
 
+export interface RecordSettings {
+  /** Screenshot format. Default: 'webp' */
+  format?: 'png' | 'jpeg' | 'webp';
+  /** Image quality 0-100 (webp/jpeg only). Default: 40 */
+  quality?: number;
+  /** Inject visual highlights before capture. Default: true */
+  highlights?: boolean;
+}
+
 export interface SessionMetadata {
   refCache?: RefCache;
   logStats?: LogStats;
+  /** Session-level recording settings (set via `bp connect --record`) */
+  record?: RecordSettings;
   [key: string]: unknown;
 }
 

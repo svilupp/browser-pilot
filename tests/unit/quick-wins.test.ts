@@ -16,6 +16,14 @@ function createMockPage() {
   const refMap = new Map<string, number>();
   let evaluateResult: unknown;
   const cdpCalls: Array<{ method: string; params?: Record<string, unknown> }> = [];
+  let lastActionCoordinates: { x: number; y: number } | null = null;
+  let lastActionBoundingBox: { x: number; y: number; width: number; height: number } | null = null;
+  let lastActionTargetMetadata: {
+    tagName?: string;
+    inputType?: string;
+    autocomplete?: string;
+    sensitiveValue?: boolean;
+  } | null = null;
 
   const page = {
     calls,
@@ -162,11 +170,32 @@ function createMockPage() {
       return undefined; // Mock returns undefined since we don't track actual matches
     },
 
+    getLastActionCoordinates() {
+      return lastActionCoordinates;
+    },
+
+    getLastActionBoundingBox() {
+      return lastActionBoundingBox;
+    },
+
+    getLastActionTargetMetadata() {
+      return lastActionTargetMetadata;
+    },
+
+    resetLastActionPosition() {
+      lastActionCoordinates = null;
+      lastActionBoundingBox = null;
+      lastActionTargetMetadata = null;
+    },
+
     reset() {
       calls.length = 0;
       refMap.clear();
       evaluateResult = undefined;
       cdpCalls.length = 0;
+      lastActionCoordinates = null;
+      lastActionBoundingBox = null;
+      lastActionTargetMetadata = null;
     },
   };
 

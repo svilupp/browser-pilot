@@ -400,12 +400,14 @@ bp connect --new-tab --url https://example.com --name fresh
 
 # Handle native dialogs (alert/confirm/prompt)
 bp exec --dialog accept '{"action":"click","selector":"#delete-btn"}'
+bp exec --record '[{"action":"click","selector":"#checkout"},{"action":"assertText","expect":"Thanks"}]'
 
 # Other commands
 bp text -s my-session --selector ".main-content"
 bp screenshot -s my-session --output page.png
 bp listen ws -m "*voice*"  # monitor WebSocket traffic
 bp list                    # list all sessions
+bp clean --max-size 500MB  # trim old sessions by disk usage
 bp close -s my-session     # close session
 bp actions                 # show complete action reference
 bp run workflow.json       # run a workflow file
@@ -541,9 +543,31 @@ The output format is compatible with `page.batch()`:
 ```
 
 **Notes:**
-- Password fields are automatically redacted as `[REDACTED]`
+- Sensitive fields are automatically redacted as `[REDACTED]` based on input settings such as `type="password"`, `type="hidden"`, and secret/autofill hints like `autocomplete="one-time-code"` or `cc-number`
 - Selectors are multi-selector arrays ordered by reliability (data attributes > IDs > CSS paths)
 - Edit the JSON to adjust selectors or add `optional: true` flags
+
+### Screenshot Trail During Replay
+
+Capture a lightweight visual trail while replaying steps. Enable recording at the session level so all `bp exec` calls are captured automatically:
+
+```bash
+# Enable recording for the entire session
+bp connect --provider generic --name my-session --record
+
+# All exec calls now produce screenshots — frames accumulate in one manifest
+bp exec -s my-session '[
+  {"action":"goto","url":"https://example.com/login"},
+  {"action":"fill","selector":"#email","value":"user@example.com"},
+  {"action":"submit","selector":"form"}
+]'
+bp exec -s my-session '{"action":"assertUrl","expect":"/dashboard"}'
+
+# Or enable recording on a single exec call
+bp exec --record '[{"action":"click","selector":"#checkout"}]'
+```
+
+This writes `recording.json` plus a `screenshots/` directory in the session directory. Sensitive field values are redacted in both the manifest and the screenshot overlays. See the [Action Recording Guide](./docs/guides/action-recording.md) for options like `--record-format`, `--record-quality`, and `--no-highlights`.
 
 ## Examples
 
@@ -687,9 +711,9 @@ enableTracing({ output: 'console' });
 browser-pilot is designed for AI agents. Two resources for agent setup:
 
 - **[llms.txt](./docs/llms.txt)** - Abbreviated reference for LLM context windows
-- **[Claude Code Skill](./docs/skill/SKILL.md)** - Full skill for Claude Code agents
+- **[Claude Code Skill](./docs/automating-browsers/SKILL.md)** - Full skill for Claude Code agents
 
-To use with Claude Code, copy `docs/skill/` to your project or reference it in your agent's context.
+To use with Claude Code, copy `docs/automating-browsers/` to your project or reference it in your agent's context.
 
 ## Documentation
 
@@ -697,6 +721,7 @@ See the [docs](./docs) folder for detailed documentation:
 
 - [Getting Started](./docs/getting-started.md)
 - [Providers](./docs/providers.md)
+- [Action Recording](./docs/guides/action-recording.md)
 - [Multi-Selector Guide](./docs/guides/multi-selector.md)
 - [Batch Actions](./docs/guides/batch-actions.md)
 - [Snapshots](./docs/guides/snapshots.md)

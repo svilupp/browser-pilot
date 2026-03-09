@@ -25,6 +25,8 @@ export interface LogEntry {
   urlAfter?: string;
   error?: string;
   hints?: FailureHint[];
+  /** Screenshot filename captured for this action (when recording enabled) */
+  screenshotFile?: string;
 }
 
 /**
@@ -111,7 +113,8 @@ export class SessionLogger {
     cmd: string,
     args: Record<string, unknown>,
     result: { success: boolean; error?: string; hints?: FailureHint[] },
-    durationMs: number
+    durationMs: number,
+    screenshotFile?: string
   ): void {
     this.log({
       type: 'command',
@@ -121,6 +124,7 @@ export class SessionLogger {
       durationMs,
       error: result.error,
       hints: result.hints,
+      screenshotFile,
     });
   }
 

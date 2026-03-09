@@ -79,6 +79,15 @@ RECORDING (FOR HUMANS)
 
   Great for creating initial automation scripts that AI agents can refine.
 
+RECORDING (DURING REPLAY)
+  Need a screenshot trail while replaying a workflow?
+
+    bp exec --record --file login.json
+    bp exec --record --record-dir ./artifacts/replay '[{"action":"click","selector":"ref:e2"}]'
+
+  Saves recording.json + screenshots for the latest run.
+  Sensitive fields (passwords, OTPs, card inputs) are redacted automatically.
+
 DEBUGGING
   When element selection fails, use these tools to diagnose:
 
