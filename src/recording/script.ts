@@ -21,8 +21,10 @@ export const RECORDER_BINDING_NAME = '__recorder';
  * 2. Captures click, dblclick, input, change, keydown, submit events
  * 3. Generates selector candidates (stable attrs, id, CSS path)
  * 4. Sends events to CDP client via window.__recorder binding
- * 5. Redacts password field values
+ * 5. Redacts sensitive field values
  */
+
+import { SENSITIVE_AUTOCOMPLETE_TOKENS } from './redaction.ts';
 export const RECORDER_SCRIPT = `(function() {
   // Guard against multiple installations
   if (window.__recorderInstalled) return;
@@ -341,18 +343,31 @@ export const RECORDER_SCRIPT = `(function() {
     return clickable || el;
   }
 
-  // Check if element is a password input
-  function isPasswordInput(el) {
-    if (!el) return false;
-    const tag = el.tagName.toLowerCase();
-    if (tag !== 'input') return false;
-    const type = (el.getAttribute('type') || '').toLowerCase();
-    return type === 'password';
+  var sensitiveAutocompleteTokens = new Set(${JSON.stringify(SENSITIVE_AUTOCOMPLETE_TOKENS)});
+
+  function hasSensitiveAutocomplete(el) {
+    if (!el || typeof el.getAttribute !== 'function') return false;
+    var autocomplete = (el.getAttribute('autocomplete') || '').toLowerCase();
+    if (!autocomplete) return false;
+    return autocomplete.split(/\\s+/).some(function(token) {
+      return sensitiveAutocompleteTokens.has(token);
+    });
   }
 
-  // Get input value, redacting passwords
+  // Check if element should be redacted in recordings
+  function isSensitiveValueField(el) {
+    if (!el) return false;
+    const tag = el.tagName.toLowerCase();
+    if (tag === 'input') {
+      const type = (el.getAttribute('type') || '').toLowerCase();
+      if (type === 'password' || type === 'hidden') return true;
+    }
+    return hasSensitiveAutocomplete(el);
+  }
+
+  // Get input value, redacting sensitive fields
   function getInputValue(el) {
-    if (isPasswordInput(el)) return '[REDACTED]';
+    if (isSensitiveValueField(el)) return '[REDACTED]';
     if (el.value !== undefined) return el.value;
     if (el.isContentEditable) return el.textContent || '';
     return '';

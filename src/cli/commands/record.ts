@@ -5,14 +5,25 @@
  * as JSON steps compatible with page.batch() for replay.
  */
 
+import * as nodeFs from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { type Browser, connect, getBrowserWebSocketUrl } from '../../index.ts';
-import type { ListenMode, RecorderListenOptions } from '../../recording/recorder.ts';
+import type { RecordingFrame, RecordingManifest } from '../../recording/manifest.ts';
+import type {
+  ListenMode,
+  RecorderListenOptions,
+  RecorderOptions,
+} from '../../recording/recorder.ts';
 import { Recorder } from '../../recording/recorder.ts';
+import { redactValueForRecording } from '../../recording/redaction.ts';
+import type { RawRecordedEvent } from '../../recording/types.ts';
 import { output } from '../index.ts';
 import {
   generateSessionId,
   getDefaultSession,
   loadSession,
+  type RecordSettings,
   type SessionData,
   saveSession,
   updateSession,
@@ -48,9 +59,14 @@ Examples:
   bp record --listen http --bodies       # Record actions + HTTP with bodies
 
 Recording captures: clicks, inputs, form submissions, navigation.
+Screenshots are captured automatically after each interaction and saved
+to the session directory (~/.browser-pilot/sessions/<id>/screenshots/).
 When --listen is enabled, network traffic is captured alongside actions
 and merged into a unified timeline in the output file.
-Password fields are automatically redacted as [REDACTED].
+Sensitive fields are automatically redacted as [REDACTED] based on the
+field settings (password, hidden, one-time-code, card autofill hints).
+Recording also enables session-level auto-recording for subsequent
+bp exec calls (equivalent to bp connect --record).
 
 Press Ctrl+C to stop recording and save.
 `;
@@ -217,6 +233,12 @@ export async function recordCommand(
     console.log(`Created new session: ${session.id}`);
   }
 
+  // Enable session-level recording so replaying captured steps auto-records screenshots
+  if (!session.metadata?.record) {
+    const recordSettings: RecordSettings = {};
+    await updateSession(session.id, { metadata: { record: recordSettings } });
+  }
+
   const page = await browser.page();
   const cdp = page.cdpClient;
 
@@ -232,8 +254,121 @@ export async function recordCommand(
     listenConfig = listenOpts;
   }
 
-  // Create recorder
-  const recorder = new Recorder(cdp, listenConfig ? { listen: listenConfig } : undefined);
+  // Set up screenshot capture directory (accumulative with existing frames)
+  const sessionDir = join(homedir(), '.browser-pilot', 'sessions', session.id);
+  const screenshotDir = join(sessionDir, 'screenshots');
+  const manifestPath = join(sessionDir, 'recording.json');
+  nodeFs.mkdirSync(screenshotDir, { recursive: true });
+
+  // Load existing frames for accumulative recording
+  const recordingFrames: RecordingFrame[] = [];
+  let manifestRecordedAt = new Date().toISOString();
+  let manifestStartUrl = '';
+  try {
+    const existing = JSON.parse(nodeFs.readFileSync(manifestPath, 'utf-8')) as RecordingManifest;
+    if (existing.frames && Array.isArray(existing.frames)) {
+      recordingFrames.push(...existing.frames);
+    }
+    if (existing.recordedAt) manifestRecordedAt = existing.recordedAt;
+    if (existing.startUrl) manifestStartUrl = existing.startUrl;
+  } catch {
+    // No existing manifest — start fresh
+  }
+
+  const recordFormat = session.metadata?.record?.format ?? 'webp';
+  const recordQuality = session.metadata?.record?.quality ?? 40;
+  let screenshotCount = 0;
+
+  // Map recorder event kinds to action-type-like labels for filenames
+  function eventKindLabel(kind: string): string {
+    switch (kind) {
+      case 'click':
+      case 'dblclick':
+        return 'click';
+      case 'input':
+      case 'change':
+        return 'fill';
+      case 'submit':
+        return 'submit';
+      case 'keydown':
+        return 'press';
+      case 'navigation':
+        return 'goto';
+      default:
+        return kind;
+    }
+  }
+
+  // Screenshot capture callback for each recorded event
+  async function captureScreenshotForEvent(event: RawRecordedEvent): Promise<void> {
+    try {
+      const ts = Date.now();
+      const seq = String(recordingFrames.length + 1).padStart(4, '0');
+      const label = eventKindLabel(event.kind);
+      const filename = `${seq}-${ts}-${label}.${recordFormat}`;
+      const filepath = join(screenshotDir, filename);
+
+      // Take screenshot via CDP directly (page may not have screenshot method here)
+      const result = await cdp.send<{ data: string }>('Page.captureScreenshot', {
+        format: recordFormat === 'png' ? 'png' : recordFormat === 'jpeg' ? 'jpeg' : 'webp',
+        quality: recordFormat === 'png' ? undefined : recordQuality,
+      });
+      const buffer = Buffer.from(result.data, 'base64');
+      nodeFs.writeFileSync(filepath, buffer);
+
+      // Get page info
+      let pageUrl: string | undefined;
+      let pageTitle: string | undefined;
+      try {
+        const urlResult = await cdp.send<{ result: { value: string } }>('Runtime.evaluate', {
+          expression: 'location.href',
+          returnByValue: true,
+        });
+        pageUrl = urlResult.result.value;
+        const titleResult = await cdp.send<{ result: { value: string } }>('Runtime.evaluate', {
+          expression: 'document.title',
+          returnByValue: true,
+        });
+        pageTitle = titleResult.result.value;
+      } catch {
+        /* best-effort */
+      }
+
+      // Build target metadata from event element info for redaction
+      const targetMetadata = event.element
+        ? {
+            tagName: event.element.tag,
+            inputType: event.element.type ?? undefined,
+          }
+        : undefined;
+
+      const frame: RecordingFrame = {
+        seq: recordingFrames.length + 1,
+        timestamp: ts,
+        action: label as RecordingFrame['action'],
+        selector: event.selectors?.[0]?.selector,
+        value: redactValueForRecording(event.value, targetMetadata),
+        coordinates: event.client,
+        success: true,
+        durationMs: 0,
+        screenshot: `screenshots/${filename}`,
+        pageUrl,
+        pageTitle,
+      };
+
+      recordingFrames.push(frame);
+      screenshotCount++;
+    } catch {
+      /* Screenshot capture is best-effort */
+    }
+  }
+
+  // Create recorder with screenshot callback
+  const recorderOptions: RecorderOptions = {
+    ...(listenConfig ? { listen: listenConfig } : {}),
+    onEvent: captureScreenshotForEvent,
+  };
+  const recorder = new Recorder(cdp, recorderOptions);
 
   // Track if we're already stopping to prevent double-stop
   let stopping = false;
@@ -246,13 +381,51 @@ export async function recordCommand(
     try {
       const recording = await recorder.stop();
 
-      // Write to file
+      // Write action steps to output file
       const fs = await import('node:fs/promises');
       await fs.writeFile(outputFile, JSON.stringify(recording, null, 2));
 
+      // Write screenshot manifest (accumulative)
+      let currentUrl = '';
+      let viewport = { width: 1280, height: 720 };
+      try {
+        const urlResult = await cdp.send<{ result: { value: string } }>('Runtime.evaluate', {
+          expression: 'location.href',
+          returnByValue: true,
+        });
+        currentUrl = urlResult.result.value;
+      } catch {
+        /* best-effort */
+      }
+      try {
+        const metrics = await cdp.send<{
+          cssVisualViewport: { clientWidth: number; clientHeight: number };
+        }>('Page.getLayoutMetrics');
+        viewport = {
+          width: metrics.cssVisualViewport.clientWidth,
+          height: metrics.cssVisualViewport.clientHeight,
+        };
+      } catch {
+        /* use default */
+      }
+
+      const manifest: RecordingManifest = {
+        version: 1,
+        recordedAt: manifestRecordedAt,
+        sessionId: session.id,
+        startUrl: manifestStartUrl || recording.startUrl,
+        endUrl: currentUrl,
+        viewport,
+        format: recordFormat,
+        quality: recordQuality,
+        totalDurationMs: recording.duration,
+        success: true,
+        frames: recordingFrames,
+      };
+      nodeFs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+
       // Update session
-      const currentUrl = await page.url();
-      await updateSession(session.id, { currentUrl });
+      await updateSession(session.id, { currentUrl: currentUrl || recording.startUrl });
 
       // Disconnect
       await browser.disconnect();
@@ -267,9 +440,13 @@ export async function recordCommand(
       const timelineInfo = recording.timeline
         ? ` (${recording.timeline.length} timeline entries)`
         : '';
+      const screenshotInfo = screenshotCount > 0 ? `, ${screenshotCount} screenshots` : '';
       console.log(
-        `\nSaved ${recording.steps.length} steps${networkInfo}${wsInfo}${timelineInfo} to ${outputFile}`
+        `\nSaved ${recording.steps.length} steps${screenshotInfo}${networkInfo}${wsInfo}${timelineInfo} to ${outputFile}`
       );
+      if (screenshotCount > 0) {
+        console.log(`Screenshots: ${sessionDir}`);
+      }
 
       if (globalOptions.format === 'json') {
         output(
@@ -277,6 +454,7 @@ export async function recordCommand(
             success: true,
             file: outputFile,
             steps: recording.steps.length,
+            screenshots: screenshotCount,
             duration: recording.duration,
             networkRequests: recording.network?.requests.length ?? 0,
             wsFrames: recording.websockets?.frames.length ?? 0,

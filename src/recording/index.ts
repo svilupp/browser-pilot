@@ -12,10 +12,11 @@ export {
   generateAnnotation,
   selectBestSelectors,
 } from './aggregator.ts';
+// Export recording manifest types
+export type { RecordingFrame, RecordingManifest } from './manifest.ts';
 export type { ListenMode, RecorderListenOptions, RecorderOptions } from './recorder.ts';
 // Export Recorder class and options
 export { Recorder } from './recorder.ts';
-
 // Export recorder script
 export { RECORDER_BINDING_NAME, RECORDER_SCRIPT } from './script.ts';
 

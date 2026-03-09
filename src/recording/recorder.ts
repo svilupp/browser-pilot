@@ -34,6 +34,8 @@ export interface RecorderListenOptions {
 export interface RecorderOptions {
   /** Enable network traffic capture alongside DOM recording. */
   listen?: boolean | RecorderListenOptions;
+  /** Called after each captured event. Use for live screenshot capture. */
+  onEvent?: (event: RawRecordedEvent) => void | Promise<void>;
 }
 
 /**
@@ -233,6 +235,10 @@ export class Recorder {
     try {
       const event = JSON.parse(payload) as RawRecordedEvent;
       this.events.push(event);
+      if (this.options.onEvent) {
+        // Fire-and-forget — don't block recording on screenshot I/O
+        Promise.resolve(this.options.onEvent(event)).catch(() => {});
+      }
     } catch {
       // Invalid payload, ignore
     }

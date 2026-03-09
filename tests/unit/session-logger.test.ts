@@ -138,7 +138,7 @@ describe('SessionLogger', () => {
     it('logs successful command', () => {
       const logger = new SessionLogger(testSessionId);
 
-      logger.logCommand('click', { selector: '#btn' }, { success: true }, 100);
+      logger.logCommand('click', { selector: '#btn' }, { success: true }, 100, '0001-click.webp');
 
       const content = fs.readFileSync(testLogPath, 'utf-8').trim();
       const entry = JSON.parse(content);
@@ -149,6 +149,7 @@ describe('SessionLogger', () => {
       expect(entry.status).toBe('success');
       expect(entry.durationMs).toBe(100);
       expect(entry.error).toBeUndefined();
+      expect(entry.screenshotFile).toBe('0001-click.webp');
     });
 
     it('logs failed command with error and hints', () => {

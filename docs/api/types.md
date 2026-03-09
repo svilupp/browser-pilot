@@ -98,39 +98,80 @@ type ActionType =
   | 'uncheck'
   | 'submit'
   | 'press'
+  | 'shortcut'
   | 'focus'
   | 'hover'
   | 'scroll'
   | 'wait'
   | 'snapshot'
+  | 'forms'
   | 'screenshot'
-  | 'evaluate';
+  | 'evaluate'
+  | 'text'
+  | 'newTab'
+  | 'closeTab'
+  | 'switchFrame'
+  | 'switchToMain'
+  | 'assertVisible'
+  | 'assertExists'
+  | 'assertText'
+  | 'assertUrl'
+  | 'assertValue';
 
 interface Step {
   action: ActionType;
   selector?: string | string[];
   url?: string;
   value?: string | string[];
+  targetId?: string;
   key?: string;
+  combo?: string;
+  modifiers?: Array<'Control' | 'Shift' | 'Alt' | 'Meta'>;
   waitFor?: 'visible' | 'hidden' | 'attached' | 'detached' | 'navigation' | 'networkIdle';
   timeout?: number;
   optional?: boolean;
   method?: 'enter' | 'click' | 'enter+click';
-  clear?: boolean;
+  blur?: boolean;
   delay?: number;
+  waitForNavigation?: boolean | 'auto';
   trigger?: string | string[];
   option?: string | string[];
   match?: 'text' | 'value' | 'contains';
   x?: number;
   y?: number;
+  direction?: 'up' | 'down' | 'left' | 'right';
+  amount?: number;
   format?: 'png' | 'jpeg' | 'webp';
   quality?: number;
   fullPage?: boolean;
+  expect?: string;
+  retry?: number;
+  retryDelay?: number;
+}
+
+interface RecordOptions {
+  outputDir?: string;
+  sessionId?: string;
+  format?: 'png' | 'jpeg' | 'webp';
+  quality?: number;
+  highlights?: boolean;
+  skipActions?: ActionType[];
+}
+
+/** Session-level recording settings, stored in session metadata via `bp connect --record`.
+ *  When enabled, all `bp exec` calls in the session capture screenshots automatically.
+ *  Frames accumulate across exec calls in one recording.json manifest. */
+interface RecordSettings {
+  enabled: boolean;
+  format?: 'png' | 'jpeg' | 'webp';
+  quality?: number;
+  highlights?: boolean;
 }
 
 interface BatchOptions {
   timeout?: number;
   onFail?: 'stop' | 'continue';
+  record?: RecordOptions;
 }
 
 interface StepResult {
@@ -143,6 +184,26 @@ interface StepResult {
   error?: string;
   failedSelectors?: Array<{ selector: string; reason: string }>;
   result?: unknown;
+  text?: string;
+  failureReason?:
+    | 'missing'
+    | 'hidden'
+    | 'covered'
+    | 'disabled'
+    | 'readonly'
+    | 'detached'
+    | 'replaced'
+    | 'notEditable'
+    | 'timeout'
+    | 'navigation'
+    | 'cdpError'
+    | 'unknown';
+  coveringElement?: { tag: string; id?: string; className?: string };
+  suggestion?: string;
+  timestamp?: number;
+  coordinates?: { x: number; y: number };
+  boundingBox?: { x: number; y: number; width: number; height: number };
+  screenshotPath?: string;
 }
 
 interface BatchResult {
@@ -150,6 +211,7 @@ interface BatchResult {
   stoppedAtIndex?: number;
   steps: StepResult[];
   totalDurationMs: number;
+  recordingManifest?: string;
 }
 ```
 

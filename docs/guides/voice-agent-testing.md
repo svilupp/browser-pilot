@@ -336,11 +336,11 @@ Use the bundled TTS script to create WAV prompts from text:
 
 ```bash
 # Requires OPENAI_API_KEY
-uv run docs/skill/generate-audio.py "Hello, what can you help me with?" -o prompt.wav
-uv run docs/skill/generate-audio.py "Can you tell me more about that?" -o followup.wav
+uv run docs/automating-browsers/generate-audio.py "Hello, what can you help me with?" -o prompt.wav
+uv run docs/automating-browsers/generate-audio.py "Can you tell me more about that?" -o followup.wav
 
 # Options
-uv run docs/skill/generate-audio.py "text" --voice nova --model tts-1-hd -o high-quality.wav
+uv run docs/automating-browsers/generate-audio.py "text" --voice nova --model tts-1-hd -o high-quality.wav
 ```
 
 ## Success Criteria

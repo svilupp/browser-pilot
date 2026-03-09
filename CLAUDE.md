@@ -121,6 +121,9 @@ Complex patterns (custom dropdowns, multi-step forms) are composed from primitiv
 | Daemon transport (client-side) | `src/daemon/transport.ts` |
 | Daemon types & constants | `src/daemon/types.ts` |
 | Step validation + aliases | `src/actions/validate.ts` |
+| Action highlight overlays | `src/browser/action-highlight.ts` |
+| Recording manifest types | `src/recording/manifest.ts` |
+| Recording redaction helpers | `src/recording/redaction.ts` |
 
 ### Lazy Session Attach (CLI)
 `bp exec` and `bp eval` try the daemon fast-path first (Unix socket), then fall back to direct WebSocket. Stale daemons are auto-cleaned. Implementation: `src/cli/attach.ts`.
@@ -154,6 +157,9 @@ The CLI now includes lightweight page-inspection commands in addition to `snapsh
 - `bp connect --new-tab [--page-url <url>]` — create and attach to a fresh tab
 
 Snapshot text output now uses `ref:e12` notation, which is also the selector syntax agents should reuse in later commands. Refs are cached per session+URL after a snapshot.
+
+### Exec Recording
+`bp exec --record` writes a lightweight screenshot trail for the latest replay into the session directory (or `--record-dir` when provided): `recording.json` plus `screenshots/`. `bp connect --record` enables session-level recording for all subsequent exec calls — recording is accumulative across exec calls (frames append, not replace). Session-level settings are stored in `session.metadata.record`. Sensitive field values are redacted based on the field's actual input settings (`password`, `hidden`, `one-time-code`, `cc-number`, etc.). `bp clean --max-size 500MB` trims old sessions by total disk usage and now stops any attached daemons before deletion.
 
 ## Audio I/O Pattern
 

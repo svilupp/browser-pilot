@@ -15,6 +15,9 @@ bp connect --provider browserbase --api-key $KEY # Cloud browser
 # Execute actions (single or batch)
 bp exec '{"action":"goto","url":"https://example.com"}'
 bp exec '[{"action":"fill","selector":"#q","value":"test"},{"action":"submit","selector":"form"}]' --json
+bp connect --record                       # Enable recording for all exec calls in this session
+bp exec -f workflow.json                  # Screenshots captured automatically
+bp exec --record -f workflow.json         # Or enable recording per exec call
 
 # Get page state
 bp snapshot -i                     # Interactive elements only (recommended)
@@ -34,6 +37,7 @@ bp daemon logs                     # View daemon log
 
 # Session management
 bp list                            # List sessions
+bp clean --max-size 500MB          # Trim oldest sessions by total disk usage
 bp close -s <session-id>           # Close session
 ```
 
@@ -116,6 +120,7 @@ With `--json`, returns:
 
 ## Documentation
 
-- Full skill: docs/skill/SKILL.md
+- Full skill: docs/automating-browsers/SKILL.md
 - API reference: docs/api/page.md
 - CLI reference: docs/cli.md
+- Action recording guide: docs/guides/action-recording.md

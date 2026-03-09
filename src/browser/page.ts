@@ -16,6 +16,7 @@ import {
   type ResourceType,
   type RouteOptions,
 } from '../network/index.ts';
+import type { ActionTargetMetadata } from '../recording/redaction.ts';
 import type {
   ClearCookiesOptions,
   Cookie,
@@ -154,6 +155,10 @@ export class Page {
   private brokenFrame: string | null = null;
   /** Last matched selector from findElement (for selectorUsed tracking) */
   private _lastMatchedSelector: string | undefined;
+  private _lastActionCoordinates: { x: number; y: number } | null = null;
+  private _lastActionBoundingBox: { x: number; y: number; width: number; height: number } | null =
+    null;
+  private _lastActionTargetMetadata: ActionTargetMetadata | null = null;
   /** Last snapshot for stale ref recovery */
   private lastSnapshot?: PageSnapshot;
   /** Audio input controller (lazy-initialized) */
@@ -188,6 +193,98 @@ export class Page {
    */
   getLastMatchedSelector(): string | undefined {
     return this._lastMatchedSelector;
+  }
+
+  private async getActionTargetMetadata(identifiers: {
+    nodeId?: number;
+    objectId?: string;
+  }): Promise<ActionTargetMetadata | null> {
+    try {
+      const objectId =
+        identifiers.objectId ??
+        (identifiers.nodeId ? await this.resolveObjectId(identifiers.nodeId) : undefined);
+      if (!objectId) return null;
+      const response = await this.cdp.send<{
+        result: { value?: ActionTargetMetadata };
+      }>('Runtime.callFunctionOn', {
+        objectId,
+        functionDeclaration: `function() {
+          const tagName = this.tagName?.toLowerCase?.() || '';
+          const inputType =
+            tagName === 'input' && typeof this.type === 'string' ? this.type.toLowerCase() : '';
+          const autocomplete =
+            typeof this.autocomplete === 'string' ? this.autocomplete.toLowerCase() : '';
+          return { tagName, inputType, autocomplete };
+        }`,
+        returnByValue: true,
+      });
+      return response.result.value ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  private async getElementPosition(identifiers: { nodeId?: number; objectId?: string }): Promise<{
+    center: { x: number; y: number };
+    bbox: { x: number; y: number; width: number; height: number };
+  } | null> {
+    try {
+      const { quads } = await this.cdp.send<{ quads: number[][] }>(
+        'DOM.getContentQuads',
+        identifiers
+      );
+      if (quads?.length > 0) {
+        const q = quads[0]!;
+        const minX = Math.min(q[0]!, q[2]!, q[4]!, q[6]!);
+        const maxX = Math.max(q[0]!, q[2]!, q[4]!, q[6]!);
+        const minY = Math.min(q[1]!, q[3]!, q[5]!, q[7]!);
+        const maxY = Math.max(q[1]!, q[3]!, q[5]!, q[7]!);
+        return {
+          center: { x: (minX + maxX) / 2, y: (minY + maxY) / 2 },
+          bbox: { x: minX, y: minY, width: maxX - minX, height: maxY - minY },
+        };
+      }
+    } catch {
+      /* fallthrough to box model */
+    }
+
+    if (identifiers.nodeId) {
+      const box = await this.getBoxModel(identifiers.nodeId);
+      if (box) {
+        return {
+          center: { x: box.content[0]! + box.width / 2, y: box.content[1]! + box.height / 2 },
+          bbox: { x: box.content[0]!, y: box.content[1]!, width: box.width, height: box.height },
+        };
+      }
+    }
+    return null;
+  }
+
+  private setLastActionPosition(
+    coords: { x: number; y: number },
+    bbox: { x: number; y: number; width: number; height: number }
+  ): void {
+    this._lastActionCoordinates = coords;
+    this._lastActionBoundingBox = bbox;
+  }
+
+  getLastActionCoordinates(): { x: number; y: number } | null {
+    return this._lastActionCoordinates;
+  }
+
+  getLastActionBoundingBox(): { x: number; y: number; width: number; height: number } | null {
+    return this._lastActionBoundingBox;
+  }
+
+  getLastActionTargetMetadata(): ActionTargetMetadata | null {
+    return this._lastActionTargetMetadata;
+  }
+
+  /** Reset position tracking (call before each executor step) */
+  resetLastActionPosition(): void {
+    this._lastActionCoordinates = null;
+    this._lastActionBoundingBox = null;
+    this._lastActionTargetMetadata = null;
   }
 
   /**
@@ -420,6 +517,14 @@ export class Page {
           const quad = quads[0]!;
           clickX = (quad[0]! + quad[2]! + quad[4]! + quad[6]!) / 4;
           clickY = (quad[1]! + quad[3]! + quad[5]! + quad[7]!) / 4;
+          const minX = Math.min(quad[0]!, quad[2]!, quad[4]!, quad[6]!);
+          const maxX = Math.max(quad[0]!, quad[2]!, quad[4]!, quad[6]!);
+          const minY = Math.min(quad[1]!, quad[3]!, quad[5]!, quad[7]!);
+          const maxY = Math.max(quad[1]!, quad[3]!, quad[5]!, quad[7]!);
+          this.setLastActionPosition(
+            { x: clickX, y: clickY },
+            { x: minX, y: minY, width: maxX - minX, height: maxY - minY }
+          );
         } else {
           throw new Error('No quads');
         }
@@ -428,6 +533,10 @@ export class Page {
         if (!box) throw new Error('Could not get element position');
         clickX = box.content[0]! + box.width / 2;
         clickY = box.content[1]! + box.height / 2;
+        this.setLastActionPosition(
+          { x: clickX, y: clickY },
+          { x: box.content[0]!, y: box.content[1]!, width: box.width, height: box.height }
+        );
       }
 
       // Hit target checks inside iframes need frame-local coordinates, while
@@ -502,16 +611,24 @@ export class Page {
         throw e;
       }
 
+      const fillPos = await this.getElementPosition({ nodeId: element.nodeId });
+      if (fillPos) this.setLastActionPosition(fillPos.center, fillPos.bbox);
+
       // Check if this is a special input type that can't use Input.insertText
       const tagInfo = await this.cdp.send<{
-        result: { value: { tagName: string; inputType: string } };
+        result: { value: { tagName: string; inputType: string; autocomplete: string } };
       }>('Runtime.callFunctionOn', {
         objectId,
         functionDeclaration: `function() {
-            return { tagName: this.tagName?.toLowerCase() || '', inputType: (this.type || '').toLowerCase() };
+            return {
+              tagName: this.tagName?.toLowerCase() || '',
+              inputType: (this.type || '').toLowerCase(),
+              autocomplete: typeof this.autocomplete === 'string' ? this.autocomplete.toLowerCase() : '',
+            };
           }`,
         returnByValue: true,
       });
+      this._lastActionTargetMetadata = tagInfo.result.value;
       const { tagName, inputType } = tagInfo.result.value;
       const specialInputTypes = new Set([
         'date',
@@ -613,6 +730,10 @@ export class Page {
         if (options.optional) return false;
         throw e;
       }
+
+      const typePos = await this.getElementPosition({ nodeId: element.nodeId });
+      if (typePos) this.setLastActionPosition(typePos.center, typePos.bbox);
+      this._lastActionTargetMetadata = await this.getActionTargetMetadata({ objectId });
 
       await this.cdp.send('DOM.focus', { nodeId: element.nodeId });
 
@@ -726,6 +847,10 @@ export class Page {
         if (options.optional) return false;
         throw e;
       }
+
+      const selectPos = await this.getElementPosition({ nodeId: element.nodeId });
+      if (selectPos) this.setLastActionPosition(selectPos.center, selectPos.bbox);
+      this._lastActionTargetMetadata = await this.getActionTargetMetadata({ objectId });
 
       const metadata = await this.getNativeSelectMetadata(objectId, values);
       if (!metadata.isSelect) {
@@ -886,6 +1011,9 @@ export class Page {
         throw e;
       }
 
+      const checkPos = await this.getElementPosition({ nodeId: element.nodeId });
+      if (checkPos) this.setLastActionPosition(checkPos.center, checkPos.bbox);
+
       // Read current checked state
       const before = await this.cdp.send<{ result: { value: boolean } }>('Runtime.callFunctionOn', {
         objectId: object.objectId,
@@ -946,6 +1074,9 @@ export class Page {
         if (options.optional) return false;
         throw e;
       }
+
+      const uncheckPos = await this.getElementPosition({ nodeId: element.nodeId });
+      if (uncheckPos) this.setLastActionPosition(uncheckPos.center, uncheckPos.bbox);
 
       // Check if it's a radio button (can't uncheck radio by clicking)
       const isRadio = await this.cdp.send<{ result: { value: boolean } }>(
@@ -1016,6 +1147,9 @@ export class Page {
       }
 
       const objectId = await this.resolveObjectId(element.nodeId);
+      const submitPos = await this.getElementPosition({ nodeId: element.nodeId });
+      if (submitPos) this.setLastActionPosition(submitPos.center, submitPos.bbox);
+
       const isFormElement = await this.cdp.send<{ result: { value: boolean } }>(
         'Runtime.callFunctionOn',
         {
@@ -1139,6 +1273,9 @@ export class Page {
       throw new ElementNotFoundError(selector, hints);
     }
 
+    const focusPos = await this.getElementPosition({ nodeId: element.nodeId });
+    if (focusPos) this.setLastActionPosition(focusPos.center, focusPos.bbox);
+
     await this.cdp.send('DOM.focus', { nodeId: element.nodeId });
     return true;
   }
@@ -1181,6 +1318,14 @@ export class Page {
           const quad = quads[0]!;
           x = (quad[0]! + quad[2]! + quad[4]! + quad[6]!) / 4;
           y = (quad[1]! + quad[3]! + quad[5]! + quad[7]!) / 4;
+          const minX = Math.min(quad[0]!, quad[2]!, quad[4]!, quad[6]!);
+          const maxX = Math.max(quad[0]!, quad[2]!, quad[4]!, quad[6]!);
+          const minY = Math.min(quad[1]!, quad[3]!, quad[5]!, quad[7]!);
+          const maxY = Math.max(quad[1]!, quad[3]!, quad[5]!, quad[7]!);
+          this.setLastActionPosition(
+            { x, y },
+            { x: minX, y: minY, width: maxX - minX, height: maxY - minY }
+          );
         } else {
           throw new Error('No quads');
         }
@@ -1192,6 +1337,10 @@ export class Page {
         }
         x = box.content[0]! + box.width / 2;
         y = box.content[1]! + box.height / 2;
+        this.setLastActionPosition(
+          { x, y },
+          { x: box.content[0]!, y: box.content[1]!, width: box.width, height: box.height }
+        );
       }
 
       await this.cdp.send('Input.dispatchMouseEvent', {
@@ -1227,6 +1376,9 @@ export class Page {
       if (options.optional) return false;
       throw new ElementNotFoundError(selector);
     }
+
+    const scrollPos = await this.getElementPosition({ nodeId: element.nodeId });
+    if (scrollPos) this.setLastActionPosition(scrollPos.center, scrollPos.bbox);
 
     await this.scrollIntoView(element.nodeId);
     return true;

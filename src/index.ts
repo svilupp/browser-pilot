@@ -12,6 +12,7 @@ export {
   BatchExecutor,
   type BatchOptions,
   type BatchResult,
+  type RecordOptions,
   type Step,
   type StepResult,
   type ValidationError,

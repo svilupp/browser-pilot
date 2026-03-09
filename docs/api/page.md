@@ -419,6 +419,24 @@ console.log(result.steps);
 **Options:**
 - `timeout?: number` - Default timeout for all steps
 - `onFail?: 'stop' | 'continue'` - Behavior on failure (default: 'stop')
+- `record?: RecordOptions` - Capture a replay manifest plus per-step screenshots
+
+```typescript
+const result = await page.batch(steps, {
+  record: {
+    outputDir: './artifacts/replay',
+    format: 'webp',
+    quality: 40,
+  },
+});
+
+console.log(result.recordingManifest);
+console.log(result.steps[0]?.screenshotPath);
+```
+
+Recording notes:
+- Sensitive fields are redacted based on field metadata (`password`, `hidden`, `one-time-code`, `cc-*`)
+- Replays still write `recording.json` when execution stops on a failed step
 
 See [Batch Actions Guide](../guides/batch-actions.md) for details.
 

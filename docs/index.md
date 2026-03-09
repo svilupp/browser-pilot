@@ -10,6 +10,7 @@ Lightweight CDP-based browser automation for AI agents.
 
 ## Guides
 
+- [Action Recording](./guides/action-recording.md) - Record workflows and capture replay screenshot trails
 - [Multi-Selector](./guides/multi-selector.md) - Build robust automations with fallback selectors
 - [Batch Actions](./guides/batch-actions.md) - Execute action sequences efficiently
 - [Snapshots](./guides/snapshots.md) - AI-optimized page state extraction
@@ -31,6 +32,7 @@ Lightweight CDP-based browser automation for AI agents.
 | Batch Execution | One call for entire action sequences |
 | AI Snapshots | Accessibility tree optimized for LLMs |
 | Session Persistence | Resume browsing across commands |
+| Replay Recording | Save `recording.json` + screenshots for replay debugging |
 | WebSocket Daemon | Persistent CDP connection, ~5-15ms per command |
 | Full CLI | Perfect for AI agent tool calls |
 

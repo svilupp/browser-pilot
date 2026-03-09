@@ -13,8 +13,10 @@ import {
   getSessionFilePath,
   loadSession,
   type ProviderType,
+  type RecordSettings,
   type SessionData,
   saveSession,
+  updateSession,
 } from '../session.ts';
 
 const CONNECT_HELP = `
@@ -35,6 +37,10 @@ Options:
   --api-key <key>         API key for cloud providers
   --project-id <id>       Project ID for BrowserBase provider
   --export-log <path>     Export session log to file on close
+  --record                Enable screenshot recording for all subsequent exec calls
+  --record-format <fmt>   Screenshot format: webp (default), png, jpeg
+  --record-quality <n>    Quality 0-100 (default: 40)
+  --no-highlights         Disable visual highlights on screenshots
   --no-daemon             Skip daemon creation (direct WebSocket only)
   --daemon-idle <mins>    Daemon idle timeout in minutes (default: 60)
   -s, --session <id>      Alias for --resume
@@ -43,6 +49,7 @@ Options:
 
 Examples:
   bp connect                                    # Auto-connect to local Chrome (port 9222)
+  bp connect --record                           # Connect with session-level recording
   bp connect --provider generic --name dev      # Connect with custom session name
   bp connect --url ws://localhost:9222/devtools  # Explicit WebSocket URL
   bp connect --resume dev                       # Resume a previous session
@@ -65,6 +72,10 @@ interface ConnectOptions {
   exportLog?: string;
   noDaemon?: boolean;
   daemonIdleMins?: number;
+  record?: boolean;
+  recordFormat?: 'png' | 'jpeg' | 'webp';
+  recordQuality?: number;
+  noHighlights?: boolean;
 }
 
 function parseConnectArgs(args: string[]): ConnectOptions {
@@ -95,6 +106,24 @@ function parseConnectArgs(args: string[]): ConnectOptions {
       options.projectId = args[++i];
     } else if (arg === '--export-log') {
       options.exportLog = args[++i];
+    } else if (arg === '--record') {
+      options.record = true;
+    } else if (arg === '--record-format') {
+      const fmt = args[++i];
+      if (fmt !== 'png' && fmt !== 'jpeg' && fmt !== 'webp') {
+        throw new Error('--record-format must be "png", "jpeg", or "webp"');
+      }
+      options.recordFormat = fmt;
+      options.record = true;
+    } else if (arg === '--record-quality') {
+      const q = parseInt(args[++i] ?? '', 10);
+      if (Number.isNaN(q) || q < 0 || q > 100) {
+        throw new Error('--record-quality must be 0-100');
+      }
+      options.recordQuality = q;
+      options.record = true;
+    } else if (arg === '--no-highlights') {
+      options.noHighlights = true;
     } else if (arg === '--no-daemon') {
       options.noDaemon = true;
     } else if (arg === '--daemon-idle') {
@@ -119,7 +148,16 @@ export async function connectCommand(
   // Resume existing session
   if (options.resume || globalOptions.session) {
     const sessionId = options.resume || globalOptions.session!;
-    const session = await loadSession(sessionId);
+    let session = await loadSession(sessionId);
+
+    // Update recording settings on resumed session if --record is passed
+    if (options.record) {
+      const recordSettings: RecordSettings = {};
+      if (options.recordFormat) recordSettings.format = options.recordFormat;
+      if (options.recordQuality !== undefined) recordSettings.quality = options.recordQuality;
+      if (options.noHighlights) recordSettings.highlights = false;
+      session = await updateSession(sessionId, { metadata: { record: recordSettings } });
+    }
 
     output(
       {
@@ -128,6 +166,7 @@ export async function connectCommand(
         sessionId: session.id,
         provider: session.provider,
         currentUrl: session.currentUrl,
+        recording: !!session.metadata?.record,
         daemon: session.daemon
           ? { pid: session.daemon.pid, socketPath: session.daemon.socketPath }
           : undefined,
@@ -187,6 +226,15 @@ export async function connectCommand(
   // Generate session ID
   const sessionId = options.name ?? generateSessionId();
 
+  // Build session-level recording settings if --record flag is set
+  let recordSettings: RecordSettings | undefined;
+  if (options.record) {
+    recordSettings = {};
+    if (options.recordFormat) recordSettings.format = options.recordFormat;
+    if (options.recordQuality !== undefined) recordSettings.quality = options.recordQuality;
+    if (options.noHighlights) recordSettings.highlights = false;
+  }
+
   // Save session
   const session: SessionData = {
     id: sessionId,
@@ -198,7 +246,10 @@ export async function connectCommand(
     createdAt: new Date().toISOString(),
     lastActivity: new Date().toISOString(),
     currentUrl,
-    metadata: browser.metadata,
+    metadata: {
+      ...browser.metadata,
+      ...(recordSettings ? { record: recordSettings } : {}),
+    },
   };
 
   await saveSession(session);
@@ -240,6 +291,7 @@ export async function connectCommand(
       sessionId,
       provider,
       currentUrl,
+      recording: !!recordSettings,
       metadata: browser.metadata,
       daemon: daemonResult,
     },

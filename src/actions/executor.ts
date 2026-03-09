@@ -2,14 +2,50 @@
  * Batch action executor
  */
 
+import * as fs from 'node:fs';
+import { join } from 'node:path';
+import {
+  getHighlightLabel,
+  injectActionHighlight,
+  removeActionHighlight,
+  stepToHighlightKind,
+} from '../browser/action-highlight.ts';
 import { ActionabilityError } from '../browser/actionability.ts';
 import { generateHints } from '../browser/hint-generator.ts';
 import type { Page } from '../browser/page.ts';
 import { ElementNotFoundError, NavigationError, TimeoutError } from '../browser/types.ts';
 import { CDPError } from '../cdp/protocol.ts';
-import type { BatchOptions, BatchResult, FailureReason, Step, StepResult } from './types.ts';
+import type { RecordingFrame, RecordingManifest } from '../recording/manifest.ts';
+import { redactValueForRecording } from '../recording/redaction.ts';
+import type {
+  ActionType,
+  BatchOptions,
+  BatchResult,
+  FailureReason,
+  RecordOptions,
+  Step,
+  StepResult,
+} from './types.ts';
 
 const DEFAULT_TIMEOUT = 30000;
+const DEFAULT_RECORDING_SKIP_ACTIONS: ActionType[] = [
+  'wait',
+  'snapshot',
+  'forms',
+  'text',
+  'screenshot',
+];
+
+interface RecordingContext {
+  baseDir: string;
+  screenshotDir: string;
+  sessionId: string;
+  frames: RecordingFrame[];
+  format: 'png' | 'jpeg' | 'webp';
+  quality: number;
+  highlights: boolean;
+  skipActions: Set<ActionType>;
+}
 
 function classifyFailure(error: unknown): {
   reason: FailureReason;
@@ -100,6 +136,9 @@ export class BatchExecutor {
     const { timeout = DEFAULT_TIMEOUT, onFail = 'stop' } = options;
     const results: StepResult[] = [];
     const startTime = Date.now();
+    const recording = options.record ? this.createRecordingContext(options.record) : null;
+    const startUrl = recording ? await this.getPageUrlSafe() : '';
+    let stoppedAtIndex: number | undefined;
 
     for (let i = 0; i < steps.length; i++) {
       const step = steps[i]!;
@@ -116,9 +155,10 @@ export class BatchExecutor {
         }
 
         try {
+          this.page.resetLastActionPosition();
           const result = await this.executeStep(step, timeout);
 
-          results.push({
+          const stepResult: StepResult = {
             index: i,
             action: step.action,
             selector: step.selector,
@@ -127,7 +167,16 @@ export class BatchExecutor {
             durationMs: Date.now() - stepStart,
             result: result.value,
             text: result.text,
-          });
+            timestamp: Date.now(),
+            coordinates: this.page.getLastActionCoordinates() ?? undefined,
+            boundingBox: this.page.getLastActionBoundingBox() ?? undefined,
+          };
+
+          if (recording && !recording.skipActions.has(step.action)) {
+            await this.captureRecordingFrame(step, stepResult, recording);
+          }
+
+          results.push(stepResult);
           succeeded = true;
           break;
         } catch (error) {
@@ -157,7 +206,7 @@ export class BatchExecutor {
           }
         }
 
-        results.push({
+        const failedResult: StepResult = {
           index: i,
           action: step.action,
           selector: step.selector,
@@ -168,27 +217,222 @@ export class BatchExecutor {
           failureReason: reason,
           coveringElement,
           suggestion: getSuggestion(reason),
-        });
+          timestamp: Date.now(),
+        };
 
-        // Stop execution on failure (unless optional or onFail: 'continue')
+        if (recording && !recording.skipActions.has(step.action)) {
+          await this.captureRecordingFrame(step, failedResult, recording);
+        }
+
+        results.push(failedResult);
+
         if (onFail === 'stop' && !step.optional) {
-          return {
-            success: false,
-            stoppedAtIndex: i,
-            steps: results,
-            totalDurationMs: Date.now() - startTime,
-          };
+          stoppedAtIndex = i;
+          break;
         }
       }
     }
 
-    const allSuccess = results.every((r) => r.success || steps[r.index]?.optional);
+    const totalDurationMs = Date.now() - startTime;
+    const allSuccess =
+      stoppedAtIndex === undefined &&
+      results.every((result) => result.success || steps[result.index]?.optional);
+    let recordingManifest: string | undefined;
+    if (recording) {
+      recordingManifest = await this.writeRecordingManifest(
+        recording,
+        startTime,
+        startUrl,
+        allSuccess
+      );
+    }
 
     return {
       success: allSuccess,
+      stoppedAtIndex,
       steps: results,
-      totalDurationMs: Date.now() - startTime,
+      totalDurationMs,
+      recordingManifest,
     };
+  }
+
+  private createRecordingContext(record: RecordOptions): RecordingContext {
+    const baseDir = record.outputDir ?? join(process.cwd(), '.browser-pilot');
+    const screenshotDir = join(baseDir, 'screenshots');
+    const manifestPath = join(baseDir, 'recording.json');
+
+    // Accumulative recording: load existing frames from previous executions
+    let existingFrames: RecordingFrame[] = [];
+    try {
+      const existing = JSON.parse(fs.readFileSync(manifestPath, 'utf-8')) as RecordingManifest;
+      if (existing.frames && Array.isArray(existing.frames)) {
+        existingFrames = existing.frames;
+      }
+    } catch {
+      // No existing manifest or invalid — start fresh
+    }
+
+    fs.mkdirSync(screenshotDir, { recursive: true });
+
+    return {
+      baseDir,
+      screenshotDir,
+      sessionId: record.sessionId ?? this.page.targetId,
+      frames: existingFrames,
+      format: record.format ?? 'webp',
+      quality: Math.max(0, Math.min(100, record.quality ?? 40)),
+      highlights: record.highlights !== false,
+      skipActions: new Set(record.skipActions ?? DEFAULT_RECORDING_SKIP_ACTIONS),
+    };
+  }
+
+  private async getPageUrlSafe(): Promise<string> {
+    try {
+      return await this.page.url();
+    } catch {
+      return '';
+    }
+  }
+
+  /**
+   * Capture a recording screenshot frame with optional highlight overlay
+   */
+  private async captureRecordingFrame(
+    step: Step,
+    stepResult: StepResult,
+    recording: RecordingContext
+  ): Promise<void> {
+    const targetMetadata = this.page.getLastActionTargetMetadata();
+    let highlightInjected = false;
+
+    try {
+      const ts = Date.now();
+      const seq = String(recording.frames.length + 1).padStart(4, '0');
+      const filename = `${seq}-${ts}-${stepResult.action}.${recording.format}`;
+      const filepath = join(recording.screenshotDir, filename);
+
+      if (recording.highlights) {
+        const kind = stepToHighlightKind(stepResult);
+        if (kind) {
+          await injectActionHighlight(this.page, {
+            kind,
+            bbox: stepResult.boundingBox,
+            point: stepResult.coordinates,
+            label: getHighlightLabel(step, stepResult, targetMetadata),
+          });
+          highlightInjected = true;
+        }
+      }
+
+      const base64 = await this.page.screenshot({
+        format: recording.format,
+        quality: recording.quality,
+      });
+      const buffer = Buffer.from(base64, 'base64');
+      fs.writeFileSync(filepath, buffer);
+      stepResult.screenshotPath = filepath;
+
+      let pageUrl: string | undefined;
+      let pageTitle: string | undefined;
+      try {
+        pageUrl = await this.page.url();
+        pageTitle = await this.page.title();
+      } catch {
+        /* best-effort */
+      }
+
+      recording.frames.push({
+        seq: recording.frames.length + 1,
+        timestamp: ts,
+        action: stepResult.action,
+        selector:
+          stepResult.selectorUsed ??
+          (Array.isArray(step.selector) ? step.selector[0] : step.selector),
+        value: redactValueForRecording(
+          typeof step.value === 'string' ? step.value : undefined,
+          targetMetadata
+        ),
+        url: step.url,
+        coordinates: stepResult.coordinates,
+        boundingBox: stepResult.boundingBox,
+        success: stepResult.success,
+        durationMs: stepResult.durationMs,
+        error: stepResult.error,
+        screenshot: filename,
+        pageUrl,
+        pageTitle,
+      });
+    } catch {
+      /* Screenshot capture is best-effort. */
+    } finally {
+      if (recording.highlights || highlightInjected) {
+        await removeActionHighlight(this.page);
+      }
+    }
+  }
+
+  /**
+   * Write recording manifest to disk
+   */
+  private async writeRecordingManifest(
+    recording: RecordingContext,
+    startTime: number,
+    startUrl: string,
+    success: boolean
+  ): Promise<string> {
+    let endUrl = startUrl;
+    let viewport = { width: 1280, height: 720 };
+
+    try {
+      endUrl = await this.page.url();
+    } catch {
+      /* best-effort */
+    }
+
+    try {
+      const metrics = await this.page.cdpClient.send<{
+        cssVisualViewport: { clientWidth: number; clientHeight: number };
+      }>('Page.getLayoutMetrics');
+      viewport = {
+        width: metrics.cssVisualViewport.clientWidth,
+        height: metrics.cssVisualViewport.clientHeight,
+      };
+    } catch {
+      /* use default */
+    }
+
+    // Preserve original recordedAt from existing manifest when accumulating
+    const manifestPath = join(recording.baseDir, 'recording.json');
+    let recordedAt = new Date(startTime).toISOString();
+    let originalStartUrl = startUrl;
+    try {
+      const existing = JSON.parse(fs.readFileSync(manifestPath, 'utf-8')) as RecordingManifest;
+      if (existing.recordedAt) recordedAt = existing.recordedAt;
+      if (existing.startUrl) originalStartUrl = existing.startUrl;
+    } catch {
+      /* no existing manifest */
+    }
+
+    // Compute total duration from first frame to now
+    const firstFrameTime = recording.frames[0]?.timestamp ?? startTime;
+    const totalDurationMs = Date.now() - Math.min(firstFrameTime, startTime);
+
+    const manifest: RecordingManifest = {
+      version: 1,
+      recordedAt,
+      sessionId: recording.sessionId,
+      startUrl: originalStartUrl,
+      endUrl,
+      viewport,
+      format: recording.format,
+      quality: recording.quality,
+      totalDurationMs,
+      success,
+      frames: recording.frames,
+    };
+
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+    return manifestPath;
   }
 
   /**
