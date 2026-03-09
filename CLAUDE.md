@@ -142,7 +142,7 @@ bp daemon logs                      # View daemon log
 - **Transparent failover**: If daemon is dead/stale, CLI falls back to direct WebSocket silently
 - **Centralized logging**: All daemon ops logged to `~/.browser-pilot/sessions/{id}/daemon.log`
 - **Heartbeat**: Daemon updates session file every 30s; stale heartbeat triggers fallback
-- **Platform**: Linux, macOS, GitHub Actions (Unix sockets). Cloudflare Workers use direct WS (no `node:net`)
+- **Platform**: Linux, macOS, GitHub Actions (Unix sockets) for daemon mode. Cloudflare Workers use direct WS. Workers now expose parts of `node:net` (with compatibility flags), but daemon mode still depends on Unix domain sockets + local process lifecycle, which are CLI/Node runtime concerns.
 - Implementation: `src/daemon/` (server, lifecycle, transport, types), `src/cli/daemon-spawn.ts`
 - Proposal: `PROPOSAL_websocket_daemon.md`
 

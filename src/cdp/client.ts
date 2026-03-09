@@ -3,6 +3,7 @@
  * Handles command/response correlation and event subscription
  */
 
+import { isRecord } from '../utils/json.ts';
 import { CDPError, type CDPEvent, type CDPRequest, type CDPResponse } from './protocol.ts';
 import { createTransport, type TransportOptions } from './transport.ts';
 
@@ -100,7 +101,19 @@ function buildCDPClient(
     let msg: CDPResponse | CDPEvent;
 
     try {
-      msg = JSON.parse(raw);
+      const parsed: unknown = JSON.parse(raw);
+      if (!isRecord(parsed)) {
+        if (debug) console.error('[CDP] Ignoring non-object message:', raw);
+        return;
+      }
+      if ('id' in parsed && typeof parsed['id'] === 'number') {
+        msg = parsed as unknown as CDPResponse;
+      } else if ('method' in parsed && typeof parsed['method'] === 'string') {
+        msg = parsed as unknown as CDPEvent;
+      } else {
+        if (debug) console.error('[CDP] Ignoring invalid message shape:', raw);
+        return;
+      }
     } catch {
       if (debug) console.error('[CDP] Failed to parse message:', raw);
       return;

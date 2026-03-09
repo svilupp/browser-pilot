@@ -7,6 +7,7 @@ import { injectRefOverlay, removeRefOverlay } from '../../browser/overlay.ts';
 import { diffSnapshots, formatDiffPretty } from '../../browser/snapshot-diff.ts';
 import type { PageSnapshot } from '../../browser/types.ts';
 import { connect } from '../../index.ts';
+import { isRecord } from '../../utils/json.ts';
 import { output, renderOutput } from '../index.ts';
 import { getDefaultSession, loadSession, type SessionData, updateSession } from '../session.ts';
 
@@ -150,7 +151,11 @@ export async function snapshotCommand(
       }
 
       const beforeContent = fs.readFileSync(options.diffFile, 'utf-8');
-      const beforeSnapshot: PageSnapshot = JSON.parse(beforeContent);
+      const parsedBefore: unknown = JSON.parse(beforeContent);
+      if (!isRecord(parsedBefore) || !Array.isArray(parsedBefore['accessibilityTree'])) {
+        throw new Error('Diff file is not a valid PageSnapshot JSON payload');
+      }
+      const beforeSnapshot = parsedBefore as unknown as PageSnapshot;
       const diff = diffSnapshots(beforeSnapshot, snapshot);
 
       if (options.outputFile) {

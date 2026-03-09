@@ -7,10 +7,17 @@
 
 import * as fs from 'node:fs';
 import { dirname, join } from 'node:path';
+import { isRecord } from '../utils/json.ts';
 import type { DaemonLogLevel } from './types.ts';
 import { DAEMON_HEARTBEAT_INTERVAL_MS, DAEMON_IDLE_TIMEOUT_MS } from './types.ts';
 
 let logPath: string | null = null;
+
+function parseSessionRecord(raw: string): Record<string, unknown> | null {
+  const parsed: unknown = JSON.parse(raw);
+  return isRecord(parsed) ? parsed : null;
+}
+
 let logStream: fs.WriteStream | null = null;
 
 /**
@@ -110,9 +117,12 @@ export function startHeartbeat(
   const timer = setInterval(() => {
     try {
       const raw = fs.readFileSync(sessionFilePath, 'utf-8');
-      const session = JSON.parse(raw);
-      if (session.daemon) {
-        session.daemon.lastHeartbeat = new Date().toISOString();
+      const session = parseSessionRecord(raw);
+      if (!session) return;
+      const daemon = isRecord(session['daemon']) ? session['daemon'] : undefined;
+      if (daemon) {
+        daemon['lastHeartbeat'] = new Date().toISOString();
+        session['daemon'] = daemon;
         fs.writeFileSync(sessionFilePath, JSON.stringify(session, null, 2));
       }
     } catch (err) {
@@ -216,8 +226,9 @@ export async function clearDaemonFromSession(sessionFilePath: string): Promise<v
   try {
     const fsPromises = await import('node:fs/promises');
     const raw = await fsPromises.readFile(sessionFilePath, 'utf-8');
-    const session = JSON.parse(raw);
-    session.daemon = undefined;
+    const session = parseSessionRecord(raw);
+    if (!session) return;
+    session['daemon'] = undefined;
     await fsPromises.writeFile(sessionFilePath, JSON.stringify(session, null, 2));
   } catch {
     // Session file may not exist or be corrupted — ignore

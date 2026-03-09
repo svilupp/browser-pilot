@@ -10,6 +10,7 @@
 
 import { isTranscriptionAvailable, transcribe } from '../../audio/transcribe.ts';
 import { connect, getBrowserWebSocketUrl, pcmToWav } from '../../index.ts';
+import { isRecord } from '../../utils/json.ts';
 import { output } from '../index.ts';
 import {
   generateSessionId,
@@ -617,7 +618,9 @@ export async function audioCommand(
 
         // Gather diagnostics from the page
         const rawDiag = await page.evaluate<string>(CHECK_DIAGNOSTICS_EXPRESSION);
-        const diag: CheckDiagnostics = JSON.parse(rawDiag);
+        const parsedDiag: unknown = JSON.parse(rawDiag);
+        if (!isRecord(parsedDiag)) throw new Error('Invalid audio diagnostics payload');
+        const diag = parsedDiag as unknown as CheckDiagnostics;
 
         if (globalOptions.format === 'json') {
           output(buildCheckJson(diag), 'json');

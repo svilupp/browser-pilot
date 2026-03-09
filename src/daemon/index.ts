@@ -18,6 +18,7 @@ import * as fs from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createCDPClient } from '../cdp/client.ts';
+import { isRecord } from '../utils/json.ts';
 import {
   checkSessionFileExists,
   closeDaemonLog,
@@ -31,6 +32,11 @@ import { startDaemonServer } from './server.ts';
 import { DAEMON_IDLE_TIMEOUT_MS, type DaemonInfo } from './types.ts';
 
 const SESSION_DIR = join(homedir(), '.browser-pilot', 'sessions');
+
+function parseSessionRecord(raw: string): Record<string, unknown> | null {
+  const parsed: unknown = JSON.parse(raw);
+  return isRecord(parsed) ? parsed : null;
+}
 
 function parseArgs(args: string[]): { sessionId: string; idleTimeoutMs: number } {
   const id = args[0];
@@ -52,8 +58,12 @@ function parseArgs(args: string[]): { sessionId: string; idleTimeoutMs: number }
 
 function readSessionData(filePath: string): { wsUrl: string; targetId?: string } {
   const raw = fs.readFileSync(filePath, 'utf-8');
-  const session = JSON.parse(raw);
-  return { wsUrl: session.wsUrl as string, targetId: session.targetId as string | undefined };
+  const session = parseSessionRecord(raw);
+  if (!session || typeof session['wsUrl'] !== 'string') {
+    throw new Error('Invalid session file: missing wsUrl');
+  }
+  const targetId = typeof session['targetId'] === 'string' ? session['targetId'] : undefined;
+  return { wsUrl: session['wsUrl'], targetId };
 }
 
 async function main(): Promise<void> {
@@ -152,8 +162,9 @@ async function main(): Promise<void> {
 
   try {
     const raw = fs.readFileSync(sessionFilePath, 'utf-8');
-    const session = JSON.parse(raw);
-    session.daemon = daemonInfo;
+    const session = parseSessionRecord(raw);
+    if (!session) throw new Error('Invalid session JSON shape');
+    session['daemon'] = daemonInfo as unknown as Record<string, unknown>;
     fs.writeFileSync(sessionFilePath, JSON.stringify(session, null, 2));
     daemonLog('info', 'Daemon info written to session file');
   } catch (err) {
@@ -204,8 +215,9 @@ async function main(): Promise<void> {
     // Remove daemon info from session file
     try {
       const raw = fs.readFileSync(sessionFilePath, 'utf-8');
-      const session = JSON.parse(raw);
-      session.daemon = undefined;
+      const session = parseSessionRecord(raw);
+      if (!session) return;
+      session['daemon'] = undefined;
       fs.writeFileSync(sessionFilePath, JSON.stringify(session, null, 2));
       daemonLog('info', 'Daemon info removed from session file');
     } catch {

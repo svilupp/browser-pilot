@@ -10,6 +10,7 @@ import * as fs from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DAEMON_READY_TIMEOUT_MS } from '../daemon/types.ts';
+import { isRecord } from '../utils/json.ts';
 
 /**
  * Spawn a daemon subprocess for a session.
@@ -61,8 +62,10 @@ export async function waitForDaemonReady(
   while (Date.now() < deadline) {
     try {
       const raw = fs.readFileSync(sessionFilePath, 'utf-8');
-      const session = JSON.parse(raw);
-      if (session.daemon?.pid === expectedPid && session.daemon?.socketPath) {
+      const parsed: unknown = JSON.parse(raw);
+      if (!isRecord(parsed)) continue;
+      const daemon = isRecord(parsed['daemon']) ? parsed['daemon'] : null;
+      if (daemon?.['pid'] === expectedPid && typeof daemon['socketPath'] === 'string') {
         return true;
       }
     } catch {
