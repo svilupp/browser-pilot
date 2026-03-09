@@ -245,7 +245,7 @@ bp snapshot -i  # Get fresh refs
 ## Power Tips
 
 ### Chain Long Sequences
-Maximize steps per `bp exec` call — each call has connection overhead:
+Maximize steps per `bp exec` call. With the daemon (auto-spawned on `bp connect`), per-call overhead is ~5-15ms. Without daemon, each call costs ~280-1030ms:
 ```bash
 # BAD: one call per step
 bp exec '{"action":"click","selector":"#btn1"}'

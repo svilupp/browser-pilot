@@ -31,6 +31,7 @@ Lightweight CDP-based browser automation for AI agents.
 | Batch Execution | One call for entire action sequences |
 | AI Snapshots | Accessibility tree optimized for LLMs |
 | Session Persistence | Resume browsing across commands |
+| WebSocket Daemon | Persistent CDP connection, ~5-15ms per command |
 | Full CLI | Perfect for AI agent tool calls |
 
 ## Supported Runtimes

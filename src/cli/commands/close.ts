@@ -1,7 +1,11 @@
 /**
  * Close command - Close a browser session
+ *
+ * Stops the daemon (if running) before closing the browser connection
+ * and deleting the session.
  */
 
+import { isDaemonAlive, stopDaemon } from '../../daemon/lifecycle.ts';
 import { connect } from '../../index.ts';
 import { output } from '../index.ts';
 import { deleteSession, getDefaultSession, loadSession, type SessionData } from '../session.ts';
@@ -47,6 +51,26 @@ export async function closeCommand(
     }
   }
 
+  // Stop daemon if running
+  let daemonStopped = false;
+  if (session.daemon) {
+    try {
+      if (isDaemonAlive(session.daemon.pid)) {
+        daemonStopped = await stopDaemon(session.daemon.pid);
+      }
+    } catch {
+      // Daemon may already be dead, continue with cleanup
+    }
+
+    // Clean up socket file
+    try {
+      const fsPromises = await import('node:fs/promises');
+      await fsPromises.unlink(session.daemon.socketPath).catch(() => {});
+    } catch {
+      // Ignore
+    }
+  }
+
   try {
     // Try to connect and close the browser
     const browser = await connect({
@@ -68,6 +92,7 @@ export async function closeCommand(
       success: true,
       sessionId: session.id,
       message: 'Session closed',
+      daemonStopped: daemonStopped || undefined,
     },
     globalOptions.format
   );

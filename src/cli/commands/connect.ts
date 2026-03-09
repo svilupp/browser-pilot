@@ -1,11 +1,16 @@
 /**
  * Connect command - Create or resume a browser session
+ *
+ * By default, spawns a daemon process that holds the CDP WebSocket open
+ * for faster subsequent commands. Use --no-daemon to disable.
  */
 
 import { type BrowserOptions, connect, getBrowserWebSocketUrl } from '../../index.ts';
+import { spawnDaemon, waitForDaemonReady } from '../daemon-spawn.ts';
 import { output } from '../index.ts';
 import {
   generateSessionId,
+  getSessionFilePath,
   loadSession,
   type ProviderType,
   type SessionData,
@@ -30,6 +35,8 @@ Options:
   --api-key <key>         API key for cloud providers
   --project-id <id>       Project ID for BrowserBase provider
   --export-log <path>     Export session log to file on close
+  --no-daemon             Skip daemon creation (direct WebSocket only)
+  --daemon-idle <mins>    Daemon idle timeout in minutes (default: 60)
   -s, --session <id>      Alias for --resume
   --trace                 Enable debug tracing
   -h, --help              Show this help
@@ -41,6 +48,7 @@ Examples:
   bp connect --resume dev                       # Resume a previous session
   bp connect --target-url localhost:3000         # Attach to tab matching URL
   bp connect --new-tab --url https://example.com # Create and attach to a fresh tab
+  bp connect --no-daemon                        # Connect without daemon (file-based only)
 `.trimEnd();
 
 interface ConnectOptions {
@@ -55,6 +63,8 @@ interface ConnectOptions {
   apiKey?: string;
   projectId?: string;
   exportLog?: string;
+  noDaemon?: boolean;
+  daemonIdleMins?: number;
 }
 
 function parseConnectArgs(args: string[]): ConnectOptions {
@@ -85,6 +95,10 @@ function parseConnectArgs(args: string[]): ConnectOptions {
       options.projectId = args[++i];
     } else if (arg === '--export-log') {
       options.exportLog = args[++i];
+    } else if (arg === '--no-daemon') {
+      options.noDaemon = true;
+    } else if (arg === '--daemon-idle') {
+      options.daemonIdleMins = parseInt(args[++i] ?? '60', 10);
     }
   }
 
@@ -114,6 +128,9 @@ export async function connectCommand(
         sessionId: session.id,
         provider: session.provider,
         currentUrl: session.currentUrl,
+        daemon: session.daemon
+          ? { pid: session.daemon.pid, socketPath: session.daemon.socketPath }
+          : undefined,
       },
       globalOptions.format
     );
@@ -186,8 +203,36 @@ export async function connectCommand(
 
   await saveSession(session);
 
-  // Disconnect (session can be resumed)
+  // Disconnect (session can be resumed via daemon or direct WebSocket)
   await browser.disconnect();
+
+  // Spawn daemon unless --no-daemon
+  let daemonResult: { pid: number; socketPath: string } | undefined;
+
+  if (!options.noDaemon) {
+    try {
+      const idleTimeoutMs = options.daemonIdleMins ? options.daemonIdleMins * 60 * 1000 : undefined;
+
+      const spawned = spawnDaemon(sessionId, idleTimeoutMs);
+
+      // Wait for daemon to become ready (writes daemon info to session file)
+      const ready = await waitForDaemonReady(getSessionFilePath(sessionId), spawned.pid);
+
+      if (ready) {
+        // Re-read session to get daemon info
+        const updated = await loadSession(sessionId);
+        if (updated.daemon) {
+          daemonResult = {
+            pid: updated.daemon.pid,
+            socketPath: updated.daemon.socketPath,
+          };
+        }
+      }
+    } catch {
+      // Daemon spawn failed — session still works via direct WebSocket
+      // This is a non-fatal condition
+    }
+  }
 
   output(
     {
@@ -196,6 +241,7 @@ export async function connectCommand(
       provider,
       currentUrl,
       metadata: browser.metadata,
+      daemon: daemonResult,
     },
     globalOptions.format
   );

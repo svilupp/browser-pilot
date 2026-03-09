@@ -85,6 +85,32 @@ export class Browser {
   }
 
   /**
+   * Create a Browser from an existing CDPClient (used by daemon fast-path).
+   * The caller is responsible for the CDP connection lifecycle.
+   */
+  static fromCDP(
+    cdp: CDPClient,
+    sessionInfo: { wsUrl: string; provider?: string; sessionId?: string }
+  ): Browser {
+    // Create a minimal ProviderSession that wraps the daemon connection
+    const providerSession: ProviderSession = {
+      wsUrl: sessionInfo.wsUrl,
+      sessionId: sessionInfo.sessionId,
+      async close() {
+        // No-op — daemon manages the actual Chrome session
+      },
+    };
+    // Create a no-op provider
+    const provider: Provider = {
+      name: sessionInfo.provider ?? 'daemon',
+      async createSession() {
+        return providerSession;
+      },
+    };
+    return new Browser(cdp, provider, providerSession, { provider: 'generic' });
+  }
+
+  /**
    * Connect to a browser instance
    */
   static async connect(options: BrowserOptions): Promise<Browser> {

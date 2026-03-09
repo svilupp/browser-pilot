@@ -5,6 +5,7 @@
 
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import type { DaemonInfo } from '../daemon/types.ts';
 
 export type ProviderType = 'browserbase' | 'browserless' | 'generic';
 
@@ -29,6 +30,8 @@ export interface SessionData {
   currentUrl: string;
   /** Additional metadata */
   metadata?: SessionMetadata;
+  /** Daemon connection info (present when daemon is running) */
+  daemon?: DaemonInfo & { lastHeartbeat?: string };
 }
 
 export interface RefCache {
@@ -50,7 +53,14 @@ export interface SessionMetadata {
   [key: string]: unknown;
 }
 
-const SESSION_DIR = join(homedir(), '.browser-pilot', 'sessions');
+export const SESSION_DIR = join(homedir(), '.browser-pilot', 'sessions');
+
+/**
+ * Get the file path for a session
+ */
+export function getSessionFilePath(id: string): string {
+  return join(SESSION_DIR, `${id}.json`);
+}
 
 /**
  * Ensure the session directory exists

@@ -103,7 +103,7 @@ login();
 The CLI is great for quick testing and AI agent integrations:
 
 ```bash
-# Connect to a browser and create a session
+# Connect to a browser and create a session (spawns daemon for fast subsequent commands)
 bp connect --provider generic --name my-session
 
 # Navigate to a page
