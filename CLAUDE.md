@@ -1,8 +1,8 @@
 # browser-pilot
 
-Lightweight CDP-based browser automation for AI agents. Zero production dependencies. Works in Node.js, Bun, and Cloudflare Workers.
+**IMPORTANT: Never commit or push code unless the user explicitly asks you to.**
 
-> **Use `bd` for task tracking.** Run `bd onboard` to get started, then `bd ready` to find work.
+Lightweight CDP-based browser automation for AI agents. Zero production dependencies. Works in Node.js, Bun, and Cloudflare Workers.
 
 ## Commands
 
@@ -19,22 +19,6 @@ bun run dev:bp              # Run CLI from source (no build needed)
 Before PR: run `bun run check:quiet`
 
 > **Dev tip:** Use `bun run dev:bp` (or `bun ./src/cli/index.ts`) instead of `bp` during development to avoid stale binaries.
-
-## Agent Workflow
-
-```bash
-bd ready                            # Find available work
-bd show <id>                        # View issue details
-bd update <id> --status in_progress # Claim work
-bd close <id>                       # Complete work
-```
-
-**Session completion (mandatory):**
-1. File issues for remaining work
-2. Run quality gates: `bun check && bun test`
-3. Update/close issues
-4. Push changes: `git pull --rebase && bd sync && git push`
-5. Verify: `git status` shows "up to date with origin"
 
 ## Architecture
 
