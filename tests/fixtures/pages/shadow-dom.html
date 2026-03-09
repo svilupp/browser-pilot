@@ -60,7 +60,7 @@
             button { padding: 10px 20px; background: #2196f3; color: white; border: none; border-radius: 4px; cursor: pointer; }
             button:hover { background: #1976d2; }
           </style>
-          <button data-testid="shadow-button">Click me (Shadow)</button>
+          <button type="button" data-testid="shadow-button">Click me (Shadow)</button>
         `;
         shadow.querySelector('button').addEventListener('click', () => {
           document.getElementById('simple-result').style.display = 'block';
@@ -79,7 +79,7 @@
           <style>
             button { padding: 8px 16px; background: #4caf50; color: white; border: none; border-radius: 4px; cursor: pointer; }
           </style>
-          <button data-testid="nested-button">Nested Button (L2)</button>
+          <button type="button" data-testid="nested-button">Nested Button (L2)</button>
         `;
         shadow.querySelector('button').addEventListener('click', () => {
           document.getElementById('nested-result').style.display = 'block';
@@ -110,7 +110,7 @@
         super();
         const shadow = this.attachShadow({ mode: 'open' });
         shadow.innerHTML = `
-          <button data-testid="deep-button" style="padding: 8px 16px; background: #ff9800; color: white; border: none; border-radius: 4px;">
+          <button type="button" data-testid="deep-button" style="padding: 8px 16px; background: #ff9800; color: white; border: none; border-radius: 4px;">
             Deep Button (L3)
           </button>
         `;
@@ -201,7 +201,7 @@
           </style>
           <div class="wrapper">
             <p>Mixed shadow content</p>
-            <button data-testid="mixed-shadow-btn">Shadow Button</button>
+            <button type="button" data-testid="mixed-shadow-btn">Shadow Button</button>
             <slot></slot>
           </div>
         `;

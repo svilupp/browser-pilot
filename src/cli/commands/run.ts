@@ -4,6 +4,7 @@
 
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import type { Step } from '../../actions/types.ts';
 import { validateSteps } from '../../actions/validate.ts';
 import { attachSession, resolveSession } from '../attach.ts';
 
@@ -132,6 +133,8 @@ export async function runCommand(
     throw new Error(validation.formatted());
   }
 
+  const typedSteps = steps as Step[];
+
   // 4. Attach to session
   const session = await resolveSession(globalOptions.session);
   const { page, browser } = await attachSession(session, {
@@ -140,7 +143,7 @@ export async function runCommand(
 
   try {
     // 5. Execute batch
-    const result = await page.batch(steps, {
+    const result = await page.batch(typedSteps, {
       onFail: runOptions.onFail ?? 'stop',
       timeout: runOptions.timeout,
     });

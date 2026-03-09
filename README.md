@@ -575,6 +575,8 @@ await page.click('.dropdown-option:has-text("United States")');
 
 ### Cloudflare Workers
 
+> Note: Cloudflare Workers' Node-compat runtime can expose parts of `node:net` with compatibility flags, but browser-pilot's daemon fast-path is intentionally CLI/Node-specific (Unix domain sockets + local background process). In Workers, use the normal direct WebSocket path shown below.
+
 ```typescript
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {

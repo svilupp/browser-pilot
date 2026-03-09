@@ -43,6 +43,17 @@ function writeMessage(socket: Socket, msg: DaemonResponse | DaemonEvent): void {
   }
 }
 
+function isValidDaemonRequest(value: unknown): value is DaemonRequest {
+  if (!value || typeof value !== 'object') return false;
+  const request = value as Partial<DaemonRequest>;
+  return (
+    typeof request.id === 'number' &&
+    Number.isInteger(request.id) &&
+    typeof request.method === 'string' &&
+    request.method.length > 0
+  );
+}
+
 export interface DaemonServer {
   /** Underlying net.Server */
   server: Server;
@@ -82,16 +93,23 @@ export async function startDaemonServer(
     clients.add(socket);
     daemonLog('info', `Client connected (total: ${clients.size})`);
 
-    createLineReader(socket, async (line: string) => {
+    const handleRequestLine = async (line: string): Promise<void> => {
       onActivity();
 
-      let request: DaemonRequest;
+      let parsed: unknown;
       try {
-        request = JSON.parse(line) as DaemonRequest;
+        parsed = JSON.parse(line);
       } catch {
         writeMessage(socket, { id: -1, error: 'Invalid JSON' });
         return;
       }
+
+      if (!isValidDaemonRequest(parsed)) {
+        writeMessage(socket, { id: -1, error: 'Invalid request shape' });
+        return;
+      }
+
+      const request = parsed;
 
       try {
         const result = await cdp.send(request.method, request.params, request.sessionId);
@@ -100,6 +118,10 @@ export async function startDaemonServer(
         const message = err instanceof Error ? err.message : String(err);
         writeMessage(socket, { id: request.id, error: message });
       }
+    };
+
+    createLineReader(socket, (line: string) => {
+      void handleRequestLine(line);
     });
 
     socket.on('close', () => {
