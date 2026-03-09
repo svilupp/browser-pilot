@@ -373,6 +373,8 @@ The CLI provides session persistence for interactive workflows:
 # Connect to a browser
 bp connect --provider browserbase --name my-session
 bp connect --provider generic  # auto-discovers local Chrome
+bp connect --no-daemon          # skip daemon (direct WebSocket only)
+bp connect --daemon-idle 30     # custom idle timeout (minutes)
 
 # Execute actions
 bp exec -s my-session '{"action":"goto","url":"https://example.com"}'
@@ -407,6 +409,11 @@ bp list                    # list all sessions
 bp close -s my-session     # close session
 bp actions                 # show complete action reference
 bp run workflow.json       # run a workflow file
+
+# Daemon management
+bp daemon status           # check daemon health
+bp daemon stop             # stop daemon for default session
+bp daemon logs             # view daemon log
 
 # Actions with inline assertions (no extra bp eval needed)
 bp exec '[
@@ -573,7 +580,31 @@ await page.fill('.dropdown-search', 'United');
 await page.click('.dropdown-option:has-text("United States")');
 ```
 
+### WebSocket Daemon
+
+By default, `bp connect` spawns a lightweight background daemon that holds the CDP WebSocket open. Subsequent CLI commands connect via Unix socket (~5-15ms) instead of re-establishing WebSocket (~280-1030ms per command).
+
+```bash
+# Daemon spawns automatically on connect
+bp connect --provider generic --name dev
+
+# Subsequent commands use the fast daemon path
+bp exec -s dev '{"action":"snapshot"}'  # ~5-15ms overhead instead of ~280ms
+
+# Manage the daemon
+bp daemon status           # check health, PID, uptime
+bp daemon stop             # stop daemon
+bp daemon logs             # view daemon log
+
+# Disable daemon for direct WebSocket
+bp connect --no-daemon
+```
+
+The daemon is transparent — if it dies or becomes stale, CLI commands fall back to direct WebSocket silently. Each session gets its own daemon with a 60-minute idle timeout.
+
 ### Cloudflare Workers
+
+> Note: Cloudflare Workers' Node-compat runtime can expose parts of `node:net` with compatibility flags, but browser-pilot's daemon fast-path is intentionally CLI/Node-specific (Unix domain sockets + local background process). In Workers, use the normal direct WebSocket path shown below.
 
 ```typescript
 export default {

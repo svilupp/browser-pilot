@@ -30,6 +30,7 @@ import { audioCommand } from './commands/audio.ts';
 import { cleanCommand } from './commands/clean.ts';
 import { closeCommand } from './commands/close.ts';
 import { connectCommand } from './commands/connect.ts';
+import { daemonCommand } from './commands/daemon.ts';
 import { diagnoseCommand } from './commands/diagnose.ts';
 import { evalCommand } from './commands/eval.ts';
 import { execCommand } from './commands/exec.ts';
@@ -67,6 +68,7 @@ Commands:
   diagnose    Debug element selection issues
   text        Extract text content
   screenshot  Take screenshot
+  daemon      Manage daemon processes (status, stop, logs)
   close       Close session
   list        List sessions (--log-path, --log-tail, --info)
   clean       Clean up old sessions
@@ -253,6 +255,10 @@ async function main(): Promise<void> {
 
       case 'screenshot':
         await screenshotCommand(remaining, options);
+        break;
+
+      case 'daemon':
+        await daemonCommand(remaining, options);
         break;
 
       case 'close':

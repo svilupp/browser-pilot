@@ -33,6 +33,8 @@ bp connect [options]
 - `--api-key <key>` - API key (or use env vars)
 - `--project-id <id>` - Project ID (BrowserBase)
 - `--export-log <path>` - Duplicate logs to specified file for local analysis
+- `--no-daemon` - Skip daemon creation (direct WebSocket only)
+- `--daemon-idle <mins>` - Daemon idle timeout in minutes (default: 60)
 
 **Examples:**
 
@@ -48,6 +50,9 @@ bp connect -p browserbase -n prod --api-key $BROWSERBASE_API_KEY
 
 # Resume session
 bp connect --resume my-session
+
+# Without daemon (direct WebSocket only)
+bp connect --provider generic --name dev --no-daemon
 ```
 
 ### exec
@@ -388,6 +393,41 @@ bp close [options]
 bp close -s my-session
 ```
 
+### daemon
+
+Manage the WebSocket daemon for a session. The daemon holds the CDP WebSocket open so subsequent CLI commands connect via fast Unix socket (~5-15ms) instead of re-establishing WebSocket (~280-1030ms).
+
+```bash
+bp daemon <subcommand> [session]
+```
+
+**Subcommands:**
+- `status` - Show daemon PID, uptime, and connection state
+- `stop` - Stop daemon for a session
+- `logs` - Tail daemon log output
+
+**Examples:**
+
+```bash
+# Check daemon health
+bp daemon status
+bp daemon status my-session
+
+# Stop daemon
+bp daemon stop
+bp daemon stop my-session
+
+# View daemon logs
+bp daemon logs
+bp daemon logs my-session
+```
+
+**Notes:**
+- Daemon spawns automatically on `bp connect` (use `--no-daemon` to disable)
+- Each session gets its own daemon with a configurable idle timeout (default: 60 minutes)
+- If daemon dies, CLI falls back to direct WebSocket silently
+- Daemon logs are stored at `~/.browser-pilot/sessions/{id}/daemon.log`
+
 ## Global Options
 
 These options work with all commands:
@@ -566,17 +606,20 @@ Each session file contains:
   "exportLog": "./logs/my-session.jsonl",
   "createdAt": "2024-01-15T10:30:00Z",
   "lastActivity": "2024-01-15T10:35:00Z",
-  "currentUrl": "https://example.com"
+  "currentUrl": "https://example.com",
+  "daemon": {
+    "socketPath": "/Users/you/.browser-pilot/sessions/my-session/daemon.sock",
+    "pid": 12345,
+    "startedAt": "2024-01-15T10:30:01Z"
+  }
 }
 ```
 
-The `targetId` field ensures consistent page targeting when multiple browser tabs are open. The `exportLog` field is only present if `--export-log` was used during connect.
+The `targetId` field ensures consistent page targeting when multiple browser tabs are open. The `exportLog` field is only present if `--export-log` was used during connect. The `daemon` field is present when a daemon is running for the session.
 
 ## Session Attach Behavior
 
-`bp exec` and `bp eval` connect to saved sessions **lazily** — they no longer perform a preflight `/json/version` HTTP check before opening the WebSocket. Instead, they connect directly via WebSocket using the stored `wsUrl`. If the connection fails (e.g., the browser has been closed), the stale session file is automatically cleaned up and a clear error is reported.
-
-This reduces per-command latency and eliminates a class of false negatives where `/json/version` was unreachable but the WebSocket endpoint was still valid.
+`bp exec` and `bp eval` try the daemon fast-path first (Unix socket), then fall back to direct WebSocket. If a daemon is running for the session, commands connect via Unix socket (~5-15ms overhead). If the daemon is unavailable, they connect directly via WebSocket using the stored `wsUrl`. Stale daemons are auto-cleaned and stale session files are removed on connection failure.
 
 ## AI Agent Integration
 

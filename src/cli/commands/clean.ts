@@ -2,6 +2,7 @@
  * Clean command - Remove stale sessions
  */
 
+import { isDaemonAlive, stopDaemon } from '../../daemon/lifecycle.ts';
 import { output } from '../index.ts';
 import { deleteSessionFull, listSessions } from '../session.ts';
 
@@ -92,6 +93,10 @@ export async function cleanCommand(
   }
 
   for (const session of stale) {
+    // Stop daemon if running
+    if (session.daemon && isDaemonAlive(session.daemon.pid)) {
+      await stopDaemon(session.daemon.pid).catch(() => {});
+    }
     await deleteSessionFull(session.id);
   }
 

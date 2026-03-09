@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.0.14] - 2026-03-09
+
+### Added
+
+- WebSocket daemon for persistent CDP connections — `bp connect` now spawns a background daemon that holds the WebSocket open, reducing per-command overhead from ~280-1030ms to ~5-15ms via Unix socket fast-path (`bp daemon status/stop/logs`, `--no-daemon`, `--daemon-idle`)
+
 ## [0.0.13] - 2026-03-08
 
 ### Added

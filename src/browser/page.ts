@@ -22,6 +22,7 @@ import type {
   DeleteCookieOptions,
   SetCookieOptions,
 } from '../storage/types.ts';
+import { stringifyUnknown } from '../utils/json.ts';
 import {
   DEEP_QUERY_SCRIPT,
   waitForAnyElement,
@@ -2191,7 +2192,7 @@ export class Page {
       return {
         role,
         name,
-        value: value !== undefined ? String(value) : undefined,
+        value: value !== undefined ? stringifyUnknown(value) : undefined,
         ref,
         children: children.length > 0 ? children : undefined,
         disabled,
@@ -2275,7 +2276,7 @@ export class Page {
           selector,
           disabled,
           checked,
-          value: value !== undefined ? String(value) : undefined,
+          value: value !== undefined ? stringifyUnknown(value) : undefined,
         });
       }
     }
@@ -2834,7 +2835,7 @@ export class Page {
   private formatConsoleArgs(args: Array<{ value?: unknown; description?: string }>): string {
     return args
       .map((arg) => {
-        if (arg.value !== undefined) return String(arg.value);
+        if (arg.value !== undefined) return stringifyUnknown(arg.value);
         if (arg.description) return arg.description;
         return '[object]';
       })
