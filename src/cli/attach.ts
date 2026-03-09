@@ -1,19 +1,31 @@
 /**
  * Shared session attach helper for CLI commands.
- * Connects to a browser session lazily — no preflight /json/version check.
- * If the WebSocket connect fails, cleans up the stale session file.
+ *
+ * Tries the daemon fast-path first (Unix socket), then falls back
+ * to direct WebSocket connection (the original behavior).
+ * If the daemon is stale or unresponsive, cleans up and falls back silently.
  */
 
 import type { BatchOptions, BatchResult, Step } from '../actions/types.ts';
 import type { Browser } from '../browser/browser.ts';
 import type { Page } from '../browser/page.ts';
+import { clearDaemonFromSession, isDaemonAlive } from '../daemon/lifecycle.ts';
+import { DAEMON_MAX_AGE_MS } from '../daemon/types.ts';
 import { addBatchToPage, connect } from '../index.ts';
-import { deleteSession, getDefaultSession, loadSession, type SessionData } from './session.ts';
+import {
+  deleteSession,
+  getDefaultSession,
+  getSessionFilePath,
+  loadSession,
+  type SessionData,
+} from './session.ts';
 
 export interface AttachResult {
   session: SessionData;
   browser: Browser;
   page: Page & { batch: (steps: Step[], options?: BatchOptions) => Promise<BatchResult> };
+  /** Whether this attachment used the daemon fast-path */
+  viaDaemon: boolean;
 }
 
 /**
@@ -31,14 +43,102 @@ export async function resolveSession(sessionId?: string): Promise<SessionData> {
 }
 
 /**
+ * Check if a daemon is healthy: PID alive + socket not expired.
+ */
+function isDaemonHealthy(session: SessionData): boolean {
+  if (!session.daemon) return false;
+
+  // Check max age (60 minutes)
+  const daemonAge = Date.now() - new Date(session.daemon.startedAt).getTime();
+  if (daemonAge > DAEMON_MAX_AGE_MS) {
+    return false;
+  }
+
+  // Check heartbeat staleness (if heartbeat exists, it shouldn't be older than 3x interval)
+  if (session.daemon.lastHeartbeat) {
+    const heartbeatAge = Date.now() - new Date(session.daemon.lastHeartbeat).getTime();
+    if (heartbeatAge > 90_000) {
+      return false;
+    }
+  }
+
+  // Check PID is alive
+  return isDaemonAlive(session.daemon.pid);
+}
+
+/**
+ * Clean up a stale daemon (dead PID, expired socket, etc.)
+ * Logs the fallback for centralized debugging.
+ */
+async function cleanupStaleDaemon(session: SessionData, reason: string): Promise<void> {
+  // Log to stderr so it appears in CLI output for debugging
+  console.warn(`[browser-pilot] Daemon unavailable (${reason}), falling back to direct WebSocket`);
+
+  const sessionFilePath = getSessionFilePath(session.id);
+  await clearDaemonFromSession(sessionFilePath);
+
+  // Try to remove the socket file
+  if (session.daemon?.socketPath) {
+    try {
+      const fsPromises = await import('node:fs/promises');
+      await fsPromises.unlink(session.daemon.socketPath).catch(() => {});
+    } catch {
+      // Ignore
+    }
+  }
+}
+
+/**
  * Attach to a browser session.
- * Skips preflight validation — connects directly via WebSocket.
+ *
+ * Tries daemon fast-path first (if daemon info present and healthy),
+ * then falls back to direct WebSocket connection.
  * On failure, cleans up the stale session file.
  */
 export async function attachSession(
   session: SessionData,
   options: { trace?: boolean } = {}
 ): Promise<AttachResult> {
+  // 1. Try daemon fast-path if daemon info is present
+  if (session.daemon) {
+    if (!isDaemonHealthy(session)) {
+      const reason = !isDaemonAlive(session.daemon.pid)
+        ? 'PID not alive'
+        : 'daemon expired (>60min)';
+      await cleanupStaleDaemon(session, reason);
+    } else {
+      try {
+        const { createDaemonTransport } = await import('../daemon/transport.ts');
+        const { createCDPClientFromTransport } = await import('../cdp/client.ts');
+
+        const transport = await createDaemonTransport(session.daemon.socketPath);
+        const cdp = createCDPClientFromTransport(transport, {
+          debug: options.trace,
+        });
+
+        // The daemon already has the target attached, so we set the session ID
+        // on the client directly to match what the daemon has
+        const { Browser: BrowserClass } = await import('../browser/browser.ts');
+        const browser = BrowserClass.fromCDP(cdp, session);
+        const page = addBatchToPage(await browser.page(undefined, { targetId: session.targetId }));
+
+        // Hydrate ref map from session cache if URL matches
+        const currentUrl = await page.url();
+        const refCache = session.metadata?.refCache;
+        if (refCache && refCache.url === currentUrl) {
+          page.importRefMap(refCache.refMap);
+        }
+
+        return { session, browser, page, viaDaemon: true };
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        await cleanupStaleDaemon(session, reason);
+        // Fall through to direct WebSocket
+      }
+    }
+  }
+
+  // 2. Fallback: direct WebSocket connection (original behavior)
   let browser: Browser;
   try {
     browser = await connect({
@@ -64,5 +164,5 @@ export async function attachSession(
     page.importRefMap(refCache.refMap);
   }
 
-  return { session, browser, page };
+  return { session, browser, page, viaDaemon: false };
 }

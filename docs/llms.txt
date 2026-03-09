@@ -25,6 +25,13 @@ bp listen ws -m "*realtime*"       # WebSocket traffic matching pattern
 bp listen http -m "*/api/*"        # HTTP traffic, filtered
 bp listen all -o trace.jsonl       # All traffic to file
 
+# Daemon (persistent CDP connection, auto-spawned on connect)
+bp connect --no-daemon             # Skip daemon (direct WS only)
+bp connect --daemon-idle 30        # Custom idle timeout (minutes)
+bp daemon status                   # Check daemon health
+bp daemon stop                     # Stop daemon
+bp daemon logs                     # View daemon log
+
 # Session management
 bp list                            # List sessions
 bp close -s <session-id>           # Close session

@@ -102,6 +102,7 @@ function createMockCDPClient() {
 
     off: mock(() => {}),
     onAny: mock(() => {}),
+    offAny: mock(() => {}),
     close: mock(() => Promise.resolve()),
     attachToTarget: mock(() => Promise.resolve('session-id')),
     sessionId: 'test-session',

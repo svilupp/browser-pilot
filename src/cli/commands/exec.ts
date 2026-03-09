@@ -203,7 +203,8 @@ export async function execCommand(
 
   let actions: Step | Step[];
   try {
-    actions = JSON.parse(actionsJson);
+    const parsed: unknown = JSON.parse(actionsJson);
+    actions = parsed as Step | Step[];
   } catch {
     const snippet = actionsJson.substring(0, 80);
     const looksLikeEvaluate = /evaluate/i.test(actionsJson);

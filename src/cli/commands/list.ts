@@ -7,6 +7,7 @@
  *   --info            Show detailed session info with log stats
  */
 
+import { isDaemonAlive } from '../../daemon/lifecycle.ts';
 import { output } from '../index.ts';
 import {
   deleteSessionFull,
@@ -212,10 +213,16 @@ export async function listCommand(
 
   for (const session of displaySessions) {
     const age = getAge(new Date(session.lastActivity));
+    const daemonStatus = session.daemon
+      ? isDaemonAlive(session.daemon.pid)
+        ? 'running'
+        : 'dead'
+      : 'none';
     console.log(`  ${session.id}`);
     console.log(`    Provider: ${session.provider}`);
     console.log(`    URL: ${session.currentUrl}`);
     console.log(`    Last activity: ${age}`);
+    console.log(`    Daemon: ${daemonStatus}`);
     console.log('');
   }
 

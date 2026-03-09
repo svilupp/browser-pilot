@@ -43,10 +43,11 @@ bp snapshot -i
 ## Quick Reference
 
 ```bash
-# Connect
+# Connect (daemon spawns automatically for fast subsequent commands)
 bp connect --provider generic              # Local Chrome (auto-discovers)
 bp connect --provider generic --export-log ./logs/session.jsonl  # With local logs
 bp connect --provider browserbase --name s # Cloud browser
+bp connect --no-daemon                     # Direct WebSocket only (no daemon)
 
 # Snapshot
 bp snapshot -i                         # Interactive elements only (recommended)
@@ -85,6 +86,11 @@ bp list                    # List sessions
 bp list --json             # JSON output
 bp close -s session-name   # Close session
 bp actions                 # Complete action reference
+
+# Daemon management
+bp daemon status           # Check daemon health
+bp daemon stop             # Stop daemon
+bp daemon logs             # View daemon log
 ```
 
 ## Basic Workflow
@@ -311,6 +317,7 @@ Run `bp audio check` first. Then see [VOICE_AGENT_TESTING.md](./VOICE_AGENT_TEST
 13. **Debug a past session** - `bp list -s <name> --log-tail 50` shows recent actions; `cat $(bp list -s <name> --log-path)` dumps the full JSONL execution log
 14. **Use assertions to verify in one batch** - `assertUrl`, `assertText`, `assertVisible`, `assertExists`, `assertValue` let you verify state without a separate `bp eval` call
 15. **Use retry for flaky async content** - Any step supports `retry: N` and `retryDelay: ms` for bounded retries
+16. **Daemon reduces CLI overhead** - `bp connect` auto-spawns a daemon (~5-15ms per command vs ~280-1030ms direct WS); use `bp daemon status` to check health
 
 ---
 

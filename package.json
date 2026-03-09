@@ -1,6 +1,6 @@
 {
   "name": "browser-pilot",
-  "version": "0.0.13",
+  "version": "0.0.14",
   "description": "Lightweight CDP-based browser automation for Node.js, Bun, and Cloudflare Workers",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -68,7 +68,7 @@
     "fixtures:serve": "bun tests/fixtures/server.ts"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.3.10",
+    "@biomejs/biome": "^2.4.6",
     "@types/bun": "latest",
     "chrome-launcher": "^1.2.1",
     "oxlint": "^1.51.0",
