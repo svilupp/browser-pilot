@@ -13,6 +13,16 @@ let loopbackBaseUrl = '';
 let lanBaseUrl = '';
 let lanHost = '127.0.0.1';
 
+interface ExecStepResultJson {
+  payload?: string;
+  requestId?: string;
+}
+
+interface ExecStepJson extends Record<string, unknown> {
+  text?: string;
+  result?: ExecStepResultJson;
+}
+
 describe('CLI env and trace regression coverage', () => {
   beforeAll(async () => {
     await setup();
@@ -89,7 +99,7 @@ describe('CLI env and trace regression coverage', () => {
   </body>
 </html>`;
 
-    const clients = new Set<any>();
+    const clients = new Set<Bun.ServerWebSocket<unknown>>();
     let heartbeat = 0;
 
     realtimeServer = Bun.serve({
@@ -97,7 +107,7 @@ describe('CLI env and trace regression coverage', () => {
       fetch(req, server) {
         const url = new URL(req.url);
         if (url.pathname === '/ws') {
-          if (server.upgrade(req)) {
+          if (server.upgrade(req, { data: undefined })) {
             return undefined;
           }
           return new Response('upgrade failed', { status: 400 });
@@ -112,6 +122,7 @@ describe('CLI env and trace regression coverage', () => {
         });
       },
       websocket: {
+        message() {},
         open(ws) {
           clients.add(ws);
           ws.send(JSON.stringify({ type: 'session.ready', ts: Date.now() }));
@@ -130,9 +141,13 @@ describe('CLI env and trace regression coverage', () => {
       }
     }, 150);
 
-    loopbackBaseUrl = `http://127.0.0.1:${realtimeServer.port}`;
-    lanHost = await resolveReachableHost(realtimeServer.port);
-    lanBaseUrl = `http://${lanHost}:${realtimeServer.port}`;
+    const serverPort = realtimeServer.port;
+    if (serverPort === undefined) {
+      throw new Error('Expected Bun.serve() to allocate a port');
+    }
+    loopbackBaseUrl = `http://127.0.0.1:${serverPort}`;
+    lanHost = await resolveReachableHost(serverPort);
+    lanBaseUrl = `http://${lanHost}:${serverPort}`;
   });
 
   afterAll(async () => {
@@ -499,7 +514,7 @@ function expectExecSuccess(result: Awaited<ReturnType<typeof runCLI>>) {
   expect(result.exitCode).toBe(0);
   const payload = result.json as {
     success?: boolean;
-    steps: Array<Record<string, unknown>>;
+    steps: ExecStepJson[];
   };
   if (payload?.success !== true) {
     throw new Error(

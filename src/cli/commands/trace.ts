@@ -3,7 +3,7 @@ import { dirname, resolve } from 'node:path';
 import type { CanonicalTraceEvent, TraceView } from '../../trace/model.ts';
 import { type ListenMode, LiveTraceCollector } from '../../trace/live.ts';
 import { canonicalizeRecordingArtifact } from '../../recording/manifest.ts';
-import { buildTraceSummaries, buildTraceSummary, formatTraceSummaryPretty } from '../../trace/views.ts';
+import { buildTraceSummaries, buildTraceSummary } from '../../trace/views.ts';
 import { getSessionTracePath, readTraceEvents } from '../../trace/store.ts';
 import { attachSession, resolveSession } from '../attach.ts';
 import { output } from '../index.ts';

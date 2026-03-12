@@ -2,8 +2,8 @@
  * Env command - Browser/environment controls for sessions
  */
 
-import { dirname, join, resolve } from 'node:path';
-import { connect, getBrowserWebSocketUrl } from '../../index.ts';
+import { dirname } from 'node:path';
+import { connect, getBrowserWebSocketUrl, type Page } from '../../index.ts';
 import { grantAudioPermissions } from '../../audio/permissions.ts';
 import {
   applyNetworkOverride,
@@ -11,6 +11,7 @@ import {
   applyVisibilityState,
   normalizeStoredPermission,
   originFromUrl,
+  type StoredPermissionName,
 } from '../env-state.ts';
 import {
   generateSessionId,
@@ -146,6 +147,10 @@ interface ResolvedConnection {
   session: SessionData;
 }
 
+type PermissionPage = Pick<Page, 'evaluate' | 'cdpClient'>;
+type CDPPage = Pick<Page, 'cdpClient'>;
+type GeolocationPage = Pick<Page, 'setGeolocation' | 'clearGeolocation'>;
+
 export function parseEnvArgs(args: string[]): EnvOptions {
   const options: EnvOptions = {};
   let i = 0;
@@ -267,10 +272,6 @@ function toBytesPerSecond(raw?: string): number | undefined {
   return Math.round((value * 1000) / 8);
 }
 
-function resolveArtifactSessionDir(sessionId: string): string {
-  return join((process.env.HOME || ''), '.browser-pilot', 'sessions', sessionId);
-}
-
 async function resolveConnection(sessionId?: string, useLatestSession = false): Promise<ResolvedConnection> {
   if (sessionId) {
     const session = await loadSession(sessionId);
@@ -326,16 +327,11 @@ function clampRate(value?: number): number | undefined {
   return Math.round(value);
 }
 
-function mapPermissionForBrowser(permission: string): string | null {
-  if (permission === 'audio' || permission === 'audioCapture') return 'audioCapture';
-  if (permission === 'camera') return 'videoCapture';
-  if (permission === 'notifications') return 'notifications';
-  if (permission === 'geolocation') return 'geolocation';
-  if (permission === 'microphone') return 'audioCapture';
-  return null;
+function isStoredPermissionName(value: StoredPermissionName | null): value is StoredPermissionName {
+  return value !== null;
 }
 
-async function getPermissionStates(page: { evaluate<T>(expression: string): Promise<T> }): Promise<PermissionQuery[]> {
+async function getPermissionStates(page: Pick<Page, 'evaluate'>): Promise<PermissionQuery[]> {
   const expr = `
     (() => {
       const names = ['geolocation', 'microphone', 'audio-capture', 'camera', 'notifications', 'clipboard-read', 'clipboard-write'];
@@ -359,8 +355,7 @@ async function getPermissionStates(page: { evaluate<T>(expression: string): Prom
 async function permissionCommand(
   action: PermissionMode,
   nameInput: PermissionArg | string | undefined,
-  page: { evaluate<T>(expression: string): Promise<T>; cdp: { send(method: string, params?: Record<string, unknown>): Promise<unknown> } },
-  session: SessionData
+  page: PermissionPage
 ): Promise<{ action: PermissionMode; name: string; state?: unknown }[]> {
   const requested =
     nameInput && nameInput !== 'all' ? coercePermissionArg(nameInput) : 'all';
@@ -384,13 +379,13 @@ async function permissionCommand(
 
   if (action === 'grant') {
     const origin = await page.evaluate<string>("window.location.origin");
-    await page.cdp.send('Browser.grantPermissions', {
+    await page.cdpClient.send('Browser.grantPermissions', {
       permissions: protocolNames.filter((value) => value !== 'all' && value !== 'audio'),
       origin,
     });
 
     if (permissionNames.includes('microphone')) {
-      await grantAudioPermissions(page.cdp, origin);
+      await grantAudioPermissions(page.cdpClient, origin);
     }
 
     const result = await getPermissionStates(page);
@@ -402,12 +397,12 @@ async function permissionCommand(
     for (const permission of protocolNames) {
       if (permission === 'all') continue;
       try {
-        await page.cdp.send('Browser.resetPermissions', {
+        await page.cdpClient.send('Browser.resetPermissions', {
           permissions: [permission],
           origin,
         });
       } catch {
-        await page.cdp.send('Browser.revokePermissions', {
+        await page.cdpClient.send('Browser.revokePermissions', {
           permissions: [permission],
           origin,
         } as Record<string, unknown>);
@@ -432,10 +427,10 @@ function formatPermissionOutput(session: SessionData, data: { action: Permission
 async function runNetworkCommand(
   action: NetworkAction,
   options: EnvOptions,
-  page: { cdp: { send(method: string, params?: Record<string, unknown>): Promise<unknown> } },
+  page: CDPPage,
   session: SessionData
 ): Promise<void> {
-  await page.cdp.send('Network.enable');
+  await page.cdpClient.send('Network.enable');
 
   const applyNetworkState = async (
     offline: boolean,
@@ -453,7 +448,7 @@ async function runNetworkCommand(
     } as Record<string, unknown>;
 
     try {
-      await page.cdp.send('Network.emulateNetworkConditionsByRule', {
+      await page.cdpClient.send('Network.emulateNetworkConditionsByRule', {
         offline,
         matchedNetworkConditions: [
           {
@@ -464,15 +459,15 @@ async function runNetworkCommand(
           },
         ],
       } as Record<string, unknown>);
-      await page.cdp.send('Network.overrideNetworkState', state);
+      await page.cdpClient.send('Network.overrideNetworkState', state);
     } catch {
-      await page.cdp.send('Network.emulateNetworkConditions', state);
+      await page.cdpClient.send('Network.emulateNetworkConditions', state);
     }
   };
 
   if (action === 'offline') {
     await applyNetworkState(true, options.latency ?? 0, 0, 0, 'none');
-    await applyNetworkOverride(page.cdp as never, {
+    await applyNetworkOverride(page.cdpClient, {
       offline: true,
       latency: options.latency ?? 0,
     });
@@ -483,7 +478,7 @@ async function runNetworkCommand(
 
   if (action === 'online') {
     await applyNetworkState(false, 0, -1, -1, 'wifi');
-    await applyNetworkOverride(page.cdp as never, {
+    await applyNetworkOverride(page.cdpClient, {
       offline: false,
       latency: 0,
     });
@@ -497,7 +492,7 @@ async function runNetworkCommand(
   const up = clampRate(toBytesPerSecond(options.up)) ?? 500_000;
 
   await applyNetworkState(false, latency, down, up, 'wifi');
-  await applyNetworkOverride(page.cdp as never, {
+  await applyNetworkOverride(page.cdpClient, {
     offline: false,
     latency,
   });
@@ -507,17 +502,17 @@ async function runNetworkCommand(
 
 async function runVisibilityCommand(
   state: VisibilityStateArg,
-  page: { cdp: { send(method: string, params?: Record<string, unknown>): Promise<unknown> } },
+  page: CDPPage,
   session: SessionData
 ): Promise<void> {
-  await applyVisibilityState(page.cdp as never, state);
+  await applyVisibilityState(page.cdpClient, state);
   console.log(`Session ${session.id}: visibility set to ${state}`);
 }
 
 async function runGeolocationCommand(
   action: GeoAction,
   options: EnvOptions,
-  page: { setGeolocation: (options: { latitude: number; longitude: number; accuracy?: number }) => Promise<void>; clearGeolocation: () => Promise<void> },
+  page: GeolocationPage,
   session: SessionData
 ): Promise<void> {
   if (action === 'clear') {
@@ -558,7 +553,7 @@ export async function envCommand(
     if (options.topCommand === 'permissions') {
       const permissionMode = options.permissionMode ?? 'get';
       if (permissionMode === 'get' && !options.permissionName) {
-        const result = await permissionCommand(permissionMode, 'all', page, session);
+        const result = await permissionCommand(permissionMode, 'all', page);
         if (outputAsJson) {
           console.log(JSON.stringify({ session: session.id, permissions: result }, null, 2));
         } else {
@@ -567,21 +562,25 @@ export async function envCommand(
         return;
       }
 
-      const result = await permissionCommand(permissionMode, options.permissionName, page, session);
+      const result = await permissionCommand(permissionMode, options.permissionName, page);
       if (permissionMode !== 'get') {
         const nextPermissions =
           permissionMode === 'reset'
             ? []
             : (() => {
-                const current = new Set((existingEnv.permissions ?? []).map((value) => normalizeStoredPermission(value)).filter(Boolean));
-                const requested =
+                const current = new Set<StoredPermissionName>(
+                  (existingEnv.permissions ?? [])
+                    .map((value) => normalizeStoredPermission(value))
+                    .filter(isStoredPermissionName)
+                );
+                const requested: StoredPermissionName[] =
                   options.permissionName === 'all' || !options.permissionName
                     ? ['microphone', 'camera', 'notifications', 'geolocation']
-                    : [normalizeStoredPermission(options.permissionName)].filter(Boolean);
+                    : [normalizeStoredPermission(options.permissionName)].filter(isStoredPermissionName);
                 if (permissionMode === 'grant') {
-                  for (const name of requested) current.add(name!);
+                  for (const name of requested) current.add(name);
                 } else {
-                  for (const name of requested) current.delete(name!);
+                  for (const name of requested) current.delete(name);
                 }
                 return [...current];
               })();
@@ -592,7 +591,7 @@ export async function envCommand(
         };
         await updateSession(session.id, { metadata: { env: nextEnv } });
         const currentUrl = await page.evaluate<string>('window.location.href');
-        await applyPermissionState(page.cdp as never, originFromUrl(currentUrl), nextPermissions);
+        await applyPermissionState(page.cdpClient, originFromUrl(currentUrl), nextPermissions);
       }
       if (outputAsJson) {
         console.log(JSON.stringify({ session: session.id, action: permissionMode, permissions: result }, null, 2));
