@@ -204,12 +204,12 @@ describe('recording artifacts', () => {
       await readFile(result.recordingManifest!, 'utf-8')
     ) as RecordingManifest;
 
-    expect(manifest.sessionId).toBe('sess-redacted');
-    expect(manifest.success).toBe(true);
-    expect(manifest.frames).toHaveLength(1);
-    expect(manifest.frames[0]?.value).toBe(REDACTED_VALUE);
-    expect(manifest.frames[0]?.selector).toBe('#password');
-    expect(manifest.viewport).toEqual({ width: 1440, height: 900 });
+    expect(manifest.session.id).toBe('sess-redacted');
+    expect(manifest.actions).toHaveLength(1);
+    expect(manifest.screenshots).toHaveLength(1);
+    expect(manifest.actions[0]?.value).toBe(REDACTED_VALUE);
+    expect(manifest.actions[0]?.selector).toBe('#password');
+    expect(manifest.trace.events.some((event) => event.event === 'action.succeeded')).toBe(true);
 
     const overlayScript = page.evaluateScripts.find((script) =>
       script.includes('__bp-action-highlight')
@@ -237,11 +237,11 @@ describe('recording artifacts', () => {
       await readFile(result.recordingManifest!, 'utf-8')
     ) as RecordingManifest;
 
-    expect(manifest.sessionId).toBe('sess-failure');
-    expect(manifest.success).toBe(false);
-    expect(manifest.frames).toHaveLength(1);
-    expect(manifest.frames[0]?.success).toBe(false);
-    expect(fs.existsSync(join(tempDir, 'screenshots', manifest.frames[0]!.screenshot))).toBe(true);
+    expect(manifest.session.id).toBe('sess-failure');
+    expect(manifest.actions).toHaveLength(1);
+    expect(manifest.actions[0]?.success).toBe(false);
+    expect(manifest.trace.events.some((event) => event.event === 'action.failed')).toBe(true);
+    expect(fs.existsSync(join(tempDir, 'screenshots', manifest.screenshots[0]!.file))).toBe(true);
   });
 
   test('accumulates frames across multiple executions', async () => {
@@ -257,7 +257,7 @@ describe('recording artifacts', () => {
     const manifest1 = JSON.parse(
       await readFile(join(tempDir, 'recording.json'), 'utf-8')
     ) as RecordingManifest;
-    expect(manifest1.frames).toHaveLength(1);
+    expect(manifest1.actions).toHaveLength(1);
 
     // Second execution: another click — frames should accumulate
     const result2 = await executor.execute([{ action: 'click', selector: '#btn2' }], {
@@ -268,13 +268,13 @@ describe('recording artifacts', () => {
     const manifest2 = JSON.parse(
       await readFile(join(tempDir, 'recording.json'), 'utf-8')
     ) as RecordingManifest;
-    expect(manifest2.frames).toHaveLength(2);
-    expect(manifest2.frames[0]?.action).toBe('click');
-    expect(manifest2.frames[1]?.action).toBe('click');
+    expect(manifest2.actions).toHaveLength(2);
+    expect(manifest2.actions[0]?.action).toBe('click');
+    expect(manifest2.actions[1]?.action).toBe('click');
 
     // Both screenshots should exist
-    expect(fs.existsSync(join(tempDir, 'screenshots', manifest2.frames[0]!.screenshot))).toBe(true);
-    expect(fs.existsSync(join(tempDir, 'screenshots', manifest2.frames[1]!.screenshot))).toBe(true);
+    expect(fs.existsSync(join(tempDir, 'screenshots', manifest2.screenshots[0]!.file))).toBe(true);
+    expect(fs.existsSync(join(tempDir, 'screenshots', manifest2.screenshots[1]!.file))).toBe(true);
 
     // Original recordedAt should be preserved
     expect(manifest2.recordedAt).toBe(manifest1.recordedAt);

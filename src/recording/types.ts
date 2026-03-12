@@ -7,6 +7,7 @@
  */
 
 import type { Step } from '../actions/types.ts';
+import type { CanonicalTraceEvent } from '../trace/model.ts';
 
 /**
  * Quality indicator for selector reliability.
@@ -357,6 +358,7 @@ export interface FullRecordingOutput extends RecordingOutput {
   network?: NetworkRecording;
   websockets?: WebSocketRecording;
   timeline?: TimelineEntry[];
+  traceEvents?: CanonicalTraceEvent[];
 }
 
 // Re-export Step for convenience

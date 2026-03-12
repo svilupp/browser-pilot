@@ -24,6 +24,10 @@ export async function grantAudioPermissions(cdp: CDPClient, origin?: string): Pr
   await cdp.send('Page.addScriptToEvaluateOnNewDocument', {
     source: PERMISSIONS_OVERRIDE_SCRIPT,
   });
+  await cdp.send('Runtime.evaluate', {
+    expression: PERMISSIONS_OVERRIDE_SCRIPT,
+    awaitPromise: false,
+  });
 }
 
 const PERMISSIONS_OVERRIDE_SCRIPT = `

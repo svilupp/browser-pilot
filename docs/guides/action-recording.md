@@ -1,171 +1,142 @@
 # Action Recording Guide
 
-Capture browser workflows in two complementary ways:
+Use `bp record` to capture a human workflow into the canonical Browser Pilot artifact.
 
-- `bp record` for human-driven workflow capture into replayable JSON steps
-- `bp connect --record` (or `bp exec --record`) for screenshot trails while replaying workflows
+Use `bp exec --record` when you already have steps and want screenshot proof of replay.
 
-Use `bp record` when you want to create or refine an automation. Use recording when you want visual proof of what a replay actually did.
+## The model
 
-## Quick Start
+- `record` captures a human demonstration
+- `record summary` and `record inspect` explain the artifact without opening raw JSON
+- `record derive` turns the artifact into replayable workflow steps
+- `trace summary` reads the same artifact to answer websocket, console, voice, permission, media, and session questions
 
-### 1. Record a workflow
+## Canonical artifact
 
-```bash
-# Record interactions from local Chrome
-bp record -f login.json
+New artifacts use `version: 2` and are shaped around one source of truth:
 
-# Or record from an existing session
-bp record -s my-session -f checkout.json
+```json
+{
+  "version": 2,
+  "recordedAt": "2026-03-12T15:00:00.000Z",
+  "session": {
+    "id": "checkout-demo",
+    "startUrl": "https://example.com",
+    "endUrl": "https://example.com/thanks",
+    "targetId": "page_123"
+  },
+  "recipe": {
+    "steps": []
+  },
+  "actions": [],
+  "screenshots": [],
+  "trace": {
+    "events": [],
+    "summaries": {}
+  },
+  "assertions": [],
+  "notes": [],
+  "artifacts": {
+    "recordingManifest": "recording.json",
+    "screenshotDir": "screenshots/"
+  }
+}
 ```
 
-Press `Ctrl+C` to stop and save.
+Key rule:
 
-### 2. Replay it with a screenshot trail
+- `trace.events` is the system of record
+- `recipe.steps` is derived automation
 
-The recommended approach is to enable recording at the session level:
-
-```bash
-bp connect --provider generic --name my-session --record
-bp exec -s my-session --file login.json
-bp exec -s my-session --file checkout.json
-```
-
-Session-level recording captures screenshots for **all** subsequent `bp exec` calls. Frames from multiple exec calls accumulate in the same `recording.json` manifest, giving you a complete visual trail across the entire session.
-
-You can also enable recording on individual exec calls:
+## Summary-first workflow
 
 ```bash
-bp exec -s my-session --record --file login.json
+bp record -s demo --profile automation -f ./artifacts/demo.recording.json
+# perform the flow manually, then stop with Ctrl+C
+bp record summary ./artifacts/demo.recording.json
+bp record inspect ./artifacts/demo.recording.json
+bp trace summary ./artifacts/demo.recording.json --view ws
+bp record derive ./artifacts/demo.recording.json -o workflow.json
+bp run workflow.json
 ```
 
-This writes:
+Why this order works:
 
-- `recording.json` — manifest for the replay
-- `screenshots/` — one screenshot per captured step
+- `summary` tells you whether the artifact is worth deeper inspection
+- `inspect` gives metadata and next commands
+- `trace summary --view ...` answers focused behavior questions
+- `derive` produces the reusable recipe only after the artifact is understood
 
-By default the replay artifacts go into the session directory. Use `--record-dir` to write them somewhere else:
+## Profiles
+
+Available profiles:
+
+- `automation`
+- `realtime`
+- `voice`
+- `auth`
+
+Use the profile that matches the job so later analysis is easier.
+
+## Deriving automation
+
+`bp record derive` produces replayable steps that can be run directly:
 
 ```bash
-bp exec --record --record-dir ./artifacts/replay --file checkout.json
+bp record derive ./artifacts/demo.recording.json -o workflow.json
+bp run workflow.json --json
 ```
 
-## What Gets Redacted
-
-Recording redaction is driven by the field itself, not the action type.
-
-Values are automatically replaced with `[REDACTED]` when the interacted field is marked sensitive, including:
-
-- `type="password"`
-- `type="hidden"`
-- `autocomplete="current-password"`
-- `autocomplete="new-password"`
-- `autocomplete="one-time-code"`
-- card autofill hints such as `cc-number`, `cc-csc`, `cc-exp`, `cc-exp-month`, `cc-exp-year`
-
-The same redaction rules apply to:
-
-- `bp record` output
-- `bp exec --record` screenshot overlays
-- `bp exec --record` manifest values in `recording.json`
-
-## Replay Recording Options
-
-### Session-level (recommended)
+Then harden the flow with trace-backed assertions if needed:
 
 ```bash
-bp connect --record --record-format webp --record-quality 40
-bp exec --file workflow.json
-bp exec --file another-workflow.json   # frames append to the same manifest
+bp exec -s demo '[
+  {"action":"waitForWsMessage","match":"*realtime*","where":{"type":"session.ready"}},
+  {"action":"assertNoConsoleErrors","windowMs":500},
+  {"action":"assertTextChanged","selector":"#status","from":"Connecting","to":"Live"}
+]'
 ```
 
-Session-level options: `--record`, `--record-format`, `--record-quality`, `--no-highlights`.
+## Relationship to trace
 
-### Per-exec
+The artifact is not just for replay. It is also for analysis.
+
+Examples:
 
 ```bash
-bp exec --record --record-format webp --record-quality 40 --file workflow.json
-bp exec --record --no-highlights --file workflow.json
-bp exec --record --record-dir ./artifacts/replay '[{"action":"click","selector":"#checkout"}]'
+bp trace summary ./artifacts/demo.recording.json --view ws
+bp trace summary ./artifacts/demo.recording.json --view console
+bp trace summary ./artifacts/demo.recording.json --view voice
+bp trace export ./artifacts/demo.recording.json -o trace-bundle.json
 ```
 
-Per-exec `--record` flags override session-level settings for that call.
+Use `trace` when the question is temporal or causal. Use `record derive` when the goal is automation.
 
-Options:
+## Replay proof with exec --record
 
-- `--record` — enable replay screenshots
-- `--record-dir <path>` — override the output directory
-- `--record-format <png|jpeg|webp>` — choose screenshot format
-- `--record-quality <0-100>` — image quality for `jpeg`/`webp`
-- `--no-highlights` — disable click/fill/assert overlays
-
-## Accumulative Recording
-
-When recording is enabled at the session level (`bp connect --record`), frames from multiple `bp exec` calls append to the same `recording.json` manifest. This is useful for multi-step workflows where you run several exec calls in sequence:
+If you already have a workflow and want evidence of replay, use `exec --record`:
 
 ```bash
-bp connect --record --name checkout-test
-
-# Each exec call adds its frames to the same manifest
-bp exec '{"action":"goto","url":"https://shop.example.com"}'
-bp exec '[{"action":"fill","selector":"#search","value":"laptop"},{"action":"submit","selector":"form"}]'
-bp exec '{"action":"click","selector":".product-card"}'
-bp exec '[{"action":"click","selector":"#add-to-cart"},{"action":"assertText","expect":"Added"}]'
-
-# recording.json now contains frames from all four exec calls
-cat ~/.browser-pilot/sessions/checkout-test/recording.json | jq '.frames | length'
+bp connect --provider generic --name validation --record
+bp exec -s validation -f workflow.json
+bp exec -s validation '[{"action":"assertUrl","expect":"/dashboard"}]'
 ```
 
-Recording settings (format, quality, highlights) are stored in the session metadata and persist across commands. You do not need to repeat them on each `bp exec` call.
+This writes a canonical artifact plus screenshots into the session directory. Session-level recording accumulates frames across multiple `bp exec` calls.
 
-## What the Manifest Contains
+## Redaction
 
-`recording.json` includes:
+Sensitive values are redacted based on the field metadata, including common password, OTP, and payment-card patterns.
 
-- session identifier
-- start and end URLs
-- viewport
-- format and quality
-- overall success flag
-- one frame entry per captured step
+Redaction applies to:
 
-Each frame includes:
+- `bp record`
+- `bp exec --record`
+- screenshot overlays and stored manifest values
 
-- action name
-- selector used
-- redacted value when applicable
-- success/failure
-- timing
-- screenshot filename
-- page URL and page title at capture time
+## Common mistakes
 
-Even if replay stops on a failed step, browser-pilot still writes the manifest so the artifacts remain usable for debugging.
-
-## Recommended Workflow
-
-```bash
-# 1. Record manually
-bp record -f login.json
-
-# 2. Connect with session-level recording enabled
-bp connect --record --name validation
-
-# 3. Replay and inspect machine-readable results (screenshots captured automatically)
-bp exec -f login.json --json
-
-# 4. Run additional steps — frames accumulate in the same manifest
-bp exec '[{"action":"assertUrl","expect":"/dashboard"}]' --json
-
-# 5. Inspect the captured frames
-cat ~/.browser-pilot/sessions/validation/recording.json | jq '.frames[] | {action, success, screenshot, value}'
-```
-
-## Cleanup
-
-Recorded screenshots accumulate in session directories. Trim older sessions by total disk usage:
-
-```bash
-bp clean --max-size 500MB
-```
-
-This removes the oldest sessions first and stops any attached daemons before deletion.
+- Opening the raw artifact first instead of using `record summary`
+- Using `record` for replay proof when `exec --record` is the right tool
+- Reusing a noisy session when you wanted a clean capture
+- Deriving steps before checking the artifact's trace summary

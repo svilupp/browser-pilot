@@ -6,38 +6,19 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.0-blue?style=flat&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![License](https://img.shields.io/npm/l/browser-pilot.svg)](https://github.com/svilupp/browser-pilot/blob/main/LICENSE)
 
-Lightweight CDP-based browser automation for AI agents. Zero dependencies, works in Node.js, Bun, and Cloudflare Workers.
+Automation-first CDP browser control for AI agents.
 
-```typescript
-import { connect } from 'browser-pilot';
+Browser Pilot now teaches one workflow model:
 
-const browser = await connect({ provider: 'browserbase', apiKey: process.env.BROWSERBASE_API_KEY });
-const page = await browser.page();
+- inspect the page
+- act in the browser
+- record a manual workflow
+- trace behavior over time
+- exercise voice/media and browser conditions
 
-await page.goto('https://example.com/login');
-await page.fill(['#email', 'input[type=email]'], 'user@example.com');
-await page.fill(['#password', 'input[type=password]'], 'secret');
-await page.submit(['#login-btn', 'button[type=submit]']);
+`record` and `trace` are two interfaces over the same capture system. `record` writes the canonical artifact. `trace` explains either a live session or a saved artifact.
 
-const snapshot = await page.snapshot();
-console.log(snapshot.text); // Accessibility tree as text
-
-await browser.close();
-```
-
-## Why browser-pilot?
-
-| Problem with Playwright/Puppeteer | browser-pilot Solution |
-|-----------------------------------|------------------------|
-| Won't run in Cloudflare Workers | Pure Web Standard APIs, zero Node.js dependencies |
-| Bun CDP connection bugs | Custom CDP client that works everywhere |
-| Single-selector API (fragile) | Multi-selector by default: `['#primary', '.fallback']` |
-| No action batching (high latency) | Batch DSL: one call for entire sequences |
-| No inline assertions (extra API calls to verify) | Built-in assertions: verify state within the same batch |
-| No AI-optimized snapshots | Built-in accessibility tree extraction |
-| No audio I/O for voice agents | Mic injection + output capture + Whisper transcription |
-
-## Installation
+## Install
 
 ```bash
 bun add browser-pilot
@@ -45,690 +26,118 @@ bun add browser-pilot
 npm install browser-pilot
 ```
 
-## Providers
-
-### BrowserBase (Recommended for production)
-
-```typescript
-const browser = await connect({
-  provider: 'browserbase',
-  apiKey: process.env.BROWSERBASE_API_KEY,
-  projectId: process.env.BROWSERBASE_PROJECT_ID, // optional
-});
-```
-
-### Browserless
-
-```typescript
-const browser = await connect({
-  provider: 'browserless',
-  apiKey: process.env.BROWSERLESS_API_KEY,
-});
-```
-
-### Generic (Local Chrome)
+For local Chrome:
 
 ```bash
-# Start Chrome with remote debugging
-chrome --remote-debugging-port=9222
+/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome \
+  --remote-debugging-port=9222 \
+  --user-data-dir=/tmp/browser-pilot-profile
 ```
 
-```typescript
-const browser = await connect({
-  provider: 'generic',
-  wsUrl: 'ws://localhost:9222/devtools/browser/...', // optional, auto-discovers
-});
-```
-
-## Core Concepts
-
-### Multi-Selector (Robust Automation)
-
-Every action accepts `string | string[]`. When given an array, tries each selector in order until one works:
-
-```typescript
-// Tries #submit first, falls back to alternatives
-await page.click(['#submit', 'button[type=submit]', '.submit-btn']);
-
-// Cookie consent - try multiple common patterns
-await page.click([
-  '#accept-cookies',
-  '.cookie-accept',
-  'button:has-text("Accept")',
-  '[data-testid="cookie-accept"]'
-], { optional: true, timeout: 3000 });
-```
-
-### Built-in Waiting
-
-Every action automatically waits for the element to be visible before interacting:
-
-```typescript
-// No separate waitFor needed - this waits automatically
-await page.click('.dynamic-button', { timeout: 5000 });
-
-// Explicit waiting when needed
-await page.waitFor('.loading', { state: 'hidden' });
-await page.waitForNavigation();
-await page.waitForNetworkIdle();
-```
-
-### Batch Actions
-
-Execute multiple actions in a single call with full result tracking:
-
-```typescript
-const result = await page.batch([
-  { action: 'goto', url: 'https://example.com/login' },
-  { action: 'fill', selector: '#email', value: 'user@example.com' },
-  { action: 'fill', selector: '#password', value: 'secret' },
-  { action: 'submit', selector: '#login-btn' },
-  { action: 'wait', waitFor: 'navigation' },
-  { action: 'snapshot' },
-]);
-
-console.log(result.success); // true if all steps succeeded
-console.log(result.totalDurationMs); // total execution time
-console.log(result.steps[5].result); // snapshot from step 5
-```
-
-Assertion steps verify expected state within the same batch — no extra round trips. Available: `assertVisible`, `assertExists`, `assertText`, `assertUrl`, `assertValue`.
-
-```typescript
-const result = await page.batch([
-  { action: 'goto', url: 'https://example.com/login' },
-  { action: 'fill', selector: '#email', value: 'user@example.com' },
-  { action: 'fill', selector: '#password', value: 'secret' },
-  { action: 'submit', selector: '#login-btn' },
-  { action: 'assertUrl', expect: '/dashboard' },
-  { action: 'assertVisible', selector: '.welcome-message' },
-]);
-```
-
-Any step supports `retry` and `retryDelay` for flaky or async content:
-
-```typescript
-{ action: 'assertVisible', selector: '.async-content', retry: 3, retryDelay: 1000 }
-```
-
-### AI-Optimized Snapshots
-
-Get the page state in a format perfect for LLMs:
-
-```typescript
-const snapshot = await page.snapshot();
-
-// Structured accessibility tree
-console.log(snapshot.accessibilityTree);
-
-// Interactive elements with refs
-console.log(snapshot.interactiveElements);
-// [{ ref: 'e1', role: 'button', name: 'Submit', selector: '...' }, ...]
-
-// Text representation for LLMs
-console.log(snapshot.text);
-// - main ref:e1
-//   - heading "Welcome" ref:e2
-//   - button "Get Started" ref:e3
-//   - textbox ref:e4 placeholder="Email"
-```
-
-### Ref-Based Selectors
-
-After taking a snapshot, use element refs directly as selectors:
-
-```typescript
-const snapshot = await page.snapshot();
-// Output shows: button "Submit" ref:e4
-
-// Click using the ref - no fragile CSS needed
-await page.click('ref:e4');
-
-// Fill input by ref
-await page.fill('ref:e23', 'hello@example.com');
-
-// Combine ref with CSS fallbacks
-await page.click(['ref:e4', '#submit', 'button[type=submit]']);
-```
-
-Refs are stable until page navigation. Always take a fresh snapshot after navigating.
-CLI note: refs are cached per session+URL after a snapshot, so you can reuse them across CLI calls
-until navigation changes the URL.
-
-## Page API
-
-### Navigation
-
-```typescript
-await page.goto(url, options?)
-await page.reload(options?)
-await page.goBack(options?)
-await page.goForward(options?)
-
-const url = await page.url()
-const title = await page.title()
-```
-
-### Actions
-
-All actions accept `string | string[]` for selectors:
-
-```typescript
-await page.click(selector, options?)
-await page.fill(selector, value, options?)      // clears first by default
-await page.type(selector, text, options?)       // types character by character
-await page.select(selector, value, options?)    // native <select>
-await page.select({ trigger, option, value, match }, options?)  // custom dropdown
-await page.check(selector, options?)
-await page.uncheck(selector, options?)
-await page.submit(selector, options?)           // tries Enter, then click
-await page.press(key)
-await page.focus(selector, options?)
-await page.hover(selector, options?)
-await page.scroll(selector, options?)
-```
-
-### Waiting
-
-```typescript
-await page.waitFor(selector, { state: 'visible' | 'hidden' | 'attached' | 'detached' })
-await page.waitForNavigation(options?)
-await page.waitForNetworkIdle({ idleTime: 500 })
-```
-
-### Content
-
-```typescript
-const snapshot = await page.snapshot()
-const text = await page.text(selector?)
-const screenshot = await page.screenshot({ format: 'png', fullPage: true })
-const result = await page.evaluate(() => document.title)
-```
-
-### Files
-
-```typescript
-await page.setInputFiles(selector, [{ name: 'file.pdf', mimeType: 'application/pdf', buffer: data }])
-const download = await page.waitForDownload(() => page.click('#download-btn'))
-```
-
-### Emulation
-
-```typescript
-import { devices } from 'browser-pilot';
-
-await page.emulate(devices['iPhone 14']);     // Full device emulation
-await page.setViewport({ width: 1280, height: 720, deviceScaleFactor: 2 });
-await page.setUserAgent('Custom UA');
-await page.setGeolocation({ latitude: 37.7749, longitude: -122.4194 });
-await page.setTimezone('America/New_York');
-await page.setLocale('fr-FR');
-```
-
-Devices: `iPhone 14`, `iPhone 14 Pro Max`, `Pixel 7`, `iPad Pro 11`, `Desktop Chrome`, `Desktop Firefox`
-
-### Audio I/O
-
-```typescript
-// Set up audio input/output interception
-await page.setupAudio();
-
-// Play audio into the page's fake microphone
-await page.audioInput.play(wavBytes, { waitForEnd: true });
-
-// Capture audio output until silence
-const capture = await page.audioOutput.captureUntilSilence({ silenceTimeout: 5000 });
-
-// Full round-trip: play input → capture response
-const result = await page.audioRoundTrip({ input: wavBytes, silenceTimeout: 5000 });
-
-// Transcribe captured audio (requires OPENAI_API_KEY)
-import { transcribe } from 'browser-pilot';
-const { text } = await transcribe(capture);
-```
-
-### Request Interception
-
-```typescript
-// Block images and fonts
-await page.blockResources(['Image', 'Font']);
-
-// Mock API responses
-await page.route('**/api/users', { status: 200, body: { users: [] } });
-
-// Full control
-await page.intercept('*api*', async (request, actions) => {
-  if (request.url.includes('blocked')) await actions.fail();
-  else await actions.continue({ headers: { ...request.headers, 'X-Custom': 'value' } });
-});
-```
-
-### Cookies & Storage
-
-```typescript
-// Cookies
-const cookies = await page.cookies();
-await page.setCookie({ name: 'session', value: 'abc', domain: '.example.com' });
-await page.clearCookies();
-
-// localStorage / sessionStorage
-await page.setLocalStorage('key', 'value');
-const value = await page.getLocalStorage('key');
-await page.clearLocalStorage();
-```
-
-### Console & Dialogs
-
-```typescript
-// Capture console messages
-await page.onConsole((msg) => console.log(`[${msg.type}] ${msg.text}`));
-
-// Handle dialogs (alert, confirm, prompt)
-await page.onDialog(async (dialog) => {
-  if (dialog.type === 'confirm') await dialog.accept();
-  else await dialog.dismiss();
-});
-
-// Collect messages during an action
-const { result, messages } = await page.collectConsole(async () => {
-  return await page.click('#button');
-});
-```
-
-**Important:** Native browser dialogs (`alert()`, `confirm()`, `prompt()`) block all CDP commands until handled. Always set up a dialog handler before triggering actions that may show dialogs.
-
-### Iframes
-
-Switch context to interact with iframe content:
-
-```typescript
-// Switch to iframe
-await page.switchToFrame('iframe#payment');
-
-// Now actions target the iframe
-await page.fill('#card-number', '4242424242424242');
-await page.fill('#expiry', '12/25');
-
-// Switch back to main document
-await page.switchToMain();
-await page.click('#submit-order');
-```
-
-Note: Cross-origin iframes cannot be accessed due to browser security.
-
-### Options
-
-```typescript
-interface ActionOptions {
-  timeout?: number;   // default: 30000ms
-  optional?: boolean; // return false instead of throwing on failure
-}
-```
-
-## CLI
-
-The CLI provides session persistence for interactive workflows:
+## Choose the command by job
+
+| Job | Primary commands |
+| --- | --- |
+| Inspect page state | `snapshot`, `page`, `forms`, `text`, `targets`, `diagnose` |
+| Act in the browser | `exec`, `run` |
+| Capture a human demo | `record` |
+| Investigate behavior over time | `trace` |
+| Exercise voice/media | `audio` |
+| Change browser conditions | `env` |
+
+## Golden path 1: automate a page
 
 ```bash
-# Connect to a browser
-bp connect --provider browserbase --name my-session
-bp connect --provider generic  # auto-discovers local Chrome
-bp connect --no-daemon          # skip daemon (direct WebSocket only)
-bp connect --daemon-idle 30     # custom idle timeout (minutes)
-
-# Execute actions
-bp exec -s my-session '{"action":"goto","url":"https://example.com"}'
-bp exec -s my-session '[
-  {"action":"fill","selector":"#search","value":"browser automation"},
-  {"action":"submit","selector":"#search-form"}
-]'
-
-# Get page state (note the refs in output)
-bp snapshot -s my-session --format text
-# Output: button "Submit" ref:e4, textbox "Email" ref:e5, ...
-
-# Use refs from snapshot for reliable targeting
-# Refs are cached per session+URL after snapshot
-bp exec -s my-session '{"action":"click","selector":"ref:e4"}'
-bp exec -s my-session '{"action":"fill","selector":"ref:e5","value":"test@example.com"}'
-
-# Quick discovery commands
-bp page -s my-session          # URL, title, headings, forms, interactive controls
-bp forms -s my-session         # Structured form metadata only
-bp targets -s my-session       # Browser tabs with targetIds
-bp connect --new-tab --url https://example.com --name fresh
-
-# Handle native dialogs (alert/confirm/prompt)
-bp exec --dialog accept '{"action":"click","selector":"#delete-btn"}'
-bp exec --record '[{"action":"click","selector":"#checkout"},{"action":"assertText","expect":"Thanks"}]'
-
-# Other commands
-bp text -s my-session --selector ".main-content"
-bp screenshot -s my-session --output page.png
-bp listen ws -m "*voice*"  # monitor WebSocket traffic
-bp list                    # list all sessions
-bp clean --max-size 500MB  # trim old sessions by disk usage
-bp close -s my-session     # close session
-bp actions                 # show complete action reference
-bp run workflow.json       # run a workflow file
-
-# Daemon management
-bp daemon status           # check daemon health
-bp daemon stop             # stop daemon for default session
-bp daemon logs             # view daemon log
-
-# Actions with inline assertions (no extra bp eval needed)
-bp exec '[
-  {"action":"goto","url":"https://example.com/login"},
-  {"action":"fill","selector":"#email","value":"user@example.com"},
-  {"action":"submit","selector":"form"},
-  {"action":"assertUrl","expect":"/dashboard"},
+bp connect --provider generic --name dev
+bp snapshot -i -s dev
+bp exec -s dev '[
+  {"action":"fill","selector":"ref:e5","value":"user@example.com"},
+  {"action":"click","selector":"ref:e7"},
   {"action":"assertText","expect":"Welcome"}
 ]'
 ```
 
-### CLI for AI Agents
+Use `bp snapshot -i` first. Refs are the default targeting strategy.
 
-The CLI is designed for AI agent tool calls. The recommended workflow:
-
-1. **Take snapshot** to see the page structure with refs
-2. **Use refs** (`ref:e4`) for reliable element targeting
-3. **Batch actions** to reduce round trips
+## Golden path 2: capture a manual workflow and derive automation
 
 ```bash
-# Step 1: Get page state with refs
-bp snapshot --format text
-# Output shows: button "Add to Cart" ref:e12, textbox "Search" ref:e5
-
-# Step 2: Use refs to interact (stable, no CSS guessing)
-bp exec '[
-  {"action":"fill","selector":"ref:e5","value":"laptop"},
-  {"action":"click","selector":"ref:e12"},
-  {"action":"snapshot"}
-]' --format json
+bp record -s demo --profile automation -f ./artifacts/demo.recording.json
+# perform the flow manually, then stop with Ctrl+C
+bp record summary ./artifacts/demo.recording.json
+bp record derive ./artifacts/demo.recording.json -o workflow.json
+bp run workflow.json
 ```
 
-Multi-selector fallbacks for robustness:
-```bash
-bp exec '[
-  {"action":"click","selector":["ref:e4","#submit","button[type=submit]"]}
-]'
-```
+Do not start by opening the raw artifact. Use `record summary`, `record inspect`, or `trace summary --view ...` first.
 
-Output:
-```json
-{
-  "success": true,
-  "steps": [
-    {"action": "fill", "success": true, "durationMs": 30},
-    {"action": "click", "success": true, "durationMs": 50, "selectorUsed": "ref:e12"},
-    {"action": "snapshot", "success": true, "durationMs": 100, "result": "..."}
-  ],
-  "totalDurationMs": 180
-}
-```
-
-Run `bp actions` for complete action reference.
-
-### Voice Agent Testing
-
-Test audio-based AI apps (voice assistants, phone agents) by injecting microphone input and capturing spoken responses.
-
-> **Full guide:** [Voice Agent Testing Guide](./docs/guides/voice-agent-testing.md)
+## Golden path 3: debug a realtime or voice session
 
 ```bash
-export OPENAI_API_KEY=sk-...  # Required for --transcribe
-
-# Validate audio pipeline
-bp audio check -s my-session
-# Output: "READY for roundtrip" with agent AudioContext detected
-
-# Full round-trip: send audio prompt → wait for response → transcribe
-bp audio roundtrip -i prompt.wav --transcribe --silence-timeout 1500
-# Output: { "transcript": "Welcome! I'd be happy to help...", "latencyMs": 5200, ... }
-
-# Save response audio for manual review
-bp audio roundtrip -i prompt.wav -o response.wav --transcribe
+bp connect --provider generic --name realtime
+bp trace start -s realtime --timeout 20000
+# reproduce the issue in the app
+bp trace summary -s realtime --view ws
+bp trace summary -s realtime --view console
 ```
 
-**Important:** Audio overrides must be injected before the voice agent initializes. Use `bp audio check` to validate the pipeline. See the [full guide](./docs/guides/voice-agent-testing.md) for setup order and troubleshooting.
-
-Programmatic API:
-
-```typescript
-await page.setupAudio();
-
-const result = await page.audioRoundTrip({
-  input: audioBytes,
-  silenceTimeout: 1500,
-});
-
-import { transcribe } from 'browser-pilot';
-const { text } = await transcribe(result.audio);
-console.log(text); // "Welcome! I'd be happy to help..."
-```
-
-### Recording Browser Actions
-
-Record human interactions to create automation recipes:
+Voice workflow:
 
 ```bash
-# Auto-connect to local Chrome and record (creates new session)
-bp record
-
-# Use most recent session
-bp record -s
-
-# Use specific session with custom output file
-bp record -s my-session -f login-flow.json
-
-# Review and edit the recording
-cat recording.json
-
-# Replay the recording
-bp exec -s my-session --file recording.json
+bp audio setup -s realtime
+bp exec -s realtime '{"action":"goto","url":"https://my-voice-app.com"}'
+bp audio check -s realtime
+bp audio roundtrip -s realtime -i prompt.wav --transcribe -o response.wav
+bp trace summary -s realtime --view voice
 ```
 
-The output format is compatible with `page.batch()`:
-```json
-{
-  "recordedAt": "2026-01-06T10:00:00.000Z",
-  "startUrl": "https://example.com",
-  "duration": 15000,
-  "steps": [
-    { "action": "fill", "selector": ["[data-testid=\"email\"]", "#email"], "value": "user@example.com" },
-    { "action": "click", "selector": ["[data-testid=\"submit\"]", "#login-btn"] }
-  ]
-}
-```
-
-**Notes:**
-- Sensitive fields are automatically redacted as `[REDACTED]` based on input settings such as `type="password"`, `type="hidden"`, and secret/autofill hints like `autocomplete="one-time-code"` or `cc-number`
-- Selectors are multi-selector arrays ordered by reliability (data attributes > IDs > CSS paths)
-- Edit the JSON to adjust selectors or add `optional: true` flags
-
-### Screenshot Trail During Replay
-
-Capture a lightweight visual trail while replaying steps. Enable recording at the session level so all `bp exec` calls are captured automatically:
+## Golden path 4: exercise failure modes
 
 ```bash
-# Enable recording for the entire session
-bp connect --provider generic --name my-session --record
-
-# All exec calls now produce screenshots — frames accumulate in one manifest
-bp exec -s my-session '[
-  {"action":"goto","url":"https://example.com/login"},
-  {"action":"fill","selector":"#email","value":"user@example.com"},
-  {"action":"submit","selector":"form"}
-]'
-bp exec -s my-session '{"action":"assertUrl","expect":"/dashboard"}'
-
-# Or enable recording on a single exec call
-bp exec --record '[{"action":"click","selector":"#checkout"}]'
+bp env permissions grant -s realtime microphone
+bp env network offline -s realtime --duration 5000
+bp trace watch -s realtime --view ws --assert profile:reconnect --timeout 15000
+bp env visibility hidden -s realtime
 ```
 
-This writes `recording.json` plus a `screenshots/` directory in the session directory. Sensitive field values are redacted in both the manifest and the screenshot overlays. See the [Action Recording Guide](./docs/guides/action-recording.md) for options like `--record-format`, `--record-quality`, and `--no-highlights`.
+## What is new in the model
 
-## Examples
+- One canonical artifact model with `version: 2`
+- One canonical trace event stream for recording, live trace, and session logs
+- Trace-backed waits and assertions in `exec` / `run`
+- `listen` preserved as a compatibility alias to `trace tail`
+- `audio` for active control, `trace` for explanation, `env` for browser-state controls
 
-### Login Flow with Error Handling
+## Programmatic example
 
 ```typescript
-const result = await page.batch([
-  { action: 'goto', url: 'https://app.example.com/login' },
-  { action: 'fill', selector: ['#email', 'input[name=email]'], value: email },
-  { action: 'fill', selector: ['#password', 'input[name=password]'], value: password },
-  { action: 'click', selector: '.remember-me', optional: true },
-  { action: 'submit', selector: ['#login', 'button[type=submit]'] },
-], { onFail: 'stop' });
+import { connect } from 'browser-pilot';
 
-if (!result.success) {
-  console.error(`Failed at step ${result.stoppedAtIndex}: ${result.steps[result.stoppedAtIndex!].error}`);
-}
-```
-
-### Custom Dropdown
-
-```typescript
-// Using the custom select config
-await page.select({
-  trigger: '.country-dropdown',
-  option: '.dropdown-option',
-  value: 'United States',
-  match: 'text',  // or 'contains' or 'value'
-});
-
-// Or compose from primitives
-await page.click('.country-dropdown');
-await page.fill('.dropdown-search', 'United');
-await page.click('.dropdown-option:has-text("United States")');
-```
-
-### WebSocket Daemon
-
-By default, `bp connect` spawns a lightweight background daemon that holds the CDP WebSocket open. Subsequent CLI commands connect via Unix socket (~5-15ms) instead of re-establishing WebSocket (~280-1030ms per command).
-
-```bash
-# Daemon spawns automatically on connect
-bp connect --provider generic --name dev
-
-# Subsequent commands use the fast daemon path
-bp exec -s dev '{"action":"snapshot"}'  # ~5-15ms overhead instead of ~280ms
-
-# Manage the daemon
-bp daemon status           # check health, PID, uptime
-bp daemon stop             # stop daemon
-bp daemon logs             # view daemon log
-
-# Disable daemon for direct WebSocket
-bp connect --no-daemon
-```
-
-The daemon is transparent — if it dies or becomes stale, CLI commands fall back to direct WebSocket silently. Each session gets its own daemon with a 60-minute idle timeout.
-
-### Cloudflare Workers
-
-> Note: Cloudflare Workers' Node-compat runtime can expose parts of `node:net` with compatibility flags, but browser-pilot's daemon fast-path is intentionally CLI/Node-specific (Unix domain sockets + local background process). In Workers, use the normal direct WebSocket path shown below.
-
-```typescript
-export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
-    const browser = await connect({
-      provider: 'browserbase',
-      apiKey: env.BROWSERBASE_API_KEY,
-    });
-
-    const page = await browser.page();
-    await page.goto('https://example.com');
-    const snapshot = await page.snapshot();
-
-    await browser.close();
-
-    return Response.json({ title: snapshot.title, elements: snapshot.interactiveElements });
-  },
-};
-```
-
-### AI Agent Tool Definition
-
-```typescript
-const browserTool = {
-  name: 'browser_action',
-  description: 'Execute browser actions and get page state',
-  parameters: {
-    type: 'object',
-    properties: {
-      actions: {
-        type: 'array',
-        items: {
-          type: 'object',
-          properties: {
-            action: { enum: ['goto', 'click', 'fill', 'submit', 'snapshot', 'assertVisible', 'assertExists', 'assertText', 'assertUrl', 'assertValue'] },
-            selector: { type: ['string', 'array'] },
-            value: { type: 'string' },
-            url: { type: 'string' },
-          },
-        },
-      },
-    },
-  },
-  execute: async ({ actions }) => {
-    const page = await getOrCreatePage();
-    return page.batch(actions);
-  },
-};
-```
-
-## Advanced
-
-### Direct CDP Access
-
-```typescript
 const browser = await connect({ provider: 'generic' });
-const cdp = browser.cdpClient;
+const page = await browser.page();
 
-// Send any CDP command
-await cdp.send('Emulation.setDeviceMetricsOverride', {
-  width: 375,
-  height: 812,
-  deviceScaleFactor: 3,
-  mobile: true,
-});
+await page.batch([
+  { action: 'goto', url: 'https://example.com/login' },
+  { action: 'fill', selector: ['#email', 'input[type=email]'], value: 'user@example.com' },
+  { action: 'submit', selector: 'form' },
+  { action: 'assertUrl', expect: '/dashboard' },
+]);
+
+await browser.close();
 ```
 
-### Tracing
+## Guides
 
-```typescript
-import { enableTracing } from 'browser-pilot';
+- [CLI guide](./docs/cli.md)
+- [Automation workflows](./docs/guides/automation-workflows.md)
+- [Action recording](./docs/guides/action-recording.md)
+- [Trace workflows](./docs/guides/trace-workflows.md)
+- [Realtime debugging](./docs/guides/realtime-debugging.md)
+- [Voice agent testing](./docs/guides/voice-agent-testing.md)
+- [Artifact analysis](./docs/guides/artifact-analysis.md)
+- [LLM contract](./docs/llms.txt)
 
-enableTracing({ output: 'console' });
-// [info] goto https://example.com ✓ (1200ms)
-// [info] click #submit ✓ (50ms)
-```
+## Compatibility notes
 
-## AI Agent Integration
-
-browser-pilot is designed for AI agents. Two resources for agent setup:
-
-- **[llms.txt](./docs/llms.txt)** - Abbreviated reference for LLM context windows
-- **[Claude Code Skill](./docs/automating-browsers/SKILL.md)** - Full skill for Claude Code agents
-
-To use with Claude Code, copy `docs/automating-browsers/` to your project or reference it in your agent's context.
-
-## Documentation
-
-See the [docs](./docs) folder for detailed documentation:
-
-- [Getting Started](./docs/getting-started.md)
-- [Providers](./docs/providers.md)
-- [Action Recording](./docs/guides/action-recording.md)
-- [Multi-Selector Guide](./docs/guides/multi-selector.md)
-- [Batch Actions](./docs/guides/batch-actions.md)
-- [Snapshots](./docs/guides/snapshots.md)
-- [Voice Agent Testing](./docs/guides/voice-agent-testing.md)
-- [CLI Reference](./docs/cli.md)
-- [API Reference](./docs/api/page.md)
-
-## License
-
-MIT
+- Prefer `--debug` for transport logging. `--trace` still works as a legacy alias.
+- Prefer `bp trace tail ...`. `bp listen ...` still works as a compatibility alias.

@@ -9,6 +9,15 @@ import { getDefaultSession, loadSession, type SessionData, updateSession } from 
 const TEXT_HELP = `
 bp text - Extract text content from the current page
 
+When to use:
+  You need readable content for summarization, comparison, or assertions outside the action batch.
+
+When not to use:
+  You are choosing clickable or fillable targets. Use \`bp snapshot -i\` or \`bp page\`.
+
+Common mistake:
+  Expecting \`bp text\` to tell you what to click next. It is content-focused, not action-focused.
+
 Usage:
   bp text [options]
 
@@ -17,13 +26,17 @@ Options:
   -s, --session <id>   Session to use (default: most recent)
   -f, --format <fmt>   Output format: json | pretty (default: pretty)
   --json               Alias for -f json
-  --trace              Enable debug tracing
+  --debug              Enable CDP transport debugging (global option)
   -h, --help           Show this help
 
 Examples:
   bp text                          # Extract all text from the page
   bp text --selector '#main'       # Extract text from #main element only
   bp text --json                   # Output as JSON with URL and selector info
+
+Likely next commands:
+  bp snapshot -i
+  bp exec '[{"action":"assertText","expect":"..."}]'
 `.trimEnd();
 
 interface TextOptions {

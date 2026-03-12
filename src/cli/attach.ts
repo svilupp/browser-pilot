@@ -13,10 +13,17 @@ import { clearDaemonFromSession, isDaemonAlive } from '../daemon/lifecycle.ts';
 import { DAEMON_MAX_AGE_MS } from '../daemon/types.ts';
 import { addBatchToPage, connect } from '../index.ts';
 import {
+  applyNetworkOverride,
+  applyPermissionState,
+  applyVisibilityState,
+  originFromUrl,
+} from './env-state.ts';
+import {
   deleteSession,
   getDefaultSession,
   getSessionFilePath,
   loadSession,
+  type EnvSettings,
   type SessionData,
 } from './session.ts';
 
@@ -26,6 +33,34 @@ export interface AttachResult {
   page: Page & { batch: (steps: Step[], options?: BatchOptions) => Promise<BatchResult> };
   /** Whether this attachment used the daemon fast-path */
   viaDaemon: boolean;
+}
+
+async function applySessionEnvironment(
+  page: Page,
+  currentUrl: string,
+  settings: EnvSettings | undefined
+): Promise<void> {
+  if (!settings) {
+    return;
+  }
+
+  const origin = originFromUrl(currentUrl);
+
+  if (Array.isArray(settings.permissions)) {
+    await applyPermissionState(page.cdpClient, origin, settings.permissions);
+  }
+
+  if (settings.geolocation) {
+    await page.setGeolocation(settings.geolocation);
+  }
+
+  if (settings.visibility) {
+    await applyVisibilityState(page.cdpClient, settings.visibility);
+  }
+
+  if (settings.network) {
+    await applyNetworkOverride(page.cdpClient, settings.network);
+  }
 }
 
 /**
@@ -116,14 +151,24 @@ export async function attachSession(
           debug: options.trace,
         });
 
-        // The daemon already has the target attached, so we set the session ID
-        // on the client directly to match what the daemon has
         const { Browser: BrowserClass } = await import('../browser/browser.ts');
+        const { Page: PageClass } = await import('../browser/page.ts');
         const browser = BrowserClass.fromCDP(cdp, session);
-        const page = addBatchToPage(await browser.page(undefined, { targetId: session.targetId }));
+        const page =
+          session.daemon.cdpSessionId && session.targetId
+            ? addBatchToPage(
+                await (async () => {
+                  cdp.setSessionId(session.daemon?.cdpSessionId);
+                  const attachedPage = new PageClass(cdp, session.targetId!);
+                  await attachedPage.init();
+                  return attachedPage;
+                })()
+              )
+            : addBatchToPage(await browser.page(undefined, { targetId: session.targetId }));
 
         // Hydrate ref map from session cache if URL matches
         const currentUrl = await page.url();
+        await applySessionEnvironment(page, currentUrl, session.metadata?.env);
         const refCache = session.metadata?.refCache;
         if (refCache && refCache.url === currentUrl) {
           page.importRefMap(refCache.refMap);
@@ -159,6 +204,7 @@ export async function attachSession(
 
   // Hydrate ref map from session cache if URL matches
   const currentUrl = await page.url();
+  await applySessionEnvironment(page, currentUrl, session.metadata?.env);
   const refCache = session.metadata?.refCache;
   if (refCache && refCache.url === currentUrl) {
     page.importRefMap(refCache.refMap);

@@ -15,8 +15,15 @@ import { generateHints } from '../browser/hint-generator.ts';
 import type { Page } from '../browser/page.ts';
 import { ElementNotFoundError, NavigationError, TimeoutError } from '../browser/types.ts';
 import { CDPError } from '../cdp/protocol.ts';
-import type { RecordingFrame, RecordingManifest } from '../recording/manifest.ts';
+import {
+  canonicalizeRecordingArtifact,
+  createRecordingManifest,
+  type RecordingFrame,
+} from '../recording/manifest.ts';
 import { redactValueForRecording } from '../recording/redaction.ts';
+import { TRACE_BINDING_NAME, TRACE_SCRIPT } from '../trace/script.ts';
+import { createTraceId, normalizeTraceEvent, type CanonicalTraceEvent } from '../trace/model.ts';
+import { globToRegex } from '../trace/live.ts';
 import type {
   ActionType,
   BatchOptions,
@@ -41,10 +48,63 @@ interface RecordingContext {
   screenshotDir: string;
   sessionId: string;
   frames: RecordingFrame[];
+  traceEvents: CanonicalTraceEvent[];
   format: 'png' | 'jpeg' | 'webp';
   quality: number;
   highlights: boolean;
   skipActions: Set<ActionType>;
+}
+
+function loadExistingRecording(
+  manifestPath: string
+): { frames: RecordingFrame[]; traceEvents: CanonicalTraceEvent[]; recordedAt?: string; startUrl?: string } {
+  try {
+    const raw = JSON.parse(fs.readFileSync(manifestPath, 'utf-8')) as unknown;
+
+    if ((raw as { version?: number }).version === 1) {
+      const legacy = raw as { frames?: RecordingFrame[]; recordedAt?: string; startUrl?: string };
+      return {
+        frames: Array.isArray(legacy.frames) ? legacy.frames : [],
+        traceEvents: [],
+        recordedAt: legacy.recordedAt,
+        startUrl: legacy.startUrl,
+      };
+    }
+
+    const artifact = canonicalizeRecordingArtifact(raw);
+    const screenshotsByAction = new Map(artifact.screenshots.map((shot) => [shot.actionId, shot]));
+    const frames = artifact.actions.map<RecordingFrame>((action, index) => {
+      const screenshot = screenshotsByAction.get(action.id);
+      return {
+        seq: index + 1,
+        timestamp: Date.parse(action.ts),
+        action: action.action,
+        selector: action.selector,
+        selectorUsed: action.selectorUsed,
+        value: action.value,
+        url: action.url,
+        coordinates: action.coordinates,
+        boundingBox: action.boundingBox,
+        success: action.success,
+        durationMs: action.durationMs,
+        error: action.error,
+        screenshot: screenshot?.file ?? '',
+        pageUrl: action.pageUrl,
+        pageTitle: action.pageTitle,
+        stepIndex: action.stepIndex,
+        actionId: action.id,
+      };
+    });
+
+    return {
+      frames,
+      traceEvents: artifact.trace.events,
+      recordedAt: artifact.recordedAt,
+      startUrl: artifact.session.startUrl,
+    };
+  } catch {
+    return { frames: [], traceEvents: [] };
+  }
 }
 
 function classifyFailure(error: unknown): {
@@ -137,6 +197,9 @@ export class BatchExecutor {
     const results: StepResult[] = [];
     const startTime = Date.now();
     const recording = options.record ? this.createRecordingContext(options.record) : null;
+    if (steps.some((step) => step.action === 'waitForWsMessage')) {
+      await this.ensureTraceHooks();
+    }
     const startUrl = recording ? await this.getPageUrlSafe() : '';
     let stoppedAtIndex: number | undefined;
 
@@ -148,6 +211,27 @@ export class BatchExecutor {
 
       let lastError: Error | undefined;
       let succeeded = false;
+
+      if (recording) {
+        recording.traceEvents.push(
+          normalizeTraceEvent({
+            traceId: createTraceId('action'),
+            elapsedMs: Date.now() - startTime,
+            channel: 'action',
+            event: 'action.started',
+            summary: `${step.action}${step.selector ? ` ${Array.isArray(step.selector) ? step.selector[0] : step.selector}` : ''}`,
+            data: {
+              action: step.action,
+              selector: step.selector ?? null,
+              url: step.url ?? null,
+            },
+            actionId: `action-${i + 1}`,
+            stepIndex: i,
+            selector: step.selector,
+            url: step.url,
+          })
+        );
+      }
 
       for (let attempt = 0; attempt < maxAttempts; attempt++) {
         if (attempt > 0) {
@@ -174,6 +258,28 @@ export class BatchExecutor {
 
           if (recording && !recording.skipActions.has(step.action)) {
             await this.captureRecordingFrame(step, stepResult, recording);
+          }
+          if (recording) {
+            recording.traceEvents.push(
+              normalizeTraceEvent({
+                traceId: createTraceId('action'),
+                elapsedMs: Date.now() - startTime,
+                channel: 'action',
+                event: 'action.succeeded',
+                summary: `${step.action} succeeded`,
+                data: {
+                  action: step.action,
+                  selector: step.selector ?? null,
+                  selectorUsed: result.selectorUsed ?? null,
+                  durationMs: Date.now() - stepStart,
+                },
+                actionId: `action-${i + 1}`,
+                stepIndex: i,
+                selector: step.selector,
+                selectorUsed: result.selectorUsed,
+                url: step.url,
+              })
+            );
           }
 
           results.push(stepResult);
@@ -223,6 +329,28 @@ export class BatchExecutor {
         if (recording && !recording.skipActions.has(step.action)) {
           await this.captureRecordingFrame(step, failedResult, recording);
         }
+        if (recording) {
+          recording.traceEvents.push(
+            normalizeTraceEvent({
+              traceId: createTraceId('action'),
+              elapsedMs: Date.now() - startTime,
+              channel: 'action',
+              event: 'action.failed',
+              severity: 'error',
+              summary: `${step.action} failed: ${errorMessage}`,
+              data: {
+                action: step.action,
+                selector: step.selector ?? null,
+                error: errorMessage,
+                reason,
+              },
+              actionId: `action-${i + 1}`,
+              stepIndex: i,
+              selector: step.selector,
+              url: step.url,
+            })
+          );
+        }
 
         results.push(failedResult);
 
@@ -243,7 +371,8 @@ export class BatchExecutor {
         recording,
         startTime,
         startUrl,
-        allSuccess
+        allSuccess,
+        steps
       );
     }
 
@@ -261,16 +390,7 @@ export class BatchExecutor {
     const screenshotDir = join(baseDir, 'screenshots');
     const manifestPath = join(baseDir, 'recording.json');
 
-    // Accumulative recording: load existing frames from previous executions
-    let existingFrames: RecordingFrame[] = [];
-    try {
-      const existing = JSON.parse(fs.readFileSync(manifestPath, 'utf-8')) as RecordingManifest;
-      if (existing.frames && Array.isArray(existing.frames)) {
-        existingFrames = existing.frames;
-      }
-    } catch {
-      // No existing manifest or invalid — start fresh
-    }
+    const existing = loadExistingRecording(manifestPath);
 
     fs.mkdirSync(screenshotDir, { recursive: true });
 
@@ -278,7 +398,8 @@ export class BatchExecutor {
       baseDir,
       screenshotDir,
       sessionId: record.sessionId ?? this.page.targetId,
-      frames: existingFrames,
+      frames: existing.frames,
+      traceEvents: existing.traceEvents,
       format: record.format ?? 'webp',
       quality: Math.max(0, Math.min(100, record.quality ?? 40)),
       highlights: record.highlights !== false,
@@ -348,6 +469,7 @@ export class BatchExecutor {
         selector:
           stepResult.selectorUsed ??
           (Array.isArray(step.selector) ? step.selector[0] : step.selector),
+        selectorUsed: stepResult.selectorUsed,
         value: redactValueForRecording(
           typeof step.value === 'string' ? step.value : undefined,
           targetMetadata
@@ -361,6 +483,8 @@ export class BatchExecutor {
         screenshot: filename,
         pageUrl,
         pageTitle,
+        stepIndex: stepResult.index,
+        actionId: `action-${stepResult.index + 1}`,
       });
     } catch {
       /* Screenshot capture is best-effort. */
@@ -378,10 +502,10 @@ export class BatchExecutor {
     recording: RecordingContext,
     startTime: number,
     startUrl: string,
-    success: boolean
+    success: boolean,
+    steps: Step[]
   ): Promise<string> {
     let endUrl = startUrl;
-    let viewport = { width: 1280, height: 720 };
 
     try {
       endUrl = await this.page.url();
@@ -389,47 +513,27 @@ export class BatchExecutor {
       /* best-effort */
     }
 
-    try {
-      const metrics = await this.page.cdpClient.send<{
-        cssVisualViewport: { clientWidth: number; clientHeight: number };
-      }>('Page.getLayoutMetrics');
-      viewport = {
-        width: metrics.cssVisualViewport.clientWidth,
-        height: metrics.cssVisualViewport.clientHeight,
-      };
-    } catch {
-      /* use default */
-    }
-
     // Preserve original recordedAt from existing manifest when accumulating
     const manifestPath = join(recording.baseDir, 'recording.json');
     let recordedAt = new Date(startTime).toISOString();
     let originalStartUrl = startUrl;
-    try {
-      const existing = JSON.parse(fs.readFileSync(manifestPath, 'utf-8')) as RecordingManifest;
-      if (existing.recordedAt) recordedAt = existing.recordedAt;
-      if (existing.startUrl) originalStartUrl = existing.startUrl;
-    } catch {
-      /* no existing manifest */
-    }
+    const existing = loadExistingRecording(manifestPath);
+    if (existing.recordedAt) recordedAt = existing.recordedAt;
+    if (existing.startUrl) originalStartUrl = existing.startUrl;
 
-    // Compute total duration from first frame to now
-    const firstFrameTime = recording.frames[0]?.timestamp ?? startTime;
-    const totalDurationMs = Date.now() - Math.min(firstFrameTime, startTime);
-
-    const manifest: RecordingManifest = {
-      version: 1,
+    const manifest = createRecordingManifest({
       recordedAt,
       sessionId: recording.sessionId,
       startUrl: originalStartUrl,
       endUrl,
-      viewport,
-      format: recording.format,
-      quality: recording.quality,
-      totalDurationMs,
-      success,
+      targetId: this.page.targetId,
+      steps,
       frames: recording.frames,
-    };
+      traceEvents: recording.traceEvents,
+      notes: success ? [] : ['Replay ended with at least one failed action.'],
+      recordingManifest: 'recording.json',
+      screenshotDir: 'screenshots/',
+    });
 
     fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
     return manifestPath;
@@ -497,7 +601,7 @@ export class BatchExecutor {
               trigger: step.trigger,
               option: step.option,
               value: step.value,
-              match: step.match,
+              match: step.match as 'text' | 'value' | 'contains' | undefined,
             },
             { timeout, optional }
           );
@@ -756,6 +860,44 @@ export class BatchExecutor {
         return { selectorUsed: usedSelector, value: actual };
       }
 
+      case 'waitForWsMessage': {
+        if (typeof step.match !== 'string') {
+          throw new Error('waitForWsMessage requires match');
+        }
+        const message = await this.waitForWsMessage(step.match, step.where, timeout);
+        return { value: message };
+      }
+
+      case 'assertNoConsoleErrors': {
+        await this.assertNoConsoleErrors(step.windowMs ?? timeout);
+        return {};
+      }
+
+      case 'assertTextChanged': {
+        const selector = Array.isArray(step.selector) ? step.selector[0] : step.selector;
+        if (typeof step.to !== 'string') {
+          throw new Error('assertTextChanged requires to');
+        }
+        const text = await this.assertTextChanged(selector, step.from, step.to, timeout);
+        return { selectorUsed: selector, text };
+      }
+
+      case 'assertPermission': {
+        if (!step.name || !step.state) {
+          throw new Error('assertPermission requires name and state');
+        }
+        const permission = await this.assertPermission(step.name, step.state);
+        return { value: permission };
+      }
+
+      case 'assertMediaTrackLive': {
+        if (!step.kind) {
+          throw new Error('assertMediaTrackLive requires kind');
+        }
+        const media = await this.assertMediaTrackLive(step.kind);
+        return { value: media };
+      }
+
       default: {
         const action = step.action as string;
         const aliases: Record<string, string> = {
@@ -810,7 +952,7 @@ export class BatchExecutor {
         const suggestion = aliases[action.toLowerCase()];
         const hint = suggestion ? ` Did you mean "${suggestion}"?` : '';
         const valid =
-          'goto, click, fill, type, select, check, uncheck, submit, press, shortcut, focus, hover, scroll, wait, snapshot, forms, screenshot, evaluate, text, newTab, closeTab, switchFrame, switchToMain, assertVisible, assertExists, assertText, assertUrl, assertValue';
+          'goto, click, fill, type, select, check, uncheck, submit, press, shortcut, focus, hover, scroll, wait, snapshot, forms, screenshot, evaluate, text, newTab, closeTab, switchFrame, switchToMain, assertVisible, assertExists, assertText, assertUrl, assertValue, waitForWsMessage, assertNoConsoleErrors, assertTextChanged, assertPermission, assertMediaTrackLive';
         throw new Error(`Unknown action "${action}".${hint}\n\nValid actions: ${valid}`);
       }
     }
@@ -825,6 +967,289 @@ export class BatchExecutor {
     if (matched) return matched;
     // Fallback for actions that don't track selector
     return Array.isArray(selector) ? selector[0]! : selector;
+  }
+
+  private async ensureTraceHooks(): Promise<void> {
+    await this.page.cdpClient.send('Runtime.enable');
+    await this.page.cdpClient.send('Page.enable');
+    await this.page.cdpClient.send('Network.enable');
+    try {
+      await this.page.cdpClient.send('Runtime.addBinding', { name: TRACE_BINDING_NAME });
+    } catch {
+      // already installed
+    }
+    await this.page.cdpClient.send('Page.addScriptToEvaluateOnNewDocument', { source: TRACE_SCRIPT });
+    await this.page.cdpClient.send('Runtime.evaluate', { expression: TRACE_SCRIPT, awaitPromise: false });
+  }
+
+  private async waitForWsMessage(
+    match: string,
+    where: Record<string, unknown> | undefined,
+    timeout: number
+  ): Promise<Record<string, unknown>> {
+    await this.ensureTraceHooks();
+    const regex = globToRegex(match);
+    const wsUrls = new Map<string, string>();
+    const recentMatch = await this.findRecentWsMessage(regex, where);
+    if (recentMatch) {
+      return recentMatch;
+    }
+
+    return new Promise<Record<string, unknown>>((resolve, reject) => {
+      const cleanup = () => {
+        this.page.cdpClient.off('Network.webSocketCreated', onCreated);
+        this.page.cdpClient.off('Network.webSocketFrameReceived', onFrame);
+        this.page.cdpClient.off('Runtime.bindingCalled', onBinding);
+        clearTimeout(timer);
+      };
+
+      const onCreated = (params: Record<string, unknown>) => {
+        wsUrls.set(String(params['requestId'] ?? ''), String(params['url'] ?? ''));
+      };
+
+      const onFrame = (params: Record<string, unknown>) => {
+        const requestId = String(params['requestId'] ?? '');
+        const response = (params['response'] ?? {}) as { payloadData?: string };
+        const payload = String(response.payloadData ?? '');
+        const url = wsUrls.get(requestId) ?? '';
+        if (!regex.test(url) && !regex.test(payload)) {
+          return;
+        }
+
+        if (where && !this.payloadMatchesWhere(payload, where)) {
+          return;
+        }
+
+        cleanup();
+        resolve({ requestId, url, payload });
+      };
+
+      const onBinding = (params: Record<string, unknown>) => {
+        if (params['name'] !== TRACE_BINDING_NAME) {
+          return;
+        }
+
+        try {
+          const parsed = JSON.parse(String(params['payload'] ?? '')) as {
+            event?: string;
+            data?: Record<string, unknown>;
+          };
+          if (parsed.event !== 'ws.frame.received') {
+            return;
+          }
+
+          const data = parsed.data ?? {};
+          const payload = String(data['payload'] ?? '');
+          const url = String(data['url'] ?? '');
+          if (!regex.test(url) && !regex.test(payload)) {
+            return;
+          }
+
+          if (where && !this.payloadMatchesWhere(payload, where)) {
+            return;
+          }
+
+          cleanup();
+          resolve({
+            requestId: String(data['connectionId'] ?? ''),
+            url,
+            payload,
+          });
+        } catch {
+          // ignore malformed trace payloads
+        }
+      };
+
+      const timer = setTimeout(() => {
+        cleanup();
+        reject(new Error(`Timed out waiting for WebSocket message matching ${match}`));
+      }, timeout);
+
+      this.page.cdpClient.on('Network.webSocketCreated', onCreated);
+      this.page.cdpClient.on('Network.webSocketFrameReceived', onFrame);
+      this.page.cdpClient.on('Runtime.bindingCalled', onBinding);
+    });
+  }
+
+  private payloadMatchesWhere(payload: string, where: Record<string, unknown>): boolean {
+    try {
+      const parsed = JSON.parse(payload) as Record<string, unknown>;
+      return Object.entries(where).every(([key, expected]) => {
+        const actual = key.split('.').reduce<unknown>((current, part) => {
+          if (!current || typeof current !== 'object') {
+            return undefined;
+          }
+          return (current as Record<string, unknown>)[part];
+        }, parsed);
+        return actual === expected;
+      });
+    } catch {
+      return false;
+    }
+  }
+
+  private async findRecentWsMessage(
+    regex: RegExp,
+    where: Record<string, unknown> | undefined
+  ): Promise<Record<string, unknown> | null> {
+    const recent = await this.page.evaluate(
+      '(() => Array.isArray(globalThis.__bpTraceRecentEvents) ? globalThis.__bpTraceRecentEvents : [])()'
+    );
+    if (!Array.isArray(recent)) {
+      return null;
+    }
+
+    for (let i = recent.length - 1; i >= 0; i--) {
+      const entry = recent[i];
+      if (!entry || typeof entry !== 'object') {
+        continue;
+      }
+      const event = String((entry as Record<string, unknown>)['event'] ?? '');
+      if (event !== 'ws.frame.received') {
+        continue;
+      }
+      const data = (((entry as Record<string, unknown>)['data'] ?? {}) as Record<string, unknown>);
+      const payload = String(data['payload'] ?? '');
+      const url = String(data['url'] ?? '');
+      if (!regex.test(url) && !regex.test(payload)) {
+        continue;
+      }
+      if (where && !this.payloadMatchesWhere(payload, where)) {
+        continue;
+      }
+      return {
+        requestId: String(data['connectionId'] ?? ''),
+        url,
+        payload,
+      };
+    }
+
+    return null;
+  }
+
+  private async assertNoConsoleErrors(windowMs: number): Promise<void> {
+    await this.page.cdpClient.send('Runtime.enable');
+
+    return new Promise<void>((resolve, reject) => {
+      const errors: string[] = [];
+
+      const cleanup = () => {
+        this.page.cdpClient.off('Runtime.consoleAPICalled', onConsole);
+        this.page.cdpClient.off('Runtime.exceptionThrown', onException);
+        clearTimeout(timer);
+      };
+
+      const onConsole = (params: Record<string, unknown>) => {
+        if (params['type'] !== 'error') {
+          return;
+        }
+        const args = Array.isArray(params['args']) ? (params['args'] as Array<Record<string, unknown>>) : [];
+        errors.push(
+          args
+            .map((entry) => String(entry['value'] ?? entry['description'] ?? ''))
+            .filter(Boolean)
+            .join(' ')
+        );
+      };
+
+      const onException = (params: Record<string, unknown>) => {
+        const details = (params['exceptionDetails'] ?? {}) as Record<string, unknown>;
+        errors.push(String(details['text'] ?? 'Runtime exception'));
+      };
+
+      const timer = setTimeout(() => {
+        cleanup();
+        if (errors.length > 0) {
+          reject(new Error(`Console errors detected: ${errors.join(' | ')}`));
+          return;
+        }
+        resolve();
+      }, windowMs);
+
+      this.page.cdpClient.on('Runtime.consoleAPICalled', onConsole);
+      this.page.cdpClient.on('Runtime.exceptionThrown', onException);
+    });
+  }
+
+  private async assertTextChanged(
+    selector: string | undefined,
+    from: string | undefined,
+    to: string,
+    timeout: number
+  ): Promise<string> {
+    const initialText = from ?? (await this.page.text(selector));
+    const deadline = Date.now() + timeout;
+
+    while (Date.now() < deadline) {
+      const text = await this.page.text(selector);
+      if (text !== initialText && text.includes(to)) {
+        return text;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+
+    throw new Error(`Text did not change to include ${JSON.stringify(to)}`);
+  }
+
+  private async assertPermission(name: string, state: string): Promise<Record<string, unknown>> {
+    const result = await this.page.evaluate(
+      `(() => navigator.permissions.query({ name: ${JSON.stringify(name)} }).then((status) => ({ name: ${JSON.stringify(name)}, state: status.state })))()`
+    );
+    if (
+      !result ||
+      typeof result !== 'object' ||
+      (result as { state?: unknown }).state !== state
+    ) {
+      throw new Error(`Permission ${name} is not ${state}`);
+    }
+    return result as Record<string, unknown>;
+  }
+
+  private async assertMediaTrackLive(kind: 'audio' | 'video'): Promise<Record<string, unknown>> {
+    const result = await this.page.evaluate(
+      `(() => {
+        const requestedKind = ${JSON.stringify(kind)};
+        const mediaElements = Array.from(document.querySelectorAll('audio,video')).map((el) => {
+          const tracks = [];
+          if (el.srcObject && typeof el.srcObject.getTracks === 'function') {
+            tracks.push(...el.srcObject.getTracks());
+          }
+          return {
+            tag: el.tagName.toLowerCase(),
+            paused: !!el.paused,
+            tracks: tracks.map((track) => ({
+              kind: track.kind,
+              readyState: track.readyState,
+              enabled: track.enabled,
+              label: track.label,
+            })),
+          };
+        });
+
+        const globalTracks =
+          window.__bpStream && typeof window.__bpStream.getTracks === 'function'
+            ? window.__bpStream.getTracks().map((track) => ({
+                kind: track.kind,
+                readyState: track.readyState,
+                enabled: track.enabled,
+                label: track.label,
+              }))
+            : [];
+
+        const liveTracks = mediaElements
+          .flatMap((entry) => entry.tracks)
+          .concat(globalTracks)
+          .filter((track) => track.kind === requestedKind && track.readyState === 'live');
+
+        return { live: liveTracks.length > 0, mediaElements, globalTracks, liveTracks };
+      })()`
+    );
+
+    if (!result || typeof result !== 'object' || !(result as { live?: boolean }).live) {
+      throw new Error(`No live ${kind} media track detected`);
+    }
+
+    return result as Record<string, unknown>;
   }
 }
 

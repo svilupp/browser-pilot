@@ -1,3 +1,5 @@
+import type { CDPErrorData } from '../cdp/protocol.ts';
+
 /**
  * Daemon protocol types
  *
@@ -23,8 +25,8 @@ export interface DaemonResponse {
   id: number;
   /** CDP result (on success) */
   result?: unknown;
-  /** Error message (on failure) */
-  error?: string;
+  /** Structured CDP-style error payload (on failure) */
+  error?: CDPErrorData;
 }
 
 /** Unsolicited event from Daemon → CLI client */
@@ -41,6 +43,8 @@ export interface DaemonInfo {
   socketPath: string;
   /** Daemon process PID */
   pid: number;
+  /** Attached CDP session ID for the persistent target, if available */
+  cdpSessionId?: string;
   /** Timestamp when daemon was started */
   startedAt: string;
 }

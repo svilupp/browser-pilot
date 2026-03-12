@@ -9,6 +9,7 @@
 import { unlink } from 'node:fs/promises';
 import { createServer, type Server, type Socket } from 'node:net';
 import type { CDPClient } from '../cdp/client.ts';
+import { CDPError, type CDPErrorData } from '../cdp/protocol.ts';
 import { daemonLog } from './lifecycle.ts';
 import type { DaemonEvent, DaemonRequest, DaemonResponse } from './types.ts';
 
@@ -52,6 +53,28 @@ function isValidDaemonRequest(value: unknown): value is DaemonRequest {
     typeof request.method === 'string' &&
     request.method.length > 0
   );
+}
+
+function serializeError(error: unknown): CDPErrorData {
+  if (error instanceof CDPError) {
+    return {
+      code: error.code,
+      message: error.message,
+      data: error.data,
+    };
+  }
+
+  if (error instanceof Error) {
+    return {
+      code: -32000,
+      message: error.message,
+    };
+  }
+
+  return {
+    code: -32000,
+    message: String(error),
+  };
 }
 
 export interface DaemonServer {
@@ -100,12 +123,18 @@ export async function startDaemonServer(
       try {
         parsed = JSON.parse(line);
       } catch {
-        writeMessage(socket, { id: -1, error: 'Invalid JSON' });
+        writeMessage(socket, {
+          id: -1,
+          error: { code: -32700, message: 'Invalid JSON' },
+        });
         return;
       }
 
       if (!isValidDaemonRequest(parsed)) {
-        writeMessage(socket, { id: -1, error: 'Invalid request shape' });
+        writeMessage(socket, {
+          id: -1,
+          error: { code: -32600, message: 'Invalid request shape' },
+        });
         return;
       }
 
@@ -115,8 +144,7 @@ export async function startDaemonServer(
         const result = await cdp.send(request.method, request.params, request.sessionId);
         writeMessage(socket, { id: request.id, result });
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        writeMessage(socket, { id: request.id, error: message });
+        writeMessage(socket, { id: request.id, error: serializeError(err) });
       }
     };
 

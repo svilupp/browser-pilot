@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.0.15] - 2026-03-12
+
+### Breaking changes
+
+- `recording.json` now uses the canonical `version: 2` schema; tooling that reads recordings must switch to the new `session`, `recipe.steps`, `actions`, `screenshots`, `trace`, `assertions`, `notes`, and `artifacts` shape.
+- Session logs now write canonical trace events to `trace.jsonl`; integrations reading `log.jsonl` need to switch file paths and parse the canonical trace event format.
+- `bp trace` is now the primary live traffic workflow; `bp listen` remains available as a compatibility alias to `bp trace tail`.
+
+### Added
+
+- Unified recording and tracing around one canonical artifact model, a new `bp trace` workflow (`start`, `tail`, `summary`, `watch`, `export`, `merge`), richer `bp record` artifact commands, and trace-backed waits/assertions in `bp exec` / `bp run`.
+- `bp env` adds browser-state controls for permissions, network, visibility, and geolocation, and canonical session tracing now covers console, runtime, permission, media, voice, HTTP, and WebSocket events.
+
+### Changed
+
+- CLI help, README, guides, `llms.txt`, and skills now teach one inspect/act/record/trace/audio/env workflow, and global transport debugging is documented as `--debug` with `--trace` kept as a compatibility alias.
+- `bp audio` and `bp exec` now project voice, media, and assertion outcomes into the canonical trace store for later analysis.
+
+### Fixed
+
+- `assertMediaTrackLive` now detects browser-pilot's tracked stream state in addition to media elements, and CLI/env help surface issues are cleaned up.
+- Daemon-backed dialog handling, daemon error reporting, permission persistence, visibility toggling, and live WebSocket offline/reconnect tracing are fixed and validated with full real-Chrome coverage.
+
 ## [0.0.14] - 2026-03-09
 
 ### Added

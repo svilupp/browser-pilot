@@ -1,13 +1,16 @@
 /**
- * Session logger for structured event logging
- * Writes JSON Lines format to ~/.browser-pilot/sessions/{sessionId}/log.jsonl
- * Optionally duplicates to a user-specified export path for local convenience
+ * Session logger for canonical trace logging.
+ * Writes JSON Lines format to ~/.browser-pilot/sessions/{sessionId}/trace.jsonl
+ * and projects compatibility-friendly log entries for list/tail surfaces.
  */
 
 import * as fs from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import type { FailureHint } from '../browser/types.ts';
+import type { CanonicalTraceEvent } from '../trace/model.ts';
+import { createTraceId, normalizeTraceEvent } from '../trace/model.ts';
+import { TRACE_FILE_NAME } from '../trace/store.ts';
 
 /**
  * A single log entry
@@ -48,10 +51,12 @@ export class SessionLogger {
   private logPath: string;
   private exportLogPath: string | null = null;
   private seq: number = 0;
+  private sessionId: string;
 
   constructor(sessionId: string, exportLogPath?: string) {
+    this.sessionId = sessionId;
     const sessionDir = join(SESSION_DIR, sessionId);
-    this.logPath = join(sessionDir, 'log.jsonl');
+    this.logPath = join(sessionDir, TRACE_FILE_NAME);
 
     // Ensure core directory exists
     if (!fs.existsSync(sessionDir)) {
@@ -74,7 +79,7 @@ export class SessionLogger {
   }
 
   /**
-   * Log a raw entry (writes to both core and export logs)
+   * Log a raw compatibility entry through the canonical trace substrate.
    */
   log(entry: Omit<LogEntry, 'seq' | 'ts'>): void {
     const fullEntry: LogEntry = {
@@ -83,17 +88,23 @@ export class SessionLogger {
       ...entry,
     };
 
-    const line = `${JSON.stringify(fullEntry)}\n`;
+    this.logTrace(this.compatibilityEntryToTrace(fullEntry));
+  }
 
-    // Always write to core log
+  logTrace(event: Partial<CanonicalTraceEvent> & Pick<CanonicalTraceEvent, 'channel' | 'event' | 'summary'>): void {
+    const normalized = normalizeTraceEvent({
+      traceId: event.traceId ?? createTraceId(event.channel),
+      sessionId: this.sessionId,
+      ...event,
+    });
+    const line = `${JSON.stringify(normalized)}\n`;
+
     fs.appendFileSync(this.logPath, line, 'utf-8');
 
-    // Also write to export log if configured
     if (this.exportLogPath) {
       try {
         fs.appendFileSync(this.exportLogPath, line, 'utf-8');
       } catch (err) {
-        // Log export failure but don't break core functionality
         console.warn(`[browser-pilot] Failed to write to export log: ${err}`);
       }
     }
@@ -228,10 +239,92 @@ export class SessionLogger {
     }
 
     try {
-      return JSON.parse(line) as LogEntry;
+      const event = JSON.parse(line) as CanonicalTraceEvent;
+      return this.traceToCompatibilityEntry(event);
     } catch {
       return null;
     }
+  }
+
+  private compatibilityEntryToTrace(entry: LogEntry): CanonicalTraceEvent {
+    if (entry.type === 'command') {
+      return normalizeTraceEvent({
+        traceId: `cmd-${entry.seq}`,
+        sessionId: this.sessionId,
+        ts: entry.ts,
+        channel: 'action',
+        event: entry.status === 'failed' ? 'action.failed' : 'action.succeeded',
+        severity: entry.status === 'failed' ? 'error' : 'info',
+        summary: `${entry.cmd ?? 'command'}${entry.selectorUsed ? ` ${entry.selectorUsed}` : ''}`,
+        data: {
+          cmd: entry.cmd ?? null,
+          args: entry.args ?? {},
+          durationMs: entry.durationMs ?? null,
+          error: entry.error ?? null,
+          hints: entry.hints ?? [],
+          screenshotFile: entry.screenshotFile ?? null,
+          legacy: entry,
+        },
+        selectorUsed: entry.selectorUsed,
+        url: entry.urlAfter ?? entry.urlBefore,
+      });
+    }
+
+    if (entry.type === 'error') {
+      return normalizeTraceEvent({
+        traceId: `err-${entry.seq}`,
+        sessionId: this.sessionId,
+        ts: entry.ts,
+        channel: 'runtime',
+        event: 'runtime.exception',
+        severity: 'error',
+        summary: entry.error ?? 'Session error',
+        data: {
+          args: entry.args ?? {},
+          legacy: entry,
+        },
+      });
+    }
+
+    return normalizeTraceEvent({
+      traceId: `evt-${entry.seq}`,
+      sessionId: this.sessionId,
+      ts: entry.ts,
+      channel: 'session',
+      event: entry.cmd ?? 'session.event',
+      severity: entry.status === 'failed' ? 'error' : 'info',
+      summary: entry.cmd ?? 'Session event',
+      data: {
+        args: entry.args ?? {},
+        status: entry.status ?? null,
+        legacy: entry,
+      },
+      url: entry.urlAfter ?? entry.urlBefore,
+    });
+  }
+
+  private traceToCompatibilityEntry(event: CanonicalTraceEvent): LogEntry {
+    const legacy = event.data['legacy'];
+    if (legacy && typeof legacy === 'object') {
+      return legacy as LogEntry;
+    }
+
+    return {
+      seq: this.seq,
+      ts: event.ts,
+      type: event.severity === 'error' ? 'error' : event.channel === 'action' ? 'command' : 'event',
+      cmd: event.event,
+      args: event.data,
+      status:
+        event.event === 'action.failed'
+          ? 'failed'
+          : event.event === 'action.succeeded'
+            ? 'success'
+            : undefined,
+      selectorUsed: event.selectorUsed,
+      urlAfter: event.url,
+      error: event.severity === 'error' ? event.summary : undefined,
+    };
   }
 }
 

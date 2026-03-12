@@ -10,6 +10,15 @@ import { getDefaultSession, loadSession, type SessionData, updateSession } from 
 const DIAGNOSE_HELP = `
 bp diagnose - Debug element selection and find alternatives
 
+When to use:
+  A selector or ref failed and you need to understand why.
+
+When not to use:
+  You have not inspected the page yet. Start with \`bp snapshot -i\`.
+
+Common mistake:
+  Jumping to raw JavaScript before checking browser-pilot's selector diagnostics and suggested alternatives.
+
 Usage:
   bp diagnose <selector>           Diagnose specific selector
   bp diagnose "<fuzzy query>"      Fuzzy search for elements
@@ -20,19 +29,14 @@ Examples:
   bp diagnose "ref:e4"             Diagnose by element ref
 
 Options:
-  --json              Output as JSON
-  --max <n>           Max candidates for fuzzy match (default: 5)
-  -s, --session <id>  Use specific session
-  --help              Show this help
+  --json               Output as JSON
+  --max <n>            Max candidates for fuzzy match (default: 5)
+  -s, --session <id>   Use specific session
+  --help               Show this help
 
-Output (exact match):
-  - Visibility: display, opacity, in viewport
-  - Interactivity: disabled, covered by overlay
-  - Alternative selectors
-
-Output (fuzzy match):
-  - Top N candidates ranked by similarity
-  - Role, name, visibility for each
+Likely next commands:
+  bp exec '[{"action":"click","selector":"<suggested-selector>"}]'
+  bp snapshot -i
 `;
 
 interface DiagnoseOptions {

@@ -12,6 +12,7 @@ import { isTranscriptionAvailable, transcribe } from '../../audio/transcribe.ts'
 import { connect, getBrowserWebSocketUrl, pcmToWav } from '../../index.ts';
 import { isRecord } from '../../utils/json.ts';
 import { output } from '../index.ts';
+import { getSessionLogger } from '../session-logger.ts';
 import {
   generateSessionId,
   getDefaultSession,
@@ -22,7 +23,19 @@ import {
 } from '../session.ts';
 
 const AUDIO_HELP = `
-bp audio - Test voice/audio AI agents in the browser
+bp audio - Actively exercise voice and audio pipelines
+
+When to use:
+  You need to inject microphone input, capture spoken output, or quickly validate a voice stack.
+
+When not to use:
+  You are investigating cross-cutting failure causes over time. Use \`bp trace summary --view voice\` after capture.
+
+Default flow:
+  setup -> goto or activate the app -> check -> roundtrip or capture -> trace summary
+
+Common mistake:
+  Injecting overrides after the app already created its audio pipeline.
 
 Feed audio as microphone input, capture the agent's spoken response,
 and optionally transcribe it. Designed for AI apps that respond with
@@ -32,11 +45,11 @@ Usage:
   bp audio <subcommand> [options]
 
 Subcommands:
+  setup       Inject audio hooks into the session
+  check       Validate the current audio pipeline
   roundtrip   Play input + capture response (full voice round-trip)
   play        Feed audio file into the page's fake microphone
   capture     Capture audio output from the page
-  setup       Set up audio I/O on the session (auto-runs if needed)
-  check       Validate audio pipeline and report status
 
 Common Options:
   -s, --session [id]     Session to use (omit: auto-connect, -s: latest, -s <id>: specific)
@@ -65,51 +78,32 @@ Roundtrip Options:
   --timeout <ms>         Max total round-trip time (default: 120000)
   --send-selector <sel>  Click this selector after input finishes (push-to-talk)
 
-Voice Agent Testing (typical workflow):
-  # 1. Connect to browser
-  bp connect --provider generic --name my-test
+Typical workflows:
+  Click-to-start app:
+    bp audio setup -s vt
+    bp exec -s vt '{"action":"goto","url":"https://my-voice-app.com"}'
+    bp snapshot -i -s vt
+    bp exec -s vt '{"action":"click","selector":"ref:e4"}'
+    bp audio check -s vt
+    bp audio roundtrip -s vt -i prompt.wav --transcribe -o response.wav
 
-  # 2. Navigate to voice agent
-  bp exec -s my-test '{"action":"goto","url":"https://my-voice-app.com"}'
+  Auto-start app:
+    bp audio setup -s vt
+    bp exec -s vt '{"action":"goto","url":"https://my-voice-app.com"}'
+    bp audio check -s vt
+    bp audio roundtrip -s vt -i prompt.wav --transcribe
 
-  # 3. Validate audio pipeline
-  bp audio check -s my-test
-
-  # 4. Run voice roundtrip with transcription
-  bp audio roundtrip -s my-test -i prompt.wav --transcribe -o response.wav
-
-Setup Order (CRITICAL):
-  Audio overrides must be injected BEFORE the voice agent initializes.
-  If the agent auto-starts on page load:
-    1. bp audio setup -s my-test
-    2. bp exec -s my-test '{"action":"goto","url":"..."}'   (reload)
-    3. sleep 3
-    4. bp audio check -s my-test                            (expect READY)
-  If capture returns empty, reload the page so the agent re-initializes
-  after overrides are in place.
-
-Diagnosing Issues:
-  bp audio check -s SESSION          Validate the full audio pipeline
-  bp audio check -s SESSION --json   Machine-readable pipeline status
-
-  0 AudioContexts    = agent not initialized (wait or reload)
-  NOT READY           = overrides missing (run setup, then reload)
-  latencyMs: -1      = agent didn't respond (check bp audio check)
-  Garbage transcript = sample rate issue (use --verbose)
-
-Quick Validation:
-  1. bp audio check     -> shows "READY" with agent AudioContext detected
-  2. bp audio roundtrip  -> shows non-zero latencyMs and response duration
-  3. If latencyMs is -1, agent didn't respond -- check audio check output
+Likely next commands:
+  bp trace summary -s vt --view voice
+  bp record -s vt --profile voice
+  bp env permissions grant -s vt microphone
 
 Tips:
-  - Default --silence-timeout is 1500ms. Agents rarely pause >1.5s mid-reply,
-    so this works well. Increase only if your agent has long thinking pauses.
-  - Use --pre-delay if the page needs time after audio injection.
-  - --send-selector for push-to-talk UIs (click after speaking).
-  - --transcribe adds ~1-2s (Whisper is fast). Safe in hot loop.
-  - Use --verbose to see per-chunk RMS and silence detection.
-  - Use --json for structured output in CI/scripting.
+  - \`bp audio check\` is the first diagnostic command.
+  - If you see 0 AudioContexts, the app has not initialized yet.
+  - If you see NOT READY, run \`bp audio setup\` and reload or re-open the app flow.
+  - Use \`--send-selector\` for push-to-talk UIs.
+  - Use \`bp trace summary --view voice\` when the question is causal, not just operational.
 
 Environment:
   OPENAI_API_KEY    Required for --transcribe. Validated immediately on use.
@@ -593,6 +587,7 @@ export async function audioCommand(
     options.useLatestSession ?? false,
     globalOptions.trace ?? false
   );
+  const logger = getSessionLogger(session.id, session.exportLog);
 
   if (isNewSession) {
     console.log(`Created new session: ${session.id}`);
@@ -605,6 +600,12 @@ export async function audioCommand(
       case 'setup': {
         await page.setupAudio();
         const msg = 'Audio I/O set up (microphone override + output capture ready)';
+        logger.logTrace({
+          channel: 'voice',
+          event: 'voice.pipeline.ready',
+          summary: msg,
+          data: { subcommand: 'setup' },
+        });
         output(
           globalOptions.format === 'json' ? { success: true, message: msg } : msg,
           globalOptions.format
@@ -621,9 +622,25 @@ export async function audioCommand(
         const parsedDiag: unknown = JSON.parse(rawDiag);
         if (!isRecord(parsedDiag)) throw new Error('Invalid audio diagnostics payload');
         const diag = parsedDiag as unknown as CheckDiagnostics;
+        const checkJson = buildCheckJson(diag);
+        logger.logTrace({
+          channel: 'voice',
+          event: checkJson.ready ? 'voice.pipeline.ready' : 'voice.pipeline.notReady',
+          severity: checkJson.ready ? 'info' : 'error',
+          summary: checkJson.ready ? 'Audio pipeline ready' : 'Audio pipeline not ready',
+          data: checkJson as unknown as Record<string, unknown>,
+        });
+        if (checkJson.agentDetected) {
+          logger.logTrace({
+            channel: 'media',
+            event: 'media.track.started',
+            summary: 'Audio track detected during audio check',
+            data: { kind: 'audio', sampleRate: checkJson.agentSampleRate },
+          });
+        }
 
         if (globalOptions.format === 'json') {
-          output(buildCheckJson(diag), 'json');
+          output(checkJson, 'json');
         } else {
           console.log(formatCheckPretty(diag));
         }
@@ -639,8 +656,20 @@ export async function audioCommand(
         console.log(`Playing ${options.input} (${audioData.length} bytes)...`);
 
         const start = Date.now();
+        logger.logTrace({
+          channel: 'voice',
+          event: 'voice.capture.started',
+          summary: 'Audio playback started',
+          data: { file: options.input },
+        });
         await page.audioInput.play(audioData, { waitForEnd: !options.noWait });
         const durationMs = Date.now() - start;
+        logger.logTrace({
+          channel: 'voice',
+          event: 'voice.capture.stopped',
+          summary: 'Audio playback finished',
+          data: { file: options.input, durationMs },
+        });
 
         const result = { success: true, file: options.input, durationMs };
         output(
@@ -662,6 +691,12 @@ export async function audioCommand(
         }
 
         let capture: Awaited<ReturnType<typeof page.audioOutput.stop>>;
+        logger.logTrace({
+          channel: 'media',
+          event: 'media.playback.started',
+          summary: 'Audio capture started',
+          data: { subcommand: 'capture' },
+        });
         if (options.duration && options.duration > 0) {
           await page.audioOutput.start();
           await sleep(options.duration);
@@ -673,6 +708,15 @@ export async function audioCommand(
             maxDuration: options.maxDuration ?? 300000,
           });
         }
+        logger.logTrace({
+          channel: 'media',
+          event: 'media.playback.stopped',
+          summary: 'Audio capture stopped',
+          data: {
+            durationMs: Math.round(capture.durationMs),
+            samples: capture.left.length,
+          },
+        });
 
         if (options.out) {
           const wav = pcmToWav({
@@ -748,6 +792,12 @@ export async function audioCommand(
           preDelay: options.preDelay,
           sendSelector: options.sendSelector,
         });
+        logger.logTrace({
+          channel: 'voice',
+          event: 'voice.capture.started',
+          summary: 'Voice roundtrip started',
+          data: { file: options.input },
+        });
 
         let savedFile: string | undefined;
         if (options.out) {
@@ -771,6 +821,17 @@ export async function audioCommand(
         }
 
         const hasResponse = result.latencyMs !== -1 && result.audio.left.length > 0;
+        logger.logTrace({
+          channel: hasResponse ? 'voice' : 'media',
+          event: hasResponse ? 'voice.capture.detectedAudio' : 'voice.pipeline.notReady',
+          severity: hasResponse ? 'info' : 'error',
+          summary: hasResponse ? 'Voice response captured' : 'Voice response missing',
+          data: {
+            latencyMs: result.latencyMs,
+            durationMs: Math.round(result.audio.durationMs),
+            samples: result.audio.left.length,
+          },
+        });
 
         if (globalOptions.format === 'json') {
           const jsonResult = {

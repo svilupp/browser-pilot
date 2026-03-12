@@ -9,7 +9,7 @@ const SESSION_DIR = join(homedir(), '.browser-pilot', 'sessions');
 describe('SessionLogger', () => {
   const testSessionId = `test-session-${Date.now()}`;
   const testSessionDir = join(SESSION_DIR, testSessionId);
-  const testLogPath = join(testSessionDir, 'log.jsonl');
+  const testLogPath = join(testSessionDir, 'trace.jsonl');
 
   beforeEach(() => {
     // Clean up before each test
@@ -84,9 +84,9 @@ describe('SessionLogger', () => {
       const lines = content.split('\n');
       const entries = lines.map((l) => JSON.parse(l));
 
-      expect(entries[0]?.seq).toBe(1);
-      expect(entries[1]?.seq).toBe(2);
-      expect(entries[2]?.seq).toBe(3);
+      expect(entries[0]?.data?.legacy?.seq).toBe(1);
+      expect(entries[1]?.data?.legacy?.seq).toBe(2);
+      expect(entries[2]?.data?.legacy?.seq).toBe(3);
     });
 
     it('includes ISO timestamp in ts field', () => {
@@ -123,14 +123,16 @@ describe('SessionLogger', () => {
       const content = fs.readFileSync(testLogPath, 'utf-8').trim();
       const entry = JSON.parse(content);
 
-      expect(entry.type).toBe('command');
-      expect(entry.cmd).toBe('click');
-      expect(entry.args).toEqual({ selector: '#btn' });
-      expect(entry.status).toBe('success');
-      expect(entry.durationMs).toBe(150);
-      expect(entry.selectorUsed).toBe('#btn');
-      expect(entry.urlBefore).toBe('https://before.com');
-      expect(entry.urlAfter).toBe('https://after.com');
+      expect(entry.channel).toBe('action');
+      expect(entry.event).toBe('action.succeeded');
+      expect(entry.data.legacy.type).toBe('command');
+      expect(entry.data.legacy.cmd).toBe('click');
+      expect(entry.data.legacy.args).toEqual({ selector: '#btn' });
+      expect(entry.data.legacy.status).toBe('success');
+      expect(entry.data.legacy.durationMs).toBe(150);
+      expect(entry.data.legacy.selectorUsed).toBe('#btn');
+      expect(entry.data.legacy.urlBefore).toBe('https://before.com');
+      expect(entry.data.legacy.urlAfter).toBe('https://after.com');
     });
   });
 
@@ -143,13 +145,15 @@ describe('SessionLogger', () => {
       const content = fs.readFileSync(testLogPath, 'utf-8').trim();
       const entry = JSON.parse(content);
 
-      expect(entry.type).toBe('command');
-      expect(entry.cmd).toBe('click');
-      expect(entry.args).toEqual({ selector: '#btn' });
-      expect(entry.status).toBe('success');
-      expect(entry.durationMs).toBe(100);
-      expect(entry.error).toBeUndefined();
-      expect(entry.screenshotFile).toBe('0001-click.webp');
+      expect(entry.channel).toBe('action');
+      expect(entry.event).toBe('action.succeeded');
+      expect(entry.data.legacy.type).toBe('command');
+      expect(entry.data.legacy.cmd).toBe('click');
+      expect(entry.data.legacy.args).toEqual({ selector: '#btn' });
+      expect(entry.data.legacy.status).toBe('success');
+      expect(entry.data.legacy.durationMs).toBe(100);
+      expect(entry.data.legacy.error).toBeUndefined();
+      expect(entry.data.legacy.screenshotFile).toBe('0001-click.webp');
     });
 
     it('logs failed command with error and hints', () => {
@@ -174,9 +178,10 @@ describe('SessionLogger', () => {
       const content = fs.readFileSync(testLogPath, 'utf-8').trim();
       const entry = JSON.parse(content);
 
-      expect(entry.status).toBe('failed');
-      expect(entry.error).toBe('Element not found');
-      expect(entry.hints).toEqual(hints);
+      expect(entry.event).toBe('action.failed');
+      expect(entry.data.legacy.status).toBe('failed');
+      expect(entry.data.legacy.error).toBe('Element not found');
+      expect(entry.data.legacy.hints).toEqual(hints);
     });
   });
 
@@ -189,8 +194,9 @@ describe('SessionLogger', () => {
       const content = fs.readFileSync(testLogPath, 'utf-8').trim();
       const entry = JSON.parse(content);
 
-      expect(entry.type).toBe('error');
-      expect(entry.error).toBe('Something went wrong');
+      expect(entry.channel).toBe('runtime');
+      expect(entry.event).toBe('runtime.exception');
+      expect(entry.summary).toBe('Something went wrong');
     });
 
     it('logs error with context', () => {
@@ -201,9 +207,9 @@ describe('SessionLogger', () => {
       const content = fs.readFileSync(testLogPath, 'utf-8').trim();
       const entry = JSON.parse(content);
 
-      expect(entry.type).toBe('error');
-      expect(entry.error).toBe('Failed');
-      expect(entry.args).toEqual({ action: 'fill', selector: '#email' });
+      expect(entry.channel).toBe('runtime');
+      expect(entry.summary).toBe('Failed');
+      expect(entry.data.args).toEqual({ action: 'fill', selector: '#email' });
     });
   });
 
@@ -309,7 +315,7 @@ describe('SessionLogger', () => {
       expect(lastLine).toBeDefined();
       const lastEntry = JSON.parse(lastLine!);
 
-      expect(lastEntry.seq).toBe(4);
+      expect(lastEntry.data.legacy.seq).toBe(4);
     });
   });
 });

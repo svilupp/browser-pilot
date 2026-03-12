@@ -23,7 +23,7 @@ describe('grantAudioPermissions', () => {
     const cdp = createMockCDPClient();
     await grantAudioPermissions(cdp as unknown as CDPClient);
 
-    expect(cdp.sent.length).toBe(2);
+    expect(cdp.sent.length).toBe(3);
 
     // First: CDP permission grant
     expect(cdp.sent[0]!.method).toBe('Browser.grantPermissions');
@@ -32,12 +32,19 @@ describe('grantAudioPermissions', () => {
       origin: '',
     });
 
-    // Second: JS permissions.query override
+    // Second: install JS permissions.query override for future documents
     expect(cdp.sent[1]!.method).toBe('Page.addScriptToEvaluateOnNewDocument');
     const script = cdp.sent[1]!.params!['source'] as string;
     expect(script).toContain('permissions.query');
     expect(script).toContain('microphone');
     expect(script).toContain("state: 'granted'");
+
+    // Third: inject the same override into the current document immediately
+    expect(cdp.sent[2]!.method).toBe('Runtime.evaluate');
+    expect(cdp.sent[2]!.params).toEqual({
+      expression: script,
+      awaitPromise: false,
+    });
   });
 
   test('passes custom origin to CDP permission grant', async () => {

@@ -1,7 +1,7 @@
 /**
  * Session logging integration tests
  *
- * Tests that exec command logs actions to session log file
+ * Tests that exec command logs actions to the canonical session trace file
  */
 
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
@@ -51,8 +51,8 @@ describe('Session Logging Integration', () => {
           JSON.stringify({ action: 'click', selector: 'button[type="submit"]' }),
         ]);
 
-        // Check log file exists
-        const logPath = join(SESSION_DIR, sessionName, 'log.jsonl');
+        // Check trace file exists
+        const logPath = join(SESSION_DIR, sessionName, 'trace.jsonl');
         expect(fs.existsSync(logPath)).toBe(true);
 
         // Read log content
@@ -65,13 +65,14 @@ describe('Session Logging Integration', () => {
         // Parse and verify entries
         const entries = lines.map((line) => JSON.parse(line));
 
-        // Find the click command entry
-        const clickEntry = entries.find((e) => e.cmd === 'click');
+        // Find the click action trace entry
+        const clickEntry = entries.find(
+          (e) => e.channel === 'action' && e.event === 'action.succeeded' && e.data?.cmd === 'click'
+        );
         expect(clickEntry).toBeDefined();
-        expect(clickEntry?.type).toBe('command');
-        expect(clickEntry?.status).toBe('success');
-        expect(typeof clickEntry?.durationMs).toBe('number');
-        expect(clickEntry?.seq).toBeGreaterThan(0);
+        expect(clickEntry?.severity).toBe('info');
+        expect(typeof clickEntry?.data?.durationMs).toBe('number');
+        expect(clickEntry?.traceId).toBeDefined();
         expect(clickEntry?.ts).toBeDefined();
 
         // Cleanup
@@ -106,27 +107,28 @@ describe('Session Logging Integration', () => {
           ]),
         ]);
 
-        // Check log file
-        const logPath = join(SESSION_DIR, sessionName, 'log.jsonl');
+        // Check trace file
+        const logPath = join(SESSION_DIR, sessionName, 'trace.jsonl');
         expect(fs.existsSync(logPath)).toBe(true);
 
         const content = fs.readFileSync(logPath, 'utf-8').trim();
         const entries = content.split('\n').map((line) => JSON.parse(line));
 
-        // Find the fill command entry
-        const fillEntry = entries.find((e) => e.cmd === 'fill');
+        // Find the fill action trace entry
+        const fillEntry = entries.find(
+          (e) => e.channel === 'action' && e.event === 'action.succeeded' && e.data?.cmd === 'fill'
+        );
         expect(fillEntry).toBeDefined();
-        expect(fillEntry?.type).toBe('command');
-        expect(fillEntry?.status).toBe('success');
-        expect(typeof fillEntry?.durationMs).toBe('number');
-        expect(fillEntry?.durationMs).toBeGreaterThan(0);
+        expect(fillEntry?.severity).toBe('info');
+        expect(typeof fillEntry?.data?.durationMs).toBe('number');
+        expect(fillEntry?.data?.durationMs).toBeGreaterThan(0);
 
         // Find batch event
-        const batchEvent = entries.find((e) => e.type === 'event' && e.cmd === 'batch');
+        const batchEvent = entries.find((e) => e.channel === 'session' && e.event === 'batch');
         expect(batchEvent).toBeDefined();
-        expect(batchEvent?.args?.stepCount).toBe(2);
-        expect(batchEvent?.urlBefore).toBeDefined();
-        expect(batchEvent?.urlAfter).toBeDefined();
+        expect(batchEvent?.data?.args?.stepCount).toBe(2);
+        expect(batchEvent?.data?.legacy?.urlBefore).toBeDefined();
+        expect(batchEvent?.data?.legacy?.urlAfter).toBeDefined();
 
         // Cleanup
         await runCLI(['close', '-s', sessionName]).catch(() => {});
@@ -164,22 +166,25 @@ describe('Session Logging Integration', () => {
           JSON.stringify({ action: 'click', selector: '#nonexistent-element', timeout: 1000 }),
         ]);
 
-        // Check log file
-        const logPath = join(SESSION_DIR, sessionName, 'log.jsonl');
+        // Check trace file
+        const logPath = join(SESSION_DIR, sessionName, 'trace.jsonl');
         expect(fs.existsSync(logPath)).toBe(true);
 
         const content = fs.readFileSync(logPath, 'utf-8').trim();
         const entries = content.split('\n').map((line) => JSON.parse(line));
 
-        // Find the failed click command
-        const failedEntry = entries.find((e) => e.cmd === 'click' && e.status === 'failed');
+        // Find the failed click action trace entry
+        const failedEntry = entries.find(
+          (e) => e.channel === 'action' && e.event === 'action.failed' && e.data?.cmd === 'click'
+        );
         expect(failedEntry).toBeDefined();
-        expect(failedEntry?.error).toBeDefined();
-        expect(failedEntry?.error).toContain('not found');
+        expect(failedEntry?.severity).toBe('error');
+        expect(failedEntry?.data?.error).toBeDefined();
+        expect(failedEntry?.data?.error).toContain('not found');
 
         // Should have hints for similar elements
-        if (failedEntry?.hints) {
-          expect(Array.isArray(failedEntry.hints)).toBe(true);
+        if (failedEntry?.data?.hints) {
+          expect(Array.isArray(failedEntry.data.hints)).toBe(true);
         }
 
         // Cleanup

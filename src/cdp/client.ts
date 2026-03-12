@@ -4,7 +4,13 @@
  */
 
 import { isRecord } from '../utils/json.ts';
-import { CDPError, type CDPEvent, type CDPRequest, type CDPResponse } from './protocol.ts';
+import {
+  CDPError,
+  type CDPErrorData,
+  type CDPEvent,
+  type CDPRequest,
+  type CDPResponse,
+} from './protocol.ts';
 import { createTransport, type TransportOptions } from './transport.ts';
 
 export interface CDPClientOptions extends TransportOptions {
@@ -40,6 +46,9 @@ export interface CDPClient {
 
   /** Get the current session ID (after attaching to target) */
   readonly sessionId: string | undefined;
+
+  /** Override the current session ID when reusing an existing attached target */
+  setSessionId(sessionId: string | undefined): void;
 
   /** Check if connection is open */
   readonly isConnected: boolean;
@@ -133,7 +142,11 @@ function buildCDPClient(
         clearTimeout(request.timer);
 
         if (response.error) {
-          request.reject(new CDPError(response.error));
+          const error: CDPErrorData =
+            typeof response.error === 'string'
+              ? { code: -32000, message: response.error }
+              : response.error;
+          request.reject(new CDPError(error));
         } else {
           request.resolve(response.result);
         }
@@ -277,6 +290,10 @@ function buildCDPClient(
 
     get sessionId() {
       return currentSessionId;
+    },
+
+    setSessionId(sessionId: string | undefined) {
+      currentSessionId = sessionId;
     },
 
     get isConnected() {

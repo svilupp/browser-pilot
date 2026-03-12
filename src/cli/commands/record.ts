@@ -1,77 +1,88 @@
-/**
- * Record command - Record browser actions to JSON
- *
- * Captures human interactions in a browser session and saves them
- * as JSON steps compatible with page.batch() for replay.
- */
-
 import * as nodeFs from 'node:fs';
+import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
-import { type Browser, connect, getBrowserWebSocketUrl } from '../../index.ts';
-import type { RecordingFrame, RecordingManifest } from '../../recording/manifest.ts';
-import type {
-  ListenMode,
-  RecorderListenOptions,
-  RecorderOptions,
-} from '../../recording/recorder.ts';
-import { Recorder } from '../../recording/recorder.ts';
+import { dirname, join, resolve } from 'node:path';
+import type { Step } from '../../actions/types.ts';
+import { connect, getBrowserWebSocketUrl } from '../../index.ts';
+import {
+  canonicalizeRecordingArtifact,
+  createRecordingManifest,
+  type RecordingFrame,
+  type RecordingManifest,
+} from '../../recording/manifest.ts';
+import { Recorder, type ListenMode, type RecorderListenOptions, type RecorderOptions } from '../../recording/recorder.ts';
 import { redactValueForRecording } from '../../recording/redaction.ts';
 import type { RawRecordedEvent } from '../../recording/types.ts';
+import { buildTraceSummaries } from '../../trace/views.ts';
 import { output } from '../index.ts';
 import {
   generateSessionId,
   getDefaultSession,
   loadSession,
-  type RecordSettings,
-  type SessionData,
   saveSession,
   updateSession,
+  type RecordSettings,
+  type SessionData,
 } from '../session.ts';
 
+type RecordProfile = 'automation' | 'realtime' | 'voice' | 'auth';
+type RecordSubcommand = 'capture' | 'inspect' | 'summary' | 'derive' | 'export';
+
 const RECORD_HELP = `
-bp record - Record browser actions to JSON
+bp record - Capture a human demo into one canonical artifact
+
+When to use:
+  A human is demonstrating the workflow and you want replayable automation later.
+
+When not to use:
+  You already have steps and just want to run or validate them. Use \`bp exec\` or \`bp run\`.
+
+Default flow:
+  capture -> summary -> inspect or trace -> derive -> run
+
+Common mistake:
+  Opening \`recording.json\` first. Start with \`bp record summary\`.
 
 Usage:
   bp record [options]
+  bp record <inspect|summary|derive|export> [artifact] [options]
 
-Options:
-  -s, --session [id]  Session to use:
-                        - omit -s: auto-connect to local browser
-                        - -s alone: use most recent session
-                        - -s <id>: use specific session
-  -f, --file <path>   Output file (default: recording.json)
-  --timeout <ms>      Auto-stop after timeout (optional)
-  --listen [mode]     Capture network traffic: ws, http, or all (default: all)
-  --bodies            Capture HTTP response bodies (requires --listen)
-  -m, --match <glob>  Filter network URLs by glob pattern (requires --listen)
-  --max-payload <n>   Max WebSocket payload preview length (default: 256)
-  -h, --help          Show this help
+Capture options:
+  -s, --session [id]   Session to use (omit: auto-connect, -s: latest, -s <id>: specific)
+  -f, --file <path>    Artifact output path (default: recording.json)
+  --timeout <ms>       Auto-stop after timeout
+  --profile <name>     automation | realtime | voice | auth (default: automation)
+  --listen [mode]      ws | http | all (default: all)
+  --bodies             Capture HTTP response bodies
+  -m, --match <glob>   Filter HTTP/WS URLs
+  --max-payload <n>    Max WebSocket payload preview length (default: 256)
+
+Artifact subcommands:
+  inspect [artifact]   Show artifact metadata and next commands
+  summary [artifact]   Show workflow summary plus trace views
+  derive <artifact> -o <output>   Write replayable steps for bp run
+  export <artifact> -o <output>   Write canonical triage bundle
 
 Examples:
-  bp record                              # Auto-connect to local Chrome
-  bp record -s                           # Use most recent session
-  bp record -s mysession                 # Use specific session
-  bp record -f login.json                # Save to specific file
-  bp record --timeout 60000              # Auto-stop after 60s
-  bp record --listen                     # Record actions + all network traffic
-  bp record --listen ws -m "*voice*"     # Record actions + matching WS traffic
-  bp record --listen http --bodies       # Record actions + HTTP with bodies
+  bp record -s demo --profile automation
+  bp record --profile voice --bodies
+  bp record summary recording.json
+  bp record inspect recording.json
+  bp record derive recording.json -o workflow.json
+  bp record export recording.json -o bundle.json
 
-Recording captures: clicks, inputs, form submissions, navigation.
-Screenshots are captured automatically after each interaction and saved
-to the session directory (~/.browser-pilot/sessions/<id>/screenshots/).
-When --listen is enabled, network traffic is captured alongside actions
-and merged into a unified timeline in the output file.
-Sensitive fields are automatically redacted as [REDACTED] based on the
-field settings (password, hidden, one-time-code, card autofill hints).
-Recording also enables session-level auto-recording for subsequent
-bp exec calls (equivalent to bp connect --record).
+Likely next commands:
+  bp record summary recording.json
+  bp trace summary recording.json --view ws
+  bp record derive recording.json -o workflow.json
+`.trim();
 
-Press Ctrl+C to stop recording and save.
-`;
+const DEFAULT_ARTIFACT = 'recording.json';
 
 interface RecordOptions {
+  subcommand?: RecordSubcommand;
+  artifactPath?: string;
+  output?: string;
   file?: string;
   timeout?: number;
   help?: boolean;
@@ -80,10 +91,18 @@ interface RecordOptions {
   bodies?: boolean;
   match?: string;
   maxPayload?: number;
+  profile?: RecordProfile;
+}
+
+interface ResolvedConnection {
+  browser: ReturnType<typeof connect> extends Promise<infer T> ? T : never;
+  session: SessionData;
+  isNewSession: boolean;
 }
 
 export function parseRecordArgs(args: string[]): RecordOptions {
   const options: RecordOptions = {};
+  let nextIsArtifact = false;
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]!;
@@ -95,17 +114,14 @@ export function parseRecordArgs(args: string[]): RecordOptions {
     } else if (arg === '-h' || arg === '--help') {
       options.help = true;
     } else if (arg === '-s' || arg === '--session') {
-      // Check if next arg is a value or another flag (or end of args)
       const nextArg = args[i + 1];
       if (!nextArg || nextArg.startsWith('-')) {
         options.useLatestSession = true;
       }
-      // Note: actual session ID value is parsed by main CLI into globalOptions.session
     } else if (arg === '--listen') {
-      // Check if next arg is a mode value
       const nextArg = args[i + 1];
-      if (nextArg && (nextArg === 'ws' || nextArg === 'http' || nextArg === 'all')) {
-        options.listen = nextArg as ListenMode;
+      if (nextArg === 'ws' || nextArg === 'http' || nextArg === 'all') {
+        options.listen = nextArg;
         i++;
       } else {
         options.listen = true;
@@ -116,116 +132,207 @@ export function parseRecordArgs(args: string[]): RecordOptions {
       options.match = args[++i];
     } else if (arg === '--max-payload') {
       options.maxPayload = Number.parseInt(args[++i] ?? '', 10);
+    } else if (arg === '--profile') {
+      const profile = args[++i];
+      if (profile === 'automation' || profile === 'realtime' || profile === 'voice' || profile === 'auth') {
+        options.profile = profile;
+      }
+    } else if (arg === '-o' || arg === '--output') {
+      options.output = args[++i];
+    } else if (!arg.startsWith('-') && !options.subcommand && !nextIsArtifact) {
+      if (isSubcommand(arg)) {
+        options.subcommand = arg;
+        nextIsArtifact = arg !== 'capture';
+      } else if (!options.artifactPath) {
+        options.artifactPath = arg;
+      }
+    } else if (!arg.startsWith('-') && nextIsArtifact && !options.artifactPath) {
+      options.artifactPath = arg;
+      nextIsArtifact = false;
     }
   }
 
   return options;
 }
 
-interface ResolvedConnection {
-  browser: Browser;
-  session: SessionData;
-  isNewSession: boolean;
+function isSubcommand(value: string): value is RecordSubcommand {
+  return value === 'capture' || value === 'inspect' || value === 'summary' || value === 'derive' || value === 'export';
 }
 
-/**
- * Resolve which browser connection to use based on arguments.
- *
- * Three modes:
- * 1. sessionId provided -> use that specific session
- * 2. useLatestSession -> use most recent session
- * 3. neither -> auto-connect to local browser and create new session
- */
 async function resolveConnection(
   sessionId: string | undefined,
   useLatestSession: boolean,
-  trace: boolean
+  debug: boolean
 ): Promise<ResolvedConnection> {
-  // Mode 1: Specific session ID provided
   if (sessionId) {
     const session = await loadSession(sessionId);
     const browser = await connect({
       provider: session.provider,
       wsUrl: session.wsUrl,
-      debug: trace,
+      debug,
     });
     return { browser, session, isNewSession: false };
   }
 
-  // Mode 2: Use latest session (-s flag without value)
   if (useLatestSession) {
     const session = await getDefaultSession();
     if (!session) {
-      throw new Error(
-        'No sessions found. Run "bp connect" first or use "bp record" to auto-connect.'
-      );
+      throw new Error('No sessions found. Run "bp connect" first or omit -s to auto-connect.');
     }
     const browser = await connect({
       provider: session.provider,
       wsUrl: session.wsUrl,
-      debug: trace,
+      debug,
     });
     return { browser, session, isNewSession: false };
   }
 
-  // Mode 3: Auto-connect to local browser (no -s flag at all)
   let wsUrl: string;
   try {
     wsUrl = await getBrowserWebSocketUrl('localhost:9222');
   } catch {
     throw new Error(
       'Could not auto-discover browser.\n' +
-        'Either:\n' +
-        '  1. Start Chrome with: --remote-debugging-port=9222\n' +
-        '  2. Use an existing session: bp record -s <session-id>\n' +
-        '  3. Use latest session: bp record -s'
+        'Either start Chrome with --remote-debugging-port=9222 or pass -s to reuse a session.'
     );
   }
 
   const browser = await connect({
     provider: 'generic',
     wsUrl,
-    debug: trace,
+    debug,
   });
-
-  // Create and save new session
   const page = await browser.page();
   const currentUrl = await page.url();
-  const newSessionId = generateSessionId();
-
   const session: SessionData = {
-    id: newSessionId,
+    id: generateSessionId(),
     provider: 'generic',
     wsUrl: browser.wsUrl,
     createdAt: new Date().toISOString(),
     lastActivity: new Date().toISOString(),
     currentUrl,
   };
-
   await saveSession(session);
-
   return { browser, session, isNewSession: true };
 }
 
-export async function recordCommand(
-  args: string[],
-  globalOptions: { session?: string; format?: 'json' | 'pretty'; trace?: boolean; help?: boolean }
-): Promise<void> {
-  const options = parseRecordArgs(args);
+function artifactSessionDir(sessionId: string): string {
+  return join(homedir(), '.browser-pilot', 'sessions', sessionId);
+}
 
-  // Show help if requested
-  if (options.help || globalOptions.help) {
-    console.log(RECORD_HELP);
-    return;
+function resolveArtifactPath(explicit?: string, session?: SessionData): string {
+  if (explicit) {
+    return resolve(explicit);
+  }
+  if (session) {
+    return join(artifactSessionDir(session.id), DEFAULT_ARTIFACT);
+  }
+  return resolve(DEFAULT_ARTIFACT);
+}
+
+function normalizeProfile(profile?: RecordProfile): RecordProfile {
+  return profile ?? 'automation';
+}
+
+function tipsForArtifact(path: string) {
+  return {
+    tip: {
+      reason: 'summary_first',
+      command: `bp record summary ${path}`,
+    },
+    alternateTips: [
+      {
+        reason: 'derive_replayable_steps',
+        command: `bp record derive ${path} -o workflow.json`,
+      },
+      {
+        reason: 'inspect_trace_views',
+        command: `bp trace summary ${path} --view ws`,
+      },
+    ],
+  };
+}
+
+function buildSummary(artifact: RecordingManifest, source: string) {
+  return {
+    source,
+    version: artifact.version,
+    session: artifact.session,
+    counts: {
+      steps: artifact.recipe.steps.length,
+      actions: artifact.actions.length,
+      screenshots: artifact.screenshots.length,
+      traceEvents: artifact.trace.events.length,
+      assertions: artifact.assertions.length,
+    },
+    trace: artifact.trace.summaries,
+    tips: tipsForArtifact(source),
+  };
+}
+
+function deriveAssertions(artifact: RecordingManifest): Step[] {
+  const assertions: Step[] = [];
+
+  if (artifact.session.endUrl) {
+    assertions.push({ action: 'assertUrl', expect: artifact.session.endUrl });
   }
 
-  // Default output file
-  const outputFile = options.file ?? 'recording.json';
+  for (const action of artifact.actions) {
+    if (action.action === 'fill' && action.selector && typeof action.value === 'string') {
+      assertions.push({
+        action: 'assertValue',
+        selector: action.selector,
+        expect: action.value,
+      });
+    }
+  }
 
-  // Resolve connection (auto-connect, latest session, or specific session)
+  return assertions;
+}
+
+async function loadArtifact(pathOrFallback: string): Promise<{ path: string; artifact: RecordingManifest }> {
+  if (!existsSync(pathOrFallback)) {
+    throw new Error(`Artifact not found: ${pathOrFallback}`);
+  }
+
+  const raw = JSON.parse(nodeFs.readFileSync(pathOrFallback, 'utf-8')) as unknown;
+  return { path: pathOrFallback, artifact: canonicalizeRecordingArtifact(raw) };
+}
+
+function artifactToFrames(artifact: RecordingManifest): RecordingFrame[] {
+  const screenshotsByAction = new Map(artifact.screenshots.map((shot) => [shot.actionId, shot]));
+  return artifact.actions.map((action, index) => {
+    const screenshot = screenshotsByAction.get(action.id);
+    return {
+      seq: index + 1,
+      timestamp: Date.parse(action.ts),
+      action: action.action,
+      selector: action.selector,
+      selectorUsed: action.selectorUsed,
+      value: action.value,
+      url: action.url,
+      coordinates: action.coordinates,
+      boundingBox: action.boundingBox,
+      success: action.success,
+      durationMs: action.durationMs,
+      error: action.error,
+      screenshot: screenshot?.file ?? '',
+      pageUrl: action.pageUrl,
+      pageTitle: action.pageTitle,
+      stepIndex: action.stepIndex,
+      actionId: action.id,
+    };
+  });
+}
+
+async function runRecordCapture(
+  args: RecordOptions,
+  globalOptions: { session?: string; format?: 'json' | 'pretty'; trace?: boolean; help?: boolean }
+): Promise<void> {
+  const profile = normalizeProfile(args.profile);
   const { browser, session, isNewSession } = await resolveConnection(
     globalOptions.session,
-    options.useLatestSession ?? false,
+    args.useLatestSession ?? false,
     globalOptions.trace ?? false
   );
 
@@ -233,73 +340,50 @@ export async function recordCommand(
     console.log(`Created new session: ${session.id}`);
   }
 
-  // Enable session-level recording so replaying captured steps auto-records screenshots
   if (!session.metadata?.record) {
     const recordSettings: RecordSettings = {};
     await updateSession(session.id, { metadata: { record: recordSettings } });
   }
 
-  const page = await browser.page();
+  const page = await browser.page(undefined, { targetId: session.targetId });
   const cdp = page.cdpClient;
-
-  // Build recorder options
-  let listenConfig: RecorderListenOptions | boolean | undefined;
-  if (options.listen) {
-    const listenOpts: RecorderListenOptions = {
-      mode: typeof options.listen === 'string' ? options.listen : 'all',
-      match: options.match,
-      captureResponseBodies: options.bodies,
-      maxPayload: options.maxPayload,
-    };
-    listenConfig = listenOpts;
-  }
-
-  // Set up screenshot capture directory (accumulative with existing frames)
-  const sessionDir = join(homedir(), '.browser-pilot', 'sessions', session.id);
+  const sessionDir = artifactSessionDir(session.id);
   const screenshotDir = join(sessionDir, 'screenshots');
-  const manifestPath = join(sessionDir, 'recording.json');
+  const canonicalPath = join(sessionDir, DEFAULT_ARTIFACT);
+  const outputPath = resolve(args.file ?? DEFAULT_ARTIFACT);
+
   nodeFs.mkdirSync(screenshotDir, { recursive: true });
 
-  // Load existing frames for accumulative recording
-  const recordingFrames: RecordingFrame[] = [];
-  let manifestRecordedAt = new Date().toISOString();
-  let manifestStartUrl = '';
-  try {
-    const existing = JSON.parse(nodeFs.readFileSync(manifestPath, 'utf-8')) as RecordingManifest;
-    if (existing.frames && Array.isArray(existing.frames)) {
-      recordingFrames.push(...existing.frames);
-    }
-    if (existing.recordedAt) manifestRecordedAt = existing.recordedAt;
-    if (existing.startUrl) manifestStartUrl = existing.startUrl;
-  } catch {
-    // No existing manifest — start fresh
+  const existingArtifact = existsSync(canonicalPath)
+    ? canonicalizeRecordingArtifact(JSON.parse(nodeFs.readFileSync(canonicalPath, 'utf-8')) as unknown)
+    : null;
+  const recordingFrames = existingArtifact ? artifactToFrames(existingArtifact) : [];
+
+  let listenConfig: RecorderListenOptions | boolean | undefined = {
+    mode: typeof args.listen === 'string' ? args.listen : 'all',
+    match: args.match,
+    captureResponseBodies: Boolean(args.bodies),
+    maxPayload: args.maxPayload,
+  };
+  if (args.listen === false) {
+    listenConfig = undefined;
   }
 
-  const recordFormat = session.metadata?.record?.format ?? 'webp';
-  const recordQuality = session.metadata?.record?.quality ?? 40;
+  if (!args.listen && profile === 'voice') {
+    listenConfig = {
+      mode: 'all',
+      match: args.match,
+      captureResponseBodies: Boolean(args.bodies),
+      maxPayload: args.maxPayload,
+    };
+  }
+
+  const recordSettings = session.metadata?.record;
+  const recordFormat = recordSettings?.format ?? 'webp';
+  const recordQuality = recordSettings?.quality ?? 40;
+
   let screenshotCount = 0;
 
-  // Map recorder event kinds to action-type-like labels for filenames
-  function eventKindLabel(kind: string): string {
-    switch (kind) {
-      case 'click':
-      case 'dblclick':
-        return 'click';
-      case 'input':
-      case 'change':
-        return 'fill';
-      case 'submit':
-        return 'submit';
-      case 'keydown':
-        return 'press';
-      case 'navigation':
-        return 'goto';
-      default:
-        return kind;
-    }
-  }
-
-  // Screenshot capture callback for each recorded event
   async function captureScreenshotForEvent(event: RawRecordedEvent): Promise<void> {
     try {
       const ts = Date.now();
@@ -307,46 +391,34 @@ export async function recordCommand(
       const label = eventKindLabel(event.kind);
       const filename = `${seq}-${ts}-${label}.${recordFormat}`;
       const filepath = join(screenshotDir, filename);
-
-      // Take screenshot via CDP directly (page may not have screenshot method here)
       const result = await cdp.send<{ data: string }>('Page.captureScreenshot', {
         format: recordFormat === 'png' ? 'png' : recordFormat === 'jpeg' ? 'jpeg' : 'webp',
         quality: recordFormat === 'png' ? undefined : recordQuality,
       });
-      const buffer = Buffer.from(result.data, 'base64');
-      nodeFs.writeFileSync(filepath, buffer);
+      nodeFs.writeFileSync(filepath, Buffer.from(result.data, 'base64'));
 
-      // Get page info
       let pageUrl: string | undefined;
       let pageTitle: string | undefined;
       try {
-        const urlResult = await cdp.send<{ result: { value: string } }>('Runtime.evaluate', {
-          expression: 'location.href',
-          returnByValue: true,
-        });
-        pageUrl = urlResult.result.value;
-        const titleResult = await cdp.send<{ result: { value: string } }>('Runtime.evaluate', {
-          expression: 'document.title',
-          returnByValue: true,
-        });
-        pageTitle = titleResult.result.value;
+        pageUrl = await page.url();
+        pageTitle = await page.title();
       } catch {
-        /* best-effort */
+        // best effort
       }
 
-      // Build target metadata from event element info for redaction
       const targetMetadata = event.element
         ? {
-            tagName: event.element.tag,
-            inputType: event.element.type ?? undefined,
+            tagName: event.element['tag'],
+            inputType: event.element['type'] ?? undefined,
           }
         : undefined;
 
-      const frame: RecordingFrame = {
+      recordingFrames.push({
         seq: recordingFrames.length + 1,
         timestamp: ts,
-        action: label as RecordingFrame['action'],
+        action: label,
         selector: event.selectors?.[0]?.selector,
+        selectorUsed: event.selectors?.[0]?.selector,
         value: redactValueForRecording(event.value, targetMetadata),
         coordinates: event.client,
         success: true,
@@ -354,149 +426,228 @@ export async function recordCommand(
         screenshot: `screenshots/${filename}`,
         pageUrl,
         pageTitle,
-      };
-
-      recordingFrames.push(frame);
-      screenshotCount++;
+        stepIndex: recordingFrames.length,
+        actionId: `action-${recordingFrames.length + 1}`,
+      });
+      screenshotCount += 1;
     } catch {
-      /* Screenshot capture is best-effort */
+      // best effort
     }
   }
 
-  // Create recorder with screenshot callback
   const recorderOptions: RecorderOptions = {
     ...(listenConfig ? { listen: listenConfig } : {}),
     onEvent: captureScreenshotForEvent,
   };
-  const recorder = new Recorder(cdp, recorderOptions);
 
-  // Track if we're already stopping to prevent double-stop
+  const recorder = new Recorder(cdp, recorderOptions);
   let stopping = false;
 
-  // Stop recording and save
-  async function stopAndSave(): Promise<void> {
-    if (stopping) return;
+  const stopAndSave = async (): Promise<void> => {
+    if (stopping) {
+      return;
+    }
     stopping = true;
 
     try {
       const recording = await recorder.stop();
-
-      // Write action steps to output file
-      const fs = await import('node:fs/promises');
-      await fs.writeFile(outputFile, JSON.stringify(recording, null, 2));
-
-      // Write screenshot manifest (accumulative)
-      let currentUrl = '';
-      let viewport = { width: 1280, height: 720 };
-      try {
-        const urlResult = await cdp.send<{ result: { value: string } }>('Runtime.evaluate', {
-          expression: 'location.href',
-          returnByValue: true,
-        });
-        currentUrl = urlResult.result.value;
-      } catch {
-        /* best-effort */
-      }
-      try {
-        const metrics = await cdp.send<{
-          cssVisualViewport: { clientWidth: number; clientHeight: number };
-        }>('Page.getLayoutMetrics');
-        viewport = {
-          width: metrics.cssVisualViewport.clientWidth,
-          height: metrics.cssVisualViewport.clientHeight,
-        };
-      } catch {
-        /* use default */
-      }
-
-      const manifest: RecordingManifest = {
-        version: 1,
-        recordedAt: manifestRecordedAt,
+      const currentUrl = await page.url().catch(() => recording.startUrl);
+      const manifest = createRecordingManifest({
+        recordedAt: existingArtifact?.recordedAt ?? recording.recordedAt,
         sessionId: session.id,
-        startUrl: manifestStartUrl || recording.startUrl,
+        startUrl: existingArtifact?.session.startUrl ?? recording.startUrl,
         endUrl: currentUrl,
-        viewport,
-        format: recordFormat,
-        quality: recordQuality,
-        totalDurationMs: recording.duration,
-        success: true,
+        targetId: page.targetId,
+        profile,
+        steps: recording.steps,
         frames: recordingFrames,
-      };
-      nodeFs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+        traceEvents: recording.traceEvents ?? [],
+        assertions: deriveAssertions(
+          createRecordingManifest({
+            recordedAt: recording.recordedAt,
+            sessionId: session.id,
+            startUrl: recording.startUrl,
+            endUrl: currentUrl,
+            targetId: page.targetId,
+            profile,
+            steps: recording.steps,
+            frames: recordingFrames,
+            traceEvents: recording.traceEvents ?? [],
+          })
+        ),
+        notes: profile === 'voice' ? ['Voice profile capture'] : [],
+        recordingManifest: DEFAULT_ARTIFACT,
+        screenshotDir: 'screenshots/',
+      });
 
-      // Update session
-      await updateSession(session.id, { currentUrl: currentUrl || recording.startUrl });
+      nodeFs.writeFileSync(canonicalPath, JSON.stringify(manifest, null, 2));
+      if (outputPath !== canonicalPath) {
+        nodeFs.mkdirSync(dirname(outputPath), { recursive: true });
+        nodeFs.writeFileSync(outputPath, JSON.stringify(manifest, null, 2));
+      }
 
-      // Disconnect
+      await updateSession(session.id, { currentUrl });
       await browser.disconnect();
 
-      // Output summary
-      const networkInfo = recording.network
-        ? `, ${recording.network.requests.length} HTTP requests`
-        : '';
-      const wsInfo = recording.websockets
-        ? `, ${recording.websockets.frames.length} WS frames`
-        : '';
-      const timelineInfo = recording.timeline
-        ? ` (${recording.timeline.length} timeline entries)`
-        : '';
-      const screenshotInfo = screenshotCount > 0 ? `, ${screenshotCount} screenshots` : '';
-      console.log(
-        `\nSaved ${recording.steps.length} steps${screenshotInfo}${networkInfo}${wsInfo}${timelineInfo} to ${outputFile}`
-      );
-      if (screenshotCount > 0) {
-        console.log(`Screenshots: ${sessionDir}`);
-      }
-
+      const summary = buildSummary(manifest, outputPath);
       if (globalOptions.format === 'json') {
-        output(
-          {
-            success: true,
-            file: outputFile,
-            steps: recording.steps.length,
-            screenshots: screenshotCount,
-            duration: recording.duration,
-            networkRequests: recording.network?.requests.length ?? 0,
-            wsFrames: recording.websockets?.frames.length ?? 0,
-            timelineEntries: recording.timeline?.length ?? 0,
-          },
-          'json'
+        output({ success: true, ...summary }, 'json');
+      } else {
+        console.log(
+          `Saved ${manifest.recipe.steps.length} steps, ${screenshotCount} screenshots, ${manifest.trace.events.length} trace events to ${outputPath}`
         );
+        console.log(`Use: bp record summary ${outputPath}`);
       }
-
-      process.exit(0);
     } catch (error) {
-      console.error('Error saving recording:', error);
+      console.error(`Error saving recording: ${error instanceof Error ? error.message : String(error)}`);
       process.exit(1);
     }
-  }
+  };
 
-  // Handle signals
   const handleSignal = () => {
-    stopAndSave().catch((err) => {
-      console.error('Error during shutdown:', err);
-      process.exit(1);
-    });
+    void stopAndSave();
   };
   process.on('SIGINT', handleSignal);
   process.on('SIGTERM', handleSignal);
 
-  // Handle timeout
-  if (options.timeout && options.timeout > 0) {
-    setTimeout(() => {
-      void stopAndSave();
-    }, options.timeout);
+  if (args.timeout && args.timeout > 0) {
+    setTimeout(() => void stopAndSave(), args.timeout);
   }
 
-  // Start recording
   await recorder.start();
-
-  console.log(`Recording... Press Ctrl+C to stop and save to ${outputFile}`);
-  if (options.listen) {
-    const listenMode = typeof options.listen === 'string' ? options.listen : 'all';
-    const matchLabel = options.match ? ` matching "${options.match}"` : '';
-    console.log(`Network capture: ${listenMode} traffic${matchLabel}`);
-  }
+  console.log(`Recording... Press Ctrl+C to stop. Artifact: ${outputPath}`);
   console.log(`Session: ${session.id}`);
+  console.log(`Profile: ${profile}`);
   console.log(`URL: ${await page.url()}`);
+}
+
+async function runRecordInspect(
+  pathHint: string | undefined,
+  globalOptions: { session?: string; format?: 'json' | 'pretty' }
+): Promise<void> {
+  const session = globalOptions.session ? await loadSession(globalOptions.session) : await getDefaultSession();
+  const artifactPath = resolveArtifactPath(pathHint, session ?? undefined);
+  const { path, artifact } = await loadArtifact(artifactPath);
+  output(buildSummary(artifact, path), globalOptions.format ?? 'pretty');
+}
+
+async function runRecordSummary(
+  pathHint: string | undefined,
+  globalOptions: { session?: string; format?: 'json' | 'pretty' }
+): Promise<void> {
+  const session = globalOptions.session ? await loadSession(globalOptions.session) : await getDefaultSession();
+  const artifactPath = resolveArtifactPath(pathHint, session ?? undefined);
+  const { path, artifact } = await loadArtifact(artifactPath);
+  const summary = buildSummary(artifact, path);
+  summary.trace = buildTraceSummaries(artifact.trace.events);
+  output(summary, globalOptions.format ?? 'pretty');
+}
+
+async function runRecordDerive(
+  pathHint: string | undefined,
+  outputPath: string | undefined,
+  globalOptions: { format?: 'json' | 'pretty'; session?: string }
+): Promise<void> {
+  if (!outputPath) {
+    throw new Error('record derive requires -o <workflow.json>');
+  }
+
+  const session = globalOptions.session ? await loadSession(globalOptions.session) : await getDefaultSession();
+  const artifactPath = resolveArtifactPath(pathHint, session ?? undefined);
+  const { artifact } = await loadArtifact(artifactPath);
+  const steps = artifact.recipe.steps;
+
+  nodeFs.mkdirSync(dirname(resolve(outputPath)), { recursive: true });
+  nodeFs.writeFileSync(outputPath, JSON.stringify(steps, null, 2));
+
+  output(
+    {
+      success: true,
+      output: outputPath,
+      steps: steps.length,
+      suggestedAssertions: deriveAssertions(artifact),
+    },
+    globalOptions.format ?? 'pretty'
+  );
+}
+
+async function runRecordExport(
+  pathHint: string | undefined,
+  outputPath: string | undefined,
+  globalOptions: { format?: 'json' | 'pretty'; session?: string }
+): Promise<void> {
+  if (!outputPath) {
+    throw new Error('record export requires -o <bundle.json>');
+  }
+
+  const session = globalOptions.session ? await loadSession(globalOptions.session) : await getDefaultSession();
+  const artifactPath = resolveArtifactPath(pathHint, session ?? undefined);
+  const { artifact, path } = await loadArtifact(artifactPath);
+  const bundle = {
+    source: path,
+    exportedAt: new Date().toISOString(),
+    artifact,
+    summary: buildSummary(artifact, path),
+  };
+
+  nodeFs.mkdirSync(dirname(resolve(outputPath)), { recursive: true });
+  nodeFs.writeFileSync(outputPath, JSON.stringify(bundle, null, 2));
+
+  output({ success: true, output: outputPath }, globalOptions.format ?? 'pretty');
+}
+
+function eventKindLabel(kind: string): string {
+  switch (kind) {
+    case 'click':
+    case 'dblclick':
+      return 'click';
+    case 'input':
+    case 'change':
+      return 'fill';
+    case 'submit':
+      return 'submit';
+    case 'keydown':
+      return 'press';
+    case 'navigation':
+      return 'goto';
+    default:
+      return kind;
+  }
+}
+
+export async function recordCommand(
+  args: string[],
+  globalOptions: { session?: string; format?: 'json' | 'pretty'; trace?: boolean; help?: boolean }
+): Promise<void> {
+  const options = parseRecordArgs(args);
+  const command = options.subcommand ?? 'capture';
+
+  if (options.help || globalOptions.help) {
+    console.log(RECORD_HELP);
+    return;
+  }
+
+  if (command === 'capture') {
+    await runRecordCapture(options, globalOptions);
+    return;
+  }
+
+  const pathHint = options.artifactPath ?? DEFAULT_ARTIFACT;
+
+  switch (command) {
+    case 'inspect':
+      await runRecordInspect(pathHint, globalOptions);
+      break;
+    case 'summary':
+      await runRecordSummary(pathHint, globalOptions);
+      break;
+    case 'derive':
+      await runRecordDerive(pathHint, options.output, globalOptions);
+      break;
+    case 'export':
+      await runRecordExport(pathHint, options.output, globalOptions);
+      break;
+    default:
+      throw new Error(`Unknown record subcommand: ${command}`);
+  }
 }

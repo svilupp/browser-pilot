@@ -41,10 +41,10 @@ describe.skipIf(!!process.env['CI'])('Session Log CLI', () => {
 
         expect(result.exitCode).toBe(0);
 
-        // Path should be absolute and point to log.jsonl
+        // Path should be absolute and point to the current canonical trace artifact
         const logPath = result.stdout.trim();
         expect(logPath).toContain(sessionName);
-        expect(logPath).toContain('log.jsonl');
+        expect(logPath).toContain('trace.jsonl');
         expect(logPath.startsWith('/')).toBe(true);
 
         // File should exist

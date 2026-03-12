@@ -46,7 +46,12 @@ export type ActionType =
   | 'assertExists'
   | 'assertText'
   | 'assertUrl'
-  | 'assertValue';
+  | 'assertValue'
+  | 'waitForWsMessage'
+  | 'assertNoConsoleErrors'
+  | 'assertTextChanged'
+  | 'assertPermission'
+  | 'assertMediaTrackLive';
 
 export interface Step {
   /** Action type */
@@ -101,7 +106,10 @@ export interface Step {
   option?: string | string[];
 
   /** Custom select: match type */
-  match?: 'text' | 'value' | 'contains';
+  match?: 'text' | 'value' | 'contains' | string;
+
+  /** Structured matcher for trace-backed waits */
+  where?: Record<string, unknown>;
 
   /** Scroll coordinates */
   x?: number;
@@ -126,6 +134,24 @@ export interface Step {
 
   /** Delay between retries in ms (default: 500) */
   retryDelay?: number;
+
+  /** Previous text expected before a change */
+  from?: string;
+
+  /** Text expected after a change */
+  to?: string;
+
+  /** Permission or resource name */
+  name?: string;
+
+  /** Expected permission state */
+  state?: string;
+
+  /** Media track kind */
+  kind?: 'audio' | 'video';
+
+  /** Assertion observation window in milliseconds */
+  windowMs?: number;
 }
 
 export interface RecordOptions {

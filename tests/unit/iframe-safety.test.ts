@@ -106,6 +106,7 @@ function createMockCDPClient() {
     close: mock(() => Promise.resolve()),
     attachToTarget: mock(() => Promise.resolve('session-id')),
     sessionId: 'test-session',
+    setSessionId: mock(() => {}),
     isConnected: true,
   };
 
