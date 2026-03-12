@@ -124,7 +124,13 @@ const PROPERTY_ALIASES: Record<string, string> = {
 
 // --- Action rules ---
 
-type FieldType = 'string' | 'string|string[]' | 'number' | 'boolean' | 'boolean|auto';
+type FieldType =
+  | 'string'
+  | 'string|string[]'
+  | 'number'
+  | 'boolean'
+  | 'boolean|auto'
+  | 'object';
 
 interface FieldRule {
   type: FieldType;
@@ -167,7 +173,7 @@ const ACTION_RULES: Record<ActionType, ActionRule> = {
       value: { type: 'string|string[]' },
       trigger: { type: 'string|string[]' },
       option: { type: 'string|string[]' },
-      match: { type: 'string', enum: ['text', 'value', 'contains'] },
+      match: { type: 'string' },
     },
   },
   check: {
@@ -299,6 +305,38 @@ const ACTION_RULES: Record<ActionType, ActionRule> = {
       value: { type: 'string' },
     },
   },
+  waitForWsMessage: {
+    required: { match: { type: 'string' } },
+    optional: {
+      where: { type: 'object' },
+    },
+  },
+  assertNoConsoleErrors: {
+    required: {},
+    optional: {
+      windowMs: { type: 'number' },
+    },
+  },
+  assertTextChanged: {
+    required: { to: { type: 'string' } },
+    optional: {
+      selector: { type: 'string|string[]' },
+      from: { type: 'string' },
+    },
+  },
+  assertPermission: {
+    required: {
+      name: { type: 'string' },
+      state: { type: 'string' },
+    },
+    optional: {},
+  },
+  assertMediaTrackLive: {
+    required: {
+      kind: { type: 'string', enum: ['audio', 'video'] },
+    },
+    optional: {},
+  },
 };
 
 const VALID_ACTIONS = Object.keys(ACTION_RULES) as ActionType[];
@@ -324,6 +362,7 @@ const KNOWN_STEP_FIELDS = new Set([
   'trigger',
   'option',
   'match',
+  'where',
   'x',
   'y',
   'direction',
@@ -334,6 +373,12 @@ const KNOWN_STEP_FIELDS = new Set([
   'expect',
   'retry',
   'retryDelay',
+  'from',
+  'to',
+  'name',
+  'state',
+  'kind',
+  'windowMs',
 ]);
 
 // --- Action resolution ---
@@ -420,6 +465,11 @@ function checkFieldType(value: unknown, rule: FieldRule): string | null {
     case 'boolean|auto':
       if (typeof value !== 'boolean' && value !== 'auto') {
         return `expected boolean or "auto", got ${typeof value}`;
+      }
+      return null;
+    case 'object':
+      if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        return `expected object, got ${Array.isArray(value) ? 'array' : typeof value}`;
       }
       return null;
     default: {

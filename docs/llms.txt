@@ -1,126 +1,73 @@
 # browser-pilot
 
-> Lightweight CDP-based browser automation for AI agents. Zero dependencies. Works in Node.js, Bun, and Cloudflare Workers.
+Automation-first browser control for agents.
 
-## CLI Usage
+## Route by job
+
+- Inspect page state: `bp snapshot`, `bp page`, `bp forms`, `bp text`, `bp targets`, `bp diagnose`
+- Act in the browser: `bp exec`, `bp run`
+- Capture a human demo: `bp record`
+- Analyze behavior over time: `bp trace`
+- Exercise voice/media: `bp audio`
+- Change browser conditions: `bp env`
+
+## Canonical workflows
+
+Inspect and act:
 
 ```bash
-# Install
-bun add browser-pilot  # or: npm install browser-pilot
-
-# Connect to browser
-bp connect --provider generic                    # Local Chrome (needs --remote-debugging-port=9222)
-bp connect --provider browserbase --api-key $KEY # Cloud browser
-
-# Execute actions (single or batch)
-bp exec '{"action":"goto","url":"https://example.com"}'
-bp exec '[{"action":"fill","selector":"#q","value":"test"},{"action":"submit","selector":"form"}]' --json
-bp connect --record                       # Enable recording for all exec calls in this session
-bp exec -f workflow.json                  # Screenshots captured automatically
-bp exec --record -f workflow.json         # Or enable recording per exec call
-
-# Get page state
-bp snapshot -i                     # Interactive elements only (recommended)
-bp snapshot --format text          # Full accessibility tree
-
-# Monitor network traffic
-bp listen ws -m "*realtime*"       # WebSocket traffic matching pattern
-bp listen http -m "*/api/*"        # HTTP traffic, filtered
-bp listen all -o trace.jsonl       # All traffic to file
-
-# Daemon (persistent CDP connection, auto-spawned on connect)
-bp connect --no-daemon             # Skip daemon (direct WS only)
-bp connect --daemon-idle 30        # Custom idle timeout (minutes)
-bp daemon status                   # Check daemon health
-bp daemon stop                     # Stop daemon
-bp daemon logs                     # View daemon log
-
-# Session management
-bp list                            # List sessions
-bp clean --max-size 500MB          # Trim oldest sessions by total disk usage
-bp close -s <session-id>           # Close session
+bp connect --provider generic --name dev
+bp snapshot -i -s dev
+bp exec -s dev '[{"action":"click","selector":"ref:e4"}]'
 ```
 
-## Action DSL
+Record and derive:
 
-Actions are JSON objects with `action` field. Selectors can be `string` or `string[]` (tries each until one works).
-
-| Action | Example |
-|--------|---------|
-| goto | `{"action":"goto","url":"https://example.com"}` |
-| click | `{"action":"click","selector":"#btn"}` |
-| fill | `{"action":"fill","selector":"#email","value":"user@example.com"}` |
-| type | `{"action":"type","selector":"#search","value":"query","delay":50}` |
-| select | `{"action":"select","selector":"#country","value":"US"}` |
-| check | `{"action":"check","selector":"#agree"}` |
-| submit | `{"action":"submit","selector":"form"}` |
-| press | `{"action":"press","key":"Enter"}` |
-| press (modifiers) | `{"action":"press","key":"a","modifiers":["Control"]}` |
-| shortcut | `{"action":"shortcut","combo":"Control+a"}` |
-| wait | `{"action":"wait","waitFor":"networkIdle"}` |
-| snapshot | `{"action":"snapshot"}` |
-| assertVisible | `{"action":"assertVisible","selector":"#success"}` |
-| assertExists | `{"action":"assertExists","selector":"[data-loaded]"}` |
-| assertText | `{"action":"assertText","expect":"Welcome","selector":"h1"}` |
-| assertUrl | `{"action":"assertUrl","expect":"/dashboard"}` |
-| assertValue | `{"action":"assertValue","selector":"#email","expect":"user@example.com"}` |
-
-Options: `timeout` (ms), `optional` (boolean - skip if not found), `retry` (number - retry count), `retryDelay` (ms - delay between retries, default 500).
-
-## Multi-Selector Pattern
-
-```json
-{"action":"click","selector":["#submit","button[type=submit]",".submit-btn"]}
+```bash
+bp record -s demo --profile automation -f ./artifacts/demo.recording.json
+bp record summary ./artifacts/demo.recording.json
+bp record derive ./artifacts/demo.recording.json -o workflow.json
+bp run workflow.json
 ```
 
-## Common Patterns
+Trace live behavior:
 
-Login:
-```json
-[
-  {"action":"goto","url":"https://app.example.com/login"},
-  {"action":"fill","selector":"#email","value":"user@example.com"},
-  {"action":"fill","selector":"#password","value":"password"},
-  {"action":"submit","selector":"form"},
-  {"action":"wait","waitFor":"navigation"},
-  {"action":"snapshot"}
-]
+```bash
+bp trace start -s dev --timeout 20000
+bp trace summary -s dev --view ws
+bp trace summary -s dev --view console
 ```
 
-Cookie consent (optional):
-```json
-{"action":"click","selector":["#accept-cookies",".cookie-accept"],"optional":true,"timeout":3000}
+Voice workflow:
+
+```bash
+bp audio setup -s vt
+bp exec -s vt '{"action":"goto","url":"https://my-voice-app.com"}'
+bp audio check -s vt
+bp audio roundtrip -s vt -i prompt.wav --transcribe
+bp trace summary -s vt --view voice
 ```
 
-## Assertions & Retry
+## Stable expectations
 
-Verify state within one batch (no extra eval call):
-```json
-[
-  {"action":"goto","url":"https://example.com/login"},
-  {"action":"fill","selector":"#email","value":"user@example.com"},
-  {"action":"submit","selector":"form"},
-  {"action":"assertUrl","expect":"/dashboard"},
-  {"action":"assertText","expect":"Welcome"}
-]
-```
+- `bp snapshot -i` returns actionable elements with refs like `ref:e4`
+- `bp exec --json` returns `success`, `totalDurationMs`, and per-step results including `selectorUsed`, `error`, `suggestion`, and `hints` when available
+- `bp record summary <artifact>` returns counts, trace summaries, and next-command tips
+- `bp trace summary <source> --view <view>` returns a view-specific summary over canonical trace events
+- `bp trace export ...` writes events plus derived summaries
 
-Any step supports retry: `{"action":"click","selector":"#btn","retry":3,"retryDelay":1000}`
+## Trace-backed steps in exec/run
 
-## Output
+- `waitForWsMessage`
+- `assertNoConsoleErrors`
+- `assertTextChanged`
+- `assertPermission`
+- `assertMediaTrackLive`
 
-With `--json`, returns:
-```json
-{
-  "success": true,
-  "steps": [{"action":"goto","success":true,"durationMs":500}],
-  "totalDurationMs": 500
-}
-```
+## Anti-rules
 
-## Documentation
-
-- Full skill: docs/automating-browsers/SKILL.md
-- API reference: docs/api/page.md
-- CLI reference: docs/cli.md
-- Action recording guide: docs/guides/action-recording.md
+- Do not open raw recording artifacts first. Start with `bp record summary`, `bp record inspect`, or `bp trace summary --view ...`
+- Do not use `bp trace` to click or fill elements. Use `bp exec`
+- Do not use `bp env` as a generic utilities namespace. It is only for browser/session state controls
+- Prefer `bp trace tail ...`; `bp listen ...` is compatibility only
+- Prefer `--debug`; `--trace` is a legacy alias

@@ -172,6 +172,17 @@ describe('Recording Integration', () => {
       // Click something on the new page
       await simulateClick(page, '#name');
 
+      // Wait until the post-navigation interaction is actually captured.
+      // The goto step is synthesized from the first event on the new URL.
+      await waitUntil(
+        async () => recorder.getEvents().some((event) => event.url.includes('/form.html')),
+        {
+          timeout: 2000,
+          interval: 50,
+          message: 'Recorder did not capture an event on the navigated page',
+        }
+      );
+
       // Stop and get output
       const output = await recorder.stop();
 

@@ -56,11 +56,26 @@ export interface RecordSettings {
   highlights?: boolean;
 }
 
+export interface EnvSettings {
+  permissions?: string[];
+  geolocation?: {
+    latitude: number;
+    longitude: number;
+    accuracy?: number;
+  };
+  visibility?: 'hidden' | 'visible';
+  network?: {
+    offline: boolean;
+    latency?: number;
+  };
+}
+
 export interface SessionMetadata {
   refCache?: RefCache;
   logStats?: LogStats;
   /** Session-level recording settings (set via `bp connect --record`) */
   record?: RecordSettings;
+  env?: EnvSettings;
   [key: string]: unknown;
 }
 

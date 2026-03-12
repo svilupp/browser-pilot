@@ -112,9 +112,10 @@ async function main(): Promise<void> {
   daemonLog('info', 'CDP WebSocket connection established');
 
   // Attach to target if we have one
+  let cdpSessionId: string | undefined;
   if (sessionData.targetId) {
     try {
-      const cdpSessionId = await cdp.attachToTarget(sessionData.targetId);
+      cdpSessionId = await cdp.attachToTarget(sessionData.targetId);
       daemonLog('info', `Attached to target ${sessionData.targetId} (sessionId: ${cdpSessionId})`);
     } catch (err) {
       daemonLog('warn', `Failed to attach to target ${sessionData.targetId}: ${err}`);
@@ -157,6 +158,7 @@ async function main(): Promise<void> {
   const daemonInfo: DaemonInfo = {
     socketPath,
     pid: process.pid,
+    cdpSessionId,
     startedAt: new Date().toISOString(),
   };
 

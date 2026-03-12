@@ -12,7 +12,19 @@ import { output, renderOutput } from '../index.ts';
 import { getDefaultSession, loadSession, type SessionData, updateSession } from '../session.ts';
 
 const SNAPSHOT_HELP = `
-bp snapshot - Get page accessibility snapshot with element refs
+bp snapshot - Inspect the page and collect refs
+
+When to use:
+  You need to understand the current page or choose reliable targets for \`bp exec\`.
+
+When not to use:
+  You need long-running behavior, network, or voice causality. Use \`bp trace\`.
+
+Default flow:
+  snapshot -i -> use ref:eN selectors in exec -> take a fresh snapshot after navigation
+
+Common mistake:
+  Reusing refs after the page navigated or materially changed.
 
 Usage:
   bp snapshot [options]
@@ -28,16 +40,21 @@ Options:
   -s, --session <id>     Session to use (default: most recent)
   -f, --format <fmt>     Output format: json | pretty (default: pretty)
   --json                 Alias for -f json
-  --trace                Enable debug tracing
+  --debug                Enable CDP transport debugging (global option)
   -h, --help             Show this help
 
 Examples:
   bp snapshot                       # Full accessibility tree as readable text
-  bp snapshot -i                    # Interactive elements only (best for AI agents)
+  bp snapshot -i                    # Interactive elements only; best default for automation
   bp snapshot --role radio,checkbox # Focus on specific control roles
   bp snapshot --json > page.json    # Save full snapshot to file
   bp snapshot --diff before.json    # Show what changed since before.json
   bp snapshot --inspect             # Visual ref labels on the page
+
+Likely next commands:
+  bp exec '[{"action":"click","selector":"ref:e4"}]'
+  bp page
+  bp diagnose "ref:e4"
 `.trimEnd();
 
 interface SnapshotOptions {

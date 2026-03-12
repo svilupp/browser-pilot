@@ -7,6 +7,17 @@ import { formatFormFieldsPretty, formatInteractiveElementsPretty } from './form-
 const PAGE_HELP = `
 bp page - Show a compact overview of the current page
 
+When to use:
+  You want a quick summary of URL, title, headings, forms, and interactive controls.
+
+When not to use:
+  You need the full accessibility tree or reusable refs for precise automation. Use \`bp snapshot\`.
+
+Likely next commands:
+  bp snapshot -i
+  bp forms
+  bp exec '[{"action":"click","selector":"ref:e4"}]'
+
 Usage:
   bp page [options]
 

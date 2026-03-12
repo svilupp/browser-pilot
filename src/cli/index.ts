@@ -1,28 +1,6 @@
 #!/usr/bin/env bun
 /**
- * browser-pilot CLI - Browser automation for AI agents
- *
- * Key workflow:
- *   1. bp snapshot -i               → Get interactive elements with refs ref:e4
- *   2. bp exec '{"selector":"ref:e4",...}'  → Use refs for reliable targeting
- *
- * Commands:
- *   quickstart  Getting started guide
- *   connect     Create browser session
- *   exec        Execute actions (supports --dialog and --record)
- *   page        Show a compact overview of the current page
- *   forms       List form controls on the current page
- *   targets     List available page tabs in the connected browser
- *   audio       Audio I/O for voice agent testing
- *   snapshot    Get page snapshot with element refs
- *   text        Extract text content
- *   screenshot  Take screenshot
- *   close       Close session
- *   list        List sessions
- *   clean       Clean up old sessions
- *   actions     Complete action reference
- *
- * Run 'bp quickstart' for getting started guide.
+ * browser-pilot CLI - automation-first browser workflows for agents
  */
 
 import { actionsCommand } from './commands/actions.ts';
@@ -33,10 +11,10 @@ import { connectCommand } from './commands/connect.ts';
 import { daemonCommand } from './commands/daemon.ts';
 import { diagnoseCommand } from './commands/diagnose.ts';
 import { evalCommand } from './commands/eval.ts';
+import { envCommand } from './commands/env.ts';
 import { execCommand } from './commands/exec.ts';
 import { formsCommand } from './commands/forms.ts';
 import { listCommand } from './commands/list.ts';
-import { listenCommand } from './commands/listen.ts';
 import { pageCommand } from './commands/page.ts';
 import { quickstartCommand } from './commands/quickstart.ts';
 import { recordCommand } from './commands/record.ts';
@@ -45,62 +23,81 @@ import { screenshotCommand } from './commands/screenshot.ts';
 import { snapshotCommand } from './commands/snapshot.ts';
 import { targetsCommand } from './commands/targets.ts';
 import { textCommand } from './commands/text.ts';
+import { traceCommand } from './commands/trace.ts';
 
 const HELP = `
-bp - Browser automation CLI for AI agents
+bp - automation-first browser CLI for agents
+
+Route the job first:
+  Inspect page state              snapshot, page, forms, text, targets, diagnose
+  Act in the browser              exec, run
+  Capture a human demo            record
+  Analyze behavior over time      trace   (listen is a compatibility alias)
+  Exercise voice/media            audio
+  Change browser conditions       env
 
 Usage:
   bp <command> [options]
 
 Commands:
-  quickstart  Getting started guide (start here!)
-  connect     Create browser session
-  exec        Execute actions
-  eval        Evaluate JavaScript expression
-  page        Show a compact page overview
-  forms       List form controls on the page
+  quickstart  Getting started guide
+  connect     Create a browser session
+  exec        Execute high-level actions
+  snapshot    Inspect current page with refs
+  record      Record a human workflow and derive replayable output
+  trace       Inspect and analyze behavior over time (listen alias for live stream)
+  audio       Set up/validate/inject/capture voice pipelines
+  env         Session and browser-environment controls
+  run         Run a workflow file
+  page        Compact page overview
+  forms       List form controls
   targets     List available browser tabs
-  run         Run a workflow file (JSON steps)
-  record      Record browser actions to JSON
-  audio       Audio I/O for voice agent testing
-  listen      Monitor network traffic (WebSocket/HTTP)
-  snapshot    Get page with element refs
-  diagnose    Debug element selection issues
-  text        Extract text content
-  screenshot  Take screenshot
-  daemon      Manage daemon processes (status, stop, logs)
+  daemon      Manage session daemon
+  list        List sessions
   close       Close session
-  list        List sessions (--log-path, --log-tail, --info)
-  clean       Clean up old sessions
+  clean       Clean old sessions and artifacts
   actions     Complete action reference
+
+Golden paths:
+  1. Automate a page
+     bp connect --provider generic --name dev
+     bp snapshot -i -s dev
+     bp exec -s dev '[{"action":"click","selector":"ref:e4"}]'
+
+  2. Capture a manual workflow and derive automation
+     bp record -s demo --profile automation
+     bp record summary demo/recording.json
+     bp record derive demo/recording.json -o workflow.json
+     bp run workflow.json
+
+  3. Debug a realtime or voice session
+     bp trace start -s dev
+     bp trace summary -s dev --view ws
+     bp audio check -s dev
+     bp trace summary -s dev --view voice
+
+  4. Exercise failure modes
+     bp env network offline -s dev --duration 10000
+     bp trace watch -s dev --view ws --assert profile:reconnect --timeout 15000
 
 Options:
   -s, --session <id>    Session ID
   -f, --format <fmt>    json | pretty (default: pretty)
   --json                Alias for -f json
-  --trace               Enable debug tracing
+  --debug               Enable debug logs for CDP transport
+  --trace               Legacy alias for --debug
   --dialog <mode>       Handle dialogs: accept | dismiss
   -h, --help            Show help
 
-Examples:
-  bp connect --provider generic --name dev
-  bp exec '{"action":"goto","url":"https://example.com"}'
-  bp exec --record '[{"action":"click","selector":"#checkout"}]'
-  bp snapshot -i
-  bp exec '{"action":"click","selector":"ref:e3"}'
-  bp clean --max-size 500MB
-  bp eval 'document.title'
-  bp audio roundtrip -i prompt.wav --transcribe --silence-timeout 5000
-
-Run 'bp quickstart' for CLI workflow guide.
-Run 'bp actions' for complete action reference.
-Run 'bp audio --help' for voice agent testing guide.
+Notes:
+  Start with "record summary" or "trace summary" before opening raw artifacts.
 `;
 
 interface GlobalOptions {
   session?: string;
   format?: 'json' | 'pretty';
   trace?: boolean;
+  debug?: boolean;
   help?: boolean;
 }
 
@@ -131,7 +128,8 @@ export function parseGlobalOptions(args: string[]): {
       options.format = 'json';
     } else if (arg === '--pretty') {
       options.format = 'pretty';
-    } else if (arg === '--trace') {
+    } else if (arg === '--debug' || arg === '--trace') {
+      options.debug = true;
       options.trace = true;
     } else if (arg === '-h' || arg === '--help') {
       options.help = true;
@@ -259,10 +257,6 @@ async function main(): Promise<void> {
         await screenshotCommand(remaining, options);
         break;
 
-      case 'daemon':
-        await daemonCommand(remaining, options);
-        break;
-
       case 'close':
         await closeCommand(remaining, options);
         break;
@@ -287,12 +281,25 @@ async function main(): Promise<void> {
         await recordCommand(remaining, options);
         break;
 
+      case 'trace':
+        await traceCommand(remaining, options);
+        break;
+
       case 'audio':
         await audioCommand(remaining, options);
         break;
 
+      case 'env':
+        await envCommand(remaining, options);
+        break;
+
       case 'listen':
-        await listenCommand(remaining, options);
+        // Backward compatibility alias: `listen` → `trace tail`
+        await traceCommand(['tail', ...remaining], options);
+        break;
+
+      case 'daemon':
+        await daemonCommand(remaining, options);
         break;
 
       case 'help':

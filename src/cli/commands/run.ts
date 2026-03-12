@@ -9,7 +9,19 @@ import { validateSteps } from '../../actions/validate.ts';
 import { attachSession, resolveSession } from '../attach.ts';
 
 const RUN_HELP = `
-bp run - Execute a workflow file (JSON steps)
+bp run - Execute a saved workflow file
+
+When to use:
+  You already have reusable steps from \`bp record derive\` or a hand-authored workflow.
+
+When not to use:
+  You are exploring a page inline or debugging one interaction. Use \`bp exec\`.
+
+Default flow:
+  derive or author workflow -> run -> inspect failures -> harden with assertions
+
+Common mistake:
+  Treating \`run\` as discovery. It is for repeatable execution, not first-pass exploration.
 
 Usage:
   bp run <workflow.json> [options]
@@ -23,7 +35,7 @@ Options:
   --timeout <ms>       Default timeout for all steps (ms)
   -s, --session <id>   Session to use (default: most recent)
   --json               Output results as JSON
-  --trace              Enable debug tracing
+  --debug              Enable CDP transport debugging (global option)
   -h, --help           Show this help
 
 Examples:
@@ -31,7 +43,9 @@ Examples:
   bp run checkout.json --on-fail continue --json
   bp run smoke-test.json --timeout 10000
 
-Run 'bp actions' for complete action reference.
+Likely next commands:
+  bp trace summary -s <session> --view console
+  bp exec --record -f workflow.json
 `.trimEnd();
 
 interface RunOptions {

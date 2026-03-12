@@ -11,7 +11,19 @@ import { updateSession } from '../session.ts';
 import { getSessionLogger } from '../session-logger.ts';
 
 const EXEC_HELP = `
-bp exec - Execute browser actions on current session
+bp exec - Act on a page with high-level browser steps
+
+When to use:
+  You know what you want to do in the browser and want to click, fill, wait, or assert in one batch.
+
+When not to use:
+  A human is demonstrating the workflow from scratch. Use \`bp record\`.
+
+Default flow:
+  snapshot -> exec -> snapshot or trace summary
+
+Common mistake:
+  Guessing brittle selectors instead of taking \`bp snapshot -i\` and using refs.
 
 Usage:
   bp exec '<json>'              Execute action(s) from inline JSON
@@ -25,7 +37,7 @@ Options:
   -s, --session <id>   Session to use (default: most recent)
   -f, --format <fmt>   Output format: json | pretty (default: pretty)
   --json               Alias for -f json
-  --trace              Enable debug tracing
+  --debug              Enable CDP transport debugging (global option)
 
 Recording:
   --record                    Enable screenshot recording
@@ -39,12 +51,16 @@ Recording:
 
 Examples:
   bp exec '{"action":"goto","url":"https://example.com"}'
+  bp exec '[{"action":"click","selector":"ref:e4"},{"action":"assertText","expect":"Saved"}]'
+  bp exec '[{"action":"waitForWsMessage","match":"*realtime*","where":{"type":"ready"}}]'
   bp exec --record '[{"action":"fill","selector":"#email","value":"me@test.com"},{"action":"submit","selector":"form"}]'
   bp exec --dialog accept '{"action":"click","selector":"#delete-btn"}'
   bp exec -f login-steps.json
 
-Run 'bp actions' for the complete action reference.
-Run 'bp quickstart' for getting started guide.
+Likely next commands:
+  bp snapshot -i
+  bp diagnose "<selector>"
+  bp trace summary -s <session> --view console
 `.trimEnd();
 
 interface ExecOptions {
@@ -295,6 +311,42 @@ export async function execCommand(
         stepResult.durationMs,
         stepResult.screenshotPath ? basename(stepResult.screenshotPath) : undefined
       );
+
+      if (stepResult.success && stepResult.action === 'waitForWsMessage' && stepResult.result) {
+        logger.logTrace({
+          channel: 'ws',
+          event: 'ws.frame.received',
+          summary: 'waitForWsMessage matched',
+          data: stepResult.result as Record<string, unknown>,
+        });
+      }
+
+      if (stepResult.success && stepResult.action === 'assertTextChanged' && stepResult.text) {
+        logger.logTrace({
+          channel: 'dom',
+          event: 'dom.text.changed',
+          summary: 'Text changed',
+          data: { text: stepResult.text },
+        });
+      }
+
+      if (stepResult.success && stepResult.action === 'assertPermission' && stepResult.result) {
+        logger.logTrace({
+          channel: 'permission',
+          event: 'permission.state',
+          summary: 'Permission assertion passed',
+          data: stepResult.result as Record<string, unknown>,
+        });
+      }
+
+      if (stepResult.success && stepResult.action === 'assertMediaTrackLive' && stepResult.result) {
+        logger.logTrace({
+          channel: 'media',
+          event: 'media.track.started',
+          summary: 'Live media track detected',
+          data: stepResult.result as Record<string, unknown>,
+        });
+      }
     }
 
     // Mirror recording to export path if configured

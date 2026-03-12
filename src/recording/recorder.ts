@@ -7,6 +7,8 @@
  */
 
 import type { CDPClient } from '../cdp/client.ts';
+import { createTraceId, normalizeTraceEvent, type CanonicalTraceEvent } from '../trace/model.ts';
+import { TRACE_BINDING_NAME, TRACE_SCRIPT } from '../trace/script.ts';
 import { aggregateEvents } from './aggregator.ts';
 import { RECORDER_BINDING_NAME, RECORDER_SCRIPT } from './script.ts';
 import type {
@@ -73,6 +75,11 @@ export class Recorder {
   private pendingBodies: Promise<void>[] = [];
   private wsUrls = new Map<string, string>();
   private httpUrls = new Map<string, string>();
+  private traceEvents: CanonicalTraceEvent[] = [];
+  private traceHandlers: Array<{
+    event: string;
+    handler: (params: Record<string, unknown>) => void;
+  }> = [];
 
   constructor(cdp: CDPClient, options?: RecorderOptions) {
     this.cdp = cdp;
@@ -98,6 +105,7 @@ export class Recorder {
     }
 
     this.events = [];
+    this.traceEvents = [];
     this.startTime = Date.now();
     this.recording = true;
 
@@ -118,10 +126,14 @@ export class Recorder {
 
     // Add binding for recorder callback
     await this.cdp.send('Runtime.addBinding', { name: RECORDER_BINDING_NAME });
+    await this.cdp.send('Runtime.addBinding', { name: TRACE_BINDING_NAME });
 
     // Auto-inject script on navigation
     await this.cdp.send('Page.addScriptToEvaluateOnNewDocument', {
       source: RECORDER_SCRIPT,
+    });
+    await this.cdp.send('Page.addScriptToEvaluateOnNewDocument', {
+      source: TRACE_SCRIPT,
     });
 
     // Inject script into current document
@@ -129,14 +141,67 @@ export class Recorder {
       expression: RECORDER_SCRIPT,
       awaitPromise: false,
     });
+    await this.cdp.send('Runtime.evaluate', {
+      expression: TRACE_SCRIPT,
+      awaitPromise: false,
+    });
 
     // Listen for binding calls
     this.bindingHandler = (params: Record<string, unknown>) => {
       if (params['name'] === RECORDER_BINDING_NAME) {
         this.handleBindingCall(params['payload'] as string);
+      } else if (params['name'] === TRACE_BINDING_NAME) {
+        this.handleTraceBindingCall(params['payload'] as string);
       }
     };
     this.cdp.on('Runtime.bindingCalled', this.bindingHandler);
+
+    this.subscribeTrace('Runtime.consoleAPICalled', (params) => {
+      const type = String(params['type'] ?? 'log');
+      if (type !== 'log' && type !== 'warn' && type !== 'error') {
+        return;
+      }
+
+      const args = Array.isArray(params['args'])
+        ? (params['args'] as Array<Record<string, unknown>>)
+        : [];
+      const text = args
+        .map((entry) => String(entry['value'] ?? entry['description'] ?? ''))
+        .filter(Boolean)
+        .join(' ');
+
+      this.traceEvents.push(
+        normalizeTraceEvent({
+          traceId: createTraceId('console'),
+          sessionId: '',
+          ts: new Date().toISOString(),
+          elapsedMs: this.elapsed(),
+          channel: 'console',
+          event: `console.${type}`,
+          severity: type === 'error' ? 'error' : type === 'warn' ? 'warn' : 'info',
+          summary: text || `console.${type}`,
+          data: { args },
+          url: this.startUrl,
+        })
+      );
+    });
+
+    this.subscribeTrace('Runtime.exceptionThrown', (params) => {
+      const details = (params['exceptionDetails'] ?? {}) as Record<string, unknown>;
+      this.traceEvents.push(
+        normalizeTraceEvent({
+          traceId: createTraceId('runtime'),
+          ts: new Date().toISOString(),
+          elapsedMs: this.elapsed(),
+          channel: 'runtime',
+          event: 'runtime.exception',
+          severity: 'error',
+          summary: String(details['text'] ?? 'Runtime exception'),
+          data: details,
+          url: this.startUrl,
+        })
+      );
+    });
 
     // Set up network capture if listen option is enabled
     if (this.options.listen) {
@@ -174,6 +239,10 @@ export class Recorder {
       this.cdp.off(event, handler);
     }
     this.networkHandlers = [];
+    for (const { event, handler } of this.traceHandlers) {
+      this.cdp.off(event, handler);
+    }
+    this.traceHandlers = [];
 
     // Disable network domain if listen was active
     if (this.listenOpts) {
@@ -192,6 +261,7 @@ export class Recorder {
       startUrl: this.startUrl,
       duration,
       steps,
+      traceEvents: this.traceEvents,
     };
 
     // Add network data if listen was enabled
@@ -244,6 +314,37 @@ export class Recorder {
     }
   }
 
+  private handleTraceBindingCall(payload: string): void {
+    if (!this.recording) return;
+
+    try {
+      const data = JSON.parse(payload) as {
+        event: string;
+        severity?: 'info' | 'warn' | 'error';
+        summary?: string;
+        ts?: number;
+        data?: Record<string, unknown>;
+      };
+
+      this.traceEvents.push(
+        normalizeTraceEvent({
+          traceId: createTraceId('trace'),
+          ts: data.ts ? new Date(data.ts).toISOString() : new Date().toISOString(),
+          elapsedMs: this.elapsed(),
+          channel: this.channelForTraceEvent(data.event),
+          event: data.event,
+          severity: data.severity,
+          summary: data.summary ?? data.event,
+          data: data.data ?? {},
+          url:
+            typeof data.data?.['url'] === 'string' ? (data.data['url'] as string) : this.startUrl,
+        })
+      );
+    } catch {
+      // Ignore malformed trace payloads
+    }
+  }
+
   /** Subscribe to a CDP event, tracking for cleanup. */
   private subscribeNetwork(
     event: string,
@@ -251,6 +352,14 @@ export class Recorder {
   ): void {
     this.cdp.on(event, handler);
     this.networkHandlers.push({ event, handler });
+  }
+
+  private subscribeTrace(
+    event: string,
+    handler: (params: Record<string, unknown>) => void
+  ): void {
+    this.cdp.on(event, handler);
+    this.traceHandlers.push({ event, handler });
   }
 
   /** Check if a URL matches the configured filter. */
@@ -307,6 +416,20 @@ export class Recorder {
           type: 'created',
           url,
         });
+        this.traceEvents.push(
+          normalizeTraceEvent({
+            traceId: createTraceId('ws'),
+            ts: new Date(now).toISOString(),
+            elapsedMs: this.elapsed(),
+            channel: 'ws',
+            event: 'ws.connection.created',
+            summary: `WebSocket opened ${url}`,
+            data: { url },
+            connectionId: requestId,
+            requestId,
+            url,
+          })
+        );
       });
 
       this.subscribeNetwork('Network.webSocketFrameSent', (params) => {
@@ -327,6 +450,20 @@ export class Recorder {
           payload,
           length,
         });
+        this.traceEvents.push(
+          normalizeTraceEvent({
+            traceId: createTraceId('ws'),
+            ts: new Date(now).toISOString(),
+            elapsedMs: this.elapsed(),
+            channel: 'ws',
+            event: 'ws.frame.sent',
+            summary: `WebSocket frame sent ${requestId}`,
+            data: { opcode, payload, length },
+            connectionId: requestId,
+            requestId,
+            url: this.wsUrls.get(requestId),
+          })
+        );
       });
 
       this.subscribeNetwork('Network.webSocketFrameReceived', (params) => {
@@ -347,6 +484,20 @@ export class Recorder {
           payload,
           length,
         });
+        this.traceEvents.push(
+          normalizeTraceEvent({
+            traceId: createTraceId('ws'),
+            ts: new Date(now).toISOString(),
+            elapsedMs: this.elapsed(),
+            channel: 'ws',
+            event: 'ws.frame.received',
+            summary: `WebSocket frame received ${requestId}`,
+            data: { opcode, payload, length },
+            connectionId: requestId,
+            requestId,
+            url: this.wsUrls.get(requestId),
+          })
+        );
       });
 
       this.subscribeNetwork('Network.webSocketClosed', (params) => {
@@ -361,6 +512,21 @@ export class Recorder {
           elapsedMs: this.elapsed(),
           type: 'closed',
         });
+        this.traceEvents.push(
+          normalizeTraceEvent({
+            traceId: createTraceId('ws'),
+            ts: new Date(now).toISOString(),
+            elapsedMs: this.elapsed(),
+            channel: 'ws',
+            event: 'ws.connection.closed',
+            severity: 'warn',
+            summary: `WebSocket closed ${requestId}`,
+            data: { url: this.wsUrls.get(requestId) ?? null },
+            connectionId: requestId,
+            requestId,
+            url: this.wsUrls.get(requestId),
+          })
+        );
       });
     }
 
@@ -385,6 +551,23 @@ export class Recorder {
           headers: request?.headers,
           body: request?.postData,
         });
+        this.traceEvents.push(
+          normalizeTraceEvent({
+            traceId: createTraceId('http'),
+            ts: new Date(now).toISOString(),
+            elapsedMs: this.elapsed(),
+            channel: 'http',
+            event: 'http.request.sent',
+            summary: `${request?.method ?? 'GET'} ${url}`,
+            data: {
+              method: request?.method ?? 'GET',
+              headers: request?.headers ?? {},
+              body: request?.postData ?? null,
+            },
+            requestId,
+            url,
+          })
+        );
       });
 
       this.subscribeNetwork('Network.responseReceived', (params) => {
@@ -408,6 +591,23 @@ export class Recorder {
           headers: response?.headers,
           mimeType: response?.mimeType,
         });
+        this.traceEvents.push(
+          normalizeTraceEvent({
+            traceId: createTraceId('http'),
+            ts: new Date(now).toISOString(),
+            elapsedMs: this.elapsed(),
+            channel: 'http',
+            event: 'http.response.received',
+            summary: `${response?.status ?? 0} ${this.httpUrls.get(requestId) ?? ''}`,
+            data: {
+              status: response?.status ?? 0,
+              headers: response?.headers ?? {},
+              mimeType: response?.mimeType ?? null,
+            },
+            requestId,
+            url: this.httpUrls.get(requestId),
+          })
+        );
 
         // Optionally capture response body
         if (this.listenOpts?.captureResponseBodies) {
@@ -430,7 +630,38 @@ export class Recorder {
           this.pendingBodies.push(bodyPromise);
         }
       });
+
+      this.subscribeNetwork('Network.loadingFailed', (params) => {
+        const requestId = params['requestId'] as string;
+        this.traceEvents.push(
+          normalizeTraceEvent({
+            traceId: createTraceId('http'),
+            ts: new Date().toISOString(),
+            elapsedMs: this.elapsed(),
+            channel: 'http',
+            event: 'http.response.failed',
+            severity: 'error',
+            summary: `HTTP request failed ${requestId}`,
+            data: {
+              errorText: params['errorText'] ?? null,
+              blockedReason: params['blockedReason'] ?? null,
+              canceled: params['canceled'] ?? false,
+            },
+            requestId,
+            url: this.httpUrls.get(requestId),
+          })
+        );
+      });
     }
+  }
+
+  private channelForTraceEvent(eventName: string): CanonicalTraceEvent['channel'] {
+    if (eventName.startsWith('permission.')) return 'permission';
+    if (eventName.startsWith('media.')) return 'media';
+    if (eventName.startsWith('voice.')) return 'voice';
+    if (eventName.startsWith('dom.')) return 'dom';
+    if (eventName.startsWith('runtime.')) return 'runtime';
+    return 'session';
   }
 
   /** Build a merged timeline from action events and network events. */

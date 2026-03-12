@@ -13,20 +13,26 @@ describe('CLI Help Completeness', () => {
     const result = await runCLI(['--help']);
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('bp - Browser automation CLI');
+    expect(result.stdout).toContain('bp - automation-first browser CLI for agents');
 
     // All commands should be listed
     const requiredCommands = [
+      'quickstart',
       'connect',
       'exec',
+      'snapshot',
+      'record',
+      'trace',
+      'audio',
+      'env',
+      'run',
       'page',
       'forms',
       'targets',
-      'snapshot',
-      'text',
-      'screenshot',
-      'close',
+      'daemon',
       'list',
+      'close',
+      'clean',
       'actions',
     ];
 
@@ -56,7 +62,7 @@ describe('CLI Help Completeness', () => {
   test('bp --help shows examples', async () => {
     const result = await runCLI(['--help']);
 
-    expect(result.stdout).toContain('Examples:');
+    expect(result.stdout).toContain('Golden paths:');
     expect(result.stdout).toContain('bp connect');
     expect(result.stdout).toContain('bp exec');
   });
@@ -64,7 +70,7 @@ describe('CLI Help Completeness', () => {
   test('bp --help mentions bp actions for reference', async () => {
     const result = await runCLI(['--help']);
 
-    expect(result.stdout).toContain("'bp actions'");
+    expect(result.stdout).toContain('actions     Complete action reference');
   });
 });
 
