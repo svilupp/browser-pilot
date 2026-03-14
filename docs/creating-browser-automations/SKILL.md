@@ -7,6 +7,8 @@ description: Record browser workflows and convert them into reliable automation.
 
 This skill is for the manual-demo-to-automation pipeline.
 
+For local Chrome on Chrome 144+, try plain `bp connect` first after enabling remote debugging in `chrome://inspect/#remote-debugging`. Only add `--channel` or `--user-data-dir` if auto-discovery is ambiguous.
+
 ## Core rule
 
 Do not start by reading raw `recording.json`.
@@ -74,7 +76,7 @@ bp exec -s demo '[
 Or capture replay proof:
 
 ```bash
-bp connect --provider generic --name validation --record
+bp connect --name validation --record
 bp exec -s validation -f workflow.json
 ```
 

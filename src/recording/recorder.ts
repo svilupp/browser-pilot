@@ -7,7 +7,7 @@
  */
 
 import type { CDPClient } from '../cdp/client.ts';
-import { createTraceId, normalizeTraceEvent, type CanonicalTraceEvent } from '../trace/model.ts';
+import { type CanonicalTraceEvent, createTraceId, normalizeTraceEvent } from '../trace/model.ts';
 import { TRACE_BINDING_NAME, TRACE_SCRIPT } from '../trace/script.ts';
 import { aggregateEvents } from './aggregator.ts';
 import { RECORDER_BINDING_NAME, RECORDER_SCRIPT } from './script.ts';
@@ -38,6 +38,18 @@ export interface RecorderOptions {
   listen?: boolean | RecorderListenOptions;
   /** Called after each captured event. Use for live screenshot capture. */
   onEvent?: (event: RawRecordedEvent) => void | Promise<void>;
+}
+
+function readString(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined;
+}
+
+function readStringOr(value: unknown, fallback = ''): string {
+  return readString(value) ?? fallback;
+}
+
+function formatConsoleArg(entry: Record<string, unknown>): string {
+  return readString(entry['value']) ?? readString(entry['description']) ?? '';
 }
 
 /**
@@ -148,16 +160,21 @@ export class Recorder {
 
     // Listen for binding calls
     this.bindingHandler = (params: Record<string, unknown>) => {
+      const payload = readString(params['payload']);
+      if (!payload) {
+        return;
+      }
+
       if (params['name'] === RECORDER_BINDING_NAME) {
-        this.handleBindingCall(params['payload'] as string);
+        this.handleBindingCall(payload);
       } else if (params['name'] === TRACE_BINDING_NAME) {
-        this.handleTraceBindingCall(params['payload'] as string);
+        this.handleTraceBindingCall(payload);
       }
     };
     this.cdp.on('Runtime.bindingCalled', this.bindingHandler);
 
     this.subscribeTrace('Runtime.consoleAPICalled', (params) => {
-      const type = String(params['type'] ?? 'log');
+      const type = readStringOr(params['type'], 'log');
       if (type !== 'log' && type !== 'warn' && type !== 'error') {
         return;
       }
@@ -165,10 +182,7 @@ export class Recorder {
       const args = Array.isArray(params['args'])
         ? (params['args'] as Array<Record<string, unknown>>)
         : [];
-      const text = args
-        .map((entry) => String(entry['value'] ?? entry['description'] ?? ''))
-        .filter(Boolean)
-        .join(' ');
+      const text = args.map(formatConsoleArg).filter(Boolean).join(' ');
 
       this.traceEvents.push(
         normalizeTraceEvent({
@@ -196,7 +210,7 @@ export class Recorder {
           channel: 'runtime',
           event: 'runtime.exception',
           severity: 'error',
-          summary: String(details['text'] ?? 'Runtime exception'),
+          summary: readString(details['text']) ?? 'Runtime exception',
           data: details,
           url: this.startUrl,
         })
@@ -336,8 +350,7 @@ export class Recorder {
           severity: data.severity,
           summary: data.summary ?? data.event,
           data: data.data ?? {},
-          url:
-            typeof data.data?.['url'] === 'string' ? (data.data['url'] as string) : this.startUrl,
+          url: typeof data.data?.['url'] === 'string' ? data.data['url'] : this.startUrl,
         })
       );
     } catch {
@@ -354,10 +367,7 @@ export class Recorder {
     this.networkHandlers.push({ event, handler });
   }
 
-  private subscribeTrace(
-    event: string,
-    handler: (params: Record<string, unknown>) => void
-  ): void {
+  private subscribeTrace(event: string, handler: (params: Record<string, unknown>) => void): void {
     this.cdp.on(event, handler);
     this.traceHandlers.push({ event, handler });
   }

@@ -256,6 +256,9 @@ describe('Command Help', () => {
     const result = await runCLI(['connect', '--help']);
 
     expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('--channel');
+    expect(result.stdout).toContain('--user-data-dir');
+    expect(result.stdout).toContain('Auto-connect to local Chrome');
     expect(result.stdout).toContain('--record');
     expect(result.stdout).toContain('--record-format');
     expect(result.stdout).toContain('--record-quality');

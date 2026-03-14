@@ -2,6 +2,8 @@
 
 The `bp` CLI is organized around jobs, not alphabetical commands.
 
+For local Chrome on Chrome 144+, try plain `bp connect` first after enabling remote debugging in `chrome://inspect/#remote-debugging`. Only add `--channel` or `--user-data-dir` when auto-discovery finds multiple eligible profiles.
+
 ## Install
 
 ```bash
@@ -33,7 +35,7 @@ Primary commands:
 Canonical flow:
 
 ```bash
-bp connect --provider generic --name dev
+bp connect --name dev
 bp snapshot -i -s dev
 bp page -s dev
 bp diagnose -s dev "submit"
@@ -212,7 +214,7 @@ Primary commands:
 Canonical flow:
 
 ```bash
-bp connect --provider generic --name voice-test
+bp connect --name voice-test
 bp audio setup -s voice-test
 bp exec -s voice-test '{"action":"goto","url":"https://my-voice-app.com"}'
 bp audio check -s voice-test
@@ -271,7 +273,7 @@ Core session commands:
 Examples:
 
 ```bash
-bp connect --provider generic --name dev
+bp connect --name dev
 bp list --json
 bp close -s dev
 bp clean --max-size 500MB

@@ -3,8 +3,9 @@
  */
 
 import { dirname } from 'node:path';
-import { connect, getBrowserWebSocketUrl, type Page } from '../../index.ts';
 import { grantAudioPermissions } from '../../audio/permissions.ts';
+import { connect, type Page } from '../../index.ts';
+import { formatBrowserDiscoveryError, resolveCLIEndpoint } from '../browser-endpoint.ts';
 import {
   applyNetworkOverride,
   applyPermissionState,
@@ -13,6 +14,7 @@ import {
   originFromUrl,
   type StoredPermissionName,
 } from '../env-state.ts';
+import type { EnvSettings, SessionData } from '../session.ts';
 import {
   generateSessionId,
   getDefaultSession,
@@ -21,7 +23,6 @@ import {
   saveSession,
   updateSession,
 } from '../session.ts';
-import type { EnvSettings, SessionData } from '../session.ts';
 
 const ENV_HELP = `
 bp env - Browser/session environment controls
@@ -122,7 +123,7 @@ namespace PermissionNames {
 interface EnvOptions {
   topCommand?: 'permissions' | 'network' | 'visibility' | 'geolocation';
   permissionMode?: PermissionMode;
-  permissionName?: PermissionArg | string;
+  permissionName?: string;
   networkAction?: NetworkAction;
   visibility?: VisibilityStateArg;
   geoAction?: GeoAction;
@@ -158,7 +159,10 @@ export function parseEnvArgs(args: string[]): EnvOptions {
   for (; i < args.length; i++) {
     const arg = args[i]!;
 
-    if (!options.topCommand && (arg === 'permissions' || arg === 'network' || arg === 'visibility' || arg === 'geolocation')) {
+    if (
+      !options.topCommand &&
+      (arg === 'permissions' || arg === 'network' || arg === 'visibility' || arg === 'geolocation')
+    ) {
       options.topCommand = arg;
       continue;
     }
@@ -223,7 +227,11 @@ export function parseEnvArgs(args: string[]): EnvOptions {
           options.permissionMode = arg as PermissionMode;
           continue;
         }
-        if (!options.permissionName && options.permissionMode !== 'get' && options.permissionMode !== 'reset') {
+        if (
+          !options.permissionName &&
+          options.permissionMode !== 'get' &&
+          options.permissionMode !== 'reset'
+        ) {
           options.permissionName = arg as PermissionArg;
           continue;
         }
@@ -245,7 +253,6 @@ export function parseEnvArgs(args: string[]): EnvOptions {
 
       if (options.topCommand === 'geolocation') {
         options.geoAction = arg as GeoAction;
-        continue;
       }
     }
   }
@@ -253,8 +260,8 @@ export function parseEnvArgs(args: string[]): EnvOptions {
   return options;
 }
 
-function coercePermissionArg(value: string): PermissionArg | string {
-  return value as PermissionArg;
+function coercePermissionArg(value: string): string {
+  return value;
 }
 
 function toBytesPerSecond(raw?: string): number | undefined {
@@ -272,7 +279,10 @@ function toBytesPerSecond(raw?: string): number | undefined {
   return Math.round((value * 1000) / 8);
 }
 
-async function resolveConnection(sessionId?: string, useLatestSession = false): Promise<ResolvedConnection> {
+async function resolveConnection(
+  sessionId?: string,
+  useLatestSession = false
+): Promise<ResolvedConnection> {
   if (sessionId) {
     const session = await loadSession(sessionId);
     const browser = await connect({ provider: session.provider, wsUrl: session.wsUrl });
@@ -284,20 +294,23 @@ async function resolveConnection(sessionId?: string, useLatestSession = false): 
     if (!defaultSession) {
       throw new Error('No sessions found. Run "bp connect" first or use "-s" for latest session.');
     }
-    const browser = await connect({ provider: defaultSession.provider, wsUrl: defaultSession.wsUrl });
+    const browser = await connect({
+      provider: defaultSession.provider,
+      wsUrl: defaultSession.wsUrl,
+    });
     return { browser, session: defaultSession };
   }
 
   let wsUrl: string;
   try {
-    wsUrl = await getBrowserWebSocketUrl('localhost:9222');
-  } catch {
+    wsUrl = (await resolveCLIEndpoint()).wsUrl;
+  } catch (error) {
     throw new Error(
-      'Could not auto-discover browser.\n' +
-        'Either:\n' +
-        '  1) Start Chrome with: --remote-debugging-port=9222\n' +
-        '  2) Use an existing session: bp env -s <id> ...\n' +
-        '  3) Use latest session: bp env -s'
+      formatBrowserDiscoveryError(error, {
+        explicitHint: '  - Create a session first: bp connect --browser-url <ws-url>',
+        reuseSessionHint: 'bp env -s <id> ...',
+        latestSessionHint: 'bp env -s',
+      })
     );
   }
 
@@ -317,7 +330,9 @@ async function resolveConnection(sessionId?: string, useLatestSession = false): 
 
   await saveSession(session);
   const sessionFile = getSessionFilePath(newSessionId);
-  await import('node:fs/promises').then((fs) => fs.mkdir(dirname(sessionFile), { recursive: true }));
+  await import('node:fs/promises').then((fs) =>
+    fs.mkdir(dirname(sessionFile), { recursive: true })
+  );
   return { browser, session };
 }
 
@@ -349,36 +364,45 @@ async function getPermissionStates(page: Pick<Page, 'evaluate'>): Promise<Permis
     })()
   `;
 
-  return (await page.evaluate<PermissionQuery[]>(expr)) as PermissionQuery[];
+  return page.evaluate<PermissionQuery[]>(expr);
 }
 
 async function permissionCommand(
   action: PermissionMode,
-  nameInput: PermissionArg | string | undefined,
+  nameInput: string | undefined,
   page: PermissionPage
 ): Promise<{ action: PermissionMode; name: string; state?: unknown }[]> {
-  const requested =
-    nameInput && nameInput !== 'all' ? coercePermissionArg(nameInput) : 'all';
+  const requested = nameInput && nameInput !== 'all' ? coercePermissionArg(nameInput) : 'all';
 
   if (action === 'get') {
     const states = await getPermissionStates(page);
     if (requested !== 'all') {
       const lower = String(requested).toLowerCase();
       return states
-        .filter((item) => item.name === lower || item.name === PermissionNames.NAVIGATION[requested as PermissionArg])
+        .filter(
+          (item) =>
+            item.name === lower ||
+            item.name === PermissionNames.NAVIGATION[requested as PermissionArg]
+        )
         .map((item) => ({ action, name: item.name, state: item.state }));
     }
     return states.map((item) => ({ action, name: item.name, state: item.state }));
   }
 
-  const permissionNames = requested === 'all' ? Object.values(PermissionNames.NAVIGATION).filter((v) => v !== 'all') : [PermissionNames.NAVIGATION[requested as PermissionArg] ?? String(requested)];
+  const permissionNames =
+    requested === 'all'
+      ? Object.values(PermissionNames.NAVIGATION).filter((v) => v !== 'all')
+      : [PermissionNames.NAVIGATION[requested as PermissionArg] ?? String(requested)];
 
-  const protocolNames = requested === 'all'
-    ? ['geolocation', 'audioCapture', 'videoCapture', 'notifications']
-    : permissionNames.map((item) => PermissionNames.PROTOCOL[item as PermissionArg] ?? String(item));
+  const protocolNames =
+    requested === 'all'
+      ? ['geolocation', 'audioCapture', 'videoCapture', 'notifications']
+      : permissionNames.map(
+          (item) => PermissionNames.PROTOCOL[item as PermissionArg] ?? String(item)
+        );
 
   if (action === 'grant') {
-    const origin = await page.evaluate<string>("window.location.origin");
+    const origin = await page.evaluate<string>('window.location.origin');
     await page.cdpClient.send('Browser.grantPermissions', {
       permissions: protocolNames.filter((value) => value !== 'all' && value !== 'audio'),
       origin,
@@ -392,7 +416,7 @@ async function permissionCommand(
     return result.map((item) => ({ action, name: item.name, state: item.state }));
   }
 
-  const origin = await page.evaluate<string>("window.location.origin");
+  const origin = await page.evaluate<string>('window.location.origin');
   if (action === 'revoke' || action === 'reset') {
     for (const permission of protocolNames) {
       if (permission === 'all') continue;
@@ -416,10 +440,19 @@ async function permissionCommand(
   throw new Error(`Unsupported permission action: ${action}`);
 }
 
-function formatPermissionOutput(session: SessionData, data: { action: PermissionMode; name: string; state?: unknown }[]): string {
+function formatPermissionOutput(
+  session: SessionData,
+  data: { action: PermissionMode; name: string; state?: unknown }[]
+): string {
   const lines = [`Session: ${session.id}`, ''];
   for (const row of data) {
-    lines.push(`${row.name}: ${row.state ?? 'unknown'} (${row.action})`);
+    const state =
+      typeof row.state === 'string'
+        ? row.state
+        : row.state === undefined || row.state === null
+          ? 'unknown'
+          : JSON.stringify(row.state);
+    lines.push(`${row.name}: ${state} (${row.action})`);
   }
   return lines.join('\n');
 }
@@ -497,7 +530,9 @@ async function runNetworkCommand(
     latency,
   });
 
-  console.log(`Session ${session.id}: network throttled | latency=${latency}ms down=${down}B/s up=${up}B/s`);
+  console.log(
+    `Session ${session.id}: network throttled | latency=${latency}ms down=${down}B/s up=${up}B/s`
+  );
 }
 
 async function runVisibilityCommand(
@@ -530,7 +565,9 @@ async function runGeolocationCommand(
     longitude: options.lon,
     accuracy: options.accuracy ?? 1,
   });
-  console.log(`Session ${session.id}: geolocation set to ${options.lat}, ${options.lon} (accuracy ${options.accuracy ?? 1})`);
+  console.log(
+    `Session ${session.id}: geolocation set to ${options.lat}, ${options.lon} (accuracy ${options.accuracy ?? 1})`
+  );
 }
 
 export async function envCommand(
@@ -544,10 +581,13 @@ export async function envCommand(
     return;
   }
 
-  const { browser, session } = await resolveConnection(globalOptions.session, options.useLatestSession ?? false);
+  const { browser, session } = await resolveConnection(
+    globalOptions.session,
+    options.useLatestSession ?? false
+  );
   const page = await browser.page(undefined, { targetId: session.targetId });
   const outputAsJson = globalOptions.format === 'json';
-  const existingEnv = (session.metadata?.env ?? {}) as EnvSettings;
+  const existingEnv: EnvSettings = session.metadata?.env ?? {};
 
   try {
     if (options.topCommand === 'permissions') {
@@ -576,7 +616,9 @@ export async function envCommand(
                 const requested: StoredPermissionName[] =
                   options.permissionName === 'all' || !options.permissionName
                     ? ['microphone', 'camera', 'notifications', 'geolocation']
-                    : [normalizeStoredPermission(options.permissionName)].filter(isStoredPermissionName);
+                    : [normalizeStoredPermission(options.permissionName)].filter(
+                        isStoredPermissionName
+                      );
                 if (permissionMode === 'grant') {
                   for (const name of requested) current.add(name);
                 } else {
@@ -594,7 +636,13 @@ export async function envCommand(
         await applyPermissionState(page.cdpClient, originFromUrl(currentUrl), nextPermissions);
       }
       if (outputAsJson) {
-        console.log(JSON.stringify({ session: session.id, action: permissionMode, permissions: result }, null, 2));
+        console.log(
+          JSON.stringify(
+            { session: session.id, action: permissionMode, permissions: result },
+            null,
+            2
+          )
+        );
       } else {
         console.log(formatPermissionOutput(session, result));
       }
@@ -619,7 +667,8 @@ export async function envCommand(
                   }
                 : {
                     offline: action === 'offline',
-                    latency: action === 'throttle' ? options.latency ?? 0 : options.latency ?? 0,
+                    latency:
+                      action === 'throttle' ? (options.latency ?? 0) : (options.latency ?? 0),
                   },
           },
         },

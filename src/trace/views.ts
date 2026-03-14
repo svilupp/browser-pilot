@@ -1,15 +1,13 @@
 import type { CanonicalTraceEvent, TraceView } from './model.ts';
 
 function takeRecent(events: CanonicalTraceEvent[], limit = 5) {
-  return events
-    .slice(-limit)
-    .map((event) => ({
-      ts: event.ts,
-      event: event.event,
-      summary: event.summary,
-      severity: event.severity,
-      url: event.url,
-    }));
+  return events.slice(-limit).map((event) => ({
+    ts: event.ts,
+    event: event.event,
+    summary: event.summary,
+    severity: event.severity,
+    url: event.url,
+  }));
 }
 
 export function buildTraceSummary(events: CanonicalTraceEvent[], view: TraceView) {
@@ -29,6 +27,8 @@ export function buildTraceSummary(events: CanonicalTraceEvent[], view: TraceView
     case 'session':
       return summarizeSession(events);
   }
+
+  throw new Error(`Unsupported trace view: ${view}`);
 }
 
 export function buildTraceSummaries(events: CanonicalTraceEvent[]) {
@@ -48,7 +48,9 @@ export function formatTraceSummaryPretty(summary: Record<string, unknown>): stri
 }
 
 function summarizeWs(events: CanonicalTraceEvent[]) {
-  const relevant = events.filter((event) => event.channel === 'ws' || event.event.startsWith('ws.'));
+  const relevant = events.filter(
+    (event) => event.channel === 'ws' || event.event.startsWith('ws.')
+  );
   const connections = new Map<
     string,
     {
@@ -79,12 +81,12 @@ function summarizeWs(events: CanonicalTraceEvent[]) {
     }
     if (event.event === 'ws.frame.sent') {
       connection.sent += 1;
-      const payload = typeof event.data['payload'] === 'string' ? (event.data['payload'] as string) : '';
+      const payload = typeof event.data['payload'] === 'string' ? event.data['payload'] : '';
       if (payload) connection.lastMessages.push(`sent: ${payload}`);
     }
     if (event.event === 'ws.frame.received') {
       connection.received += 1;
-      const payload = typeof event.data['payload'] === 'string' ? (event.data['payload'] as string) : '';
+      const payload = typeof event.data['payload'] === 'string' ? event.data['payload'] : '';
       if (payload) connection.lastMessages.push(`recv: ${payload}`);
     }
     connection.lastMessages = connection.lastMessages.slice(-3);
@@ -107,7 +109,9 @@ function summarizeWs(events: CanonicalTraceEvent[]) {
       received: connection.received,
       lastMessages: connection.lastMessages,
       connectedButSilent:
-        !!connection.createdAt && !connection.closedAt && connection.sent + connection.received === 0,
+        !!connection.createdAt &&
+        !connection.closedAt &&
+        connection.sent + connection.received === 0,
     })),
     reconnects,
     recent: takeRecent(relevant),
@@ -144,8 +148,8 @@ function summarizePermissions(events: CanonicalTraceEvent[]) {
   const latest = new Map<string, string>();
 
   for (const event of relevant) {
-    const name = typeof event.data['name'] === 'string' ? (event.data['name'] as string) : null;
-    const state = typeof event.data['state'] === 'string' ? (event.data['state'] as string) : null;
+    const name = typeof event.data['name'] === 'string' ? event.data['name'] : null;
+    const state = typeof event.data['state'] === 'string' ? event.data['state'] : null;
     if (name && state) {
       latest.set(name, state);
     }
@@ -166,8 +170,8 @@ function summarizeMedia(events: CanonicalTraceEvent[]) {
   const liveTracks = new Map<string, string>();
 
   for (const event of relevant) {
-    const label = typeof event.data['label'] === 'string' ? (event.data['label'] as string) : '';
-    const kind = typeof event.data['kind'] === 'string' ? (event.data['kind'] as string) : '';
+    const label = typeof event.data['label'] === 'string' ? event.data['label'] : '';
+    const kind = typeof event.data['kind'] === 'string' ? event.data['kind'] : '';
     const key = `${kind}:${label}`;
     if (event.event === 'media.track.started') {
       liveTracks.set(key, kind);
@@ -207,9 +211,7 @@ function summarizeVoice(events: CanonicalTraceEvent[]) {
 function summarizeUi(events: CanonicalTraceEvent[]) {
   const relevant = events.filter(
     (event) =>
-      event.channel === 'dom' ||
-      event.event.startsWith('dom.') ||
-      event.channel === 'action'
+      event.channel === 'dom' || event.event.startsWith('dom.') || event.channel === 'action'
   );
 
   return {

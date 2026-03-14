@@ -104,36 +104,70 @@ const browser = await connect({
 
 Connect to any Chrome instance with remote debugging enabled.
 
-### Start Chrome
+### Preferred Chrome 144+ Flow
+
+```bash
+# Start Chrome normally, then enable remote debugging in:
+# chrome://inspect/#remote-debugging
+bp connect
+```
+
+Tip: try plain `bp connect` first. Only add `--channel` or `--user-data-dir` if auto-discovery finds multiple eligible profiles.
+
+### Auto-Discovery
+
+browser-pilot can auto-discover a running local Chrome endpoint from `DevToolsActivePort`:
+
+```typescript
+import { connect } from 'browser-pilot';
+
+// Auto-discovers from a running local Chrome profile
+const browser = await connect({
+  provider: 'generic',
+});
+```
+
+When multiple Chrome profiles are eligible, narrow discovery:
+
+```typescript
+const betaBrowser = await connect({
+  provider: 'generic',
+  channel: 'beta',
+});
+
+const customBrowser = await connect({
+  provider: 'generic',
+  userDataDir: '/tmp/browser-pilot-profile',
+});
+```
+
+CLI equivalents:
+
+```bash
+bp connect --channel beta
+bp connect --user-data-dir /tmp/browser-pilot-profile
+```
+
+### Legacy Manual Debug Port Flow
+
+Legacy/manual discovery still works when Chrome is launched with a separate debug profile:
 
 ```bash
 # macOS
 /Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome \
   --remote-debugging-port=9222 \
+  --user-data-dir=/tmp/browser-pilot-profile \
   --no-first-run \
   --no-default-browser-check
 
 # Linux
-google-chrome --remote-debugging-port=9222
+google-chrome --remote-debugging-port=9222 --user-data-dir=/tmp/browser-pilot-profile
 
 # Windows
-"C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222
+"C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222 --user-data-dir=%TEMP%\browser-pilot-profile
 
 # Headless mode
-google-chrome --remote-debugging-port=9222 --headless=new
-```
-
-### Auto-Discovery
-
-browser-pilot can auto-discover the WebSocket URL:
-
-```typescript
-import { connect } from 'browser-pilot';
-
-// Auto-discovers from localhost:9222
-const browser = await connect({
-  provider: 'generic',
-});
+google-chrome --remote-debugging-port=9222 --user-data-dir=/tmp/browser-pilot-profile --headless=new
 ```
 
 ### Manual WebSocket URL
@@ -141,7 +175,7 @@ const browser = await connect({
 ```typescript
 import { connect, getBrowserWebSocketUrl } from 'browser-pilot';
 
-// Get the WebSocket URL manually
+// Get the WebSocket URL manually from a legacy /json/version endpoint
 const wsUrl = await getBrowserWebSocketUrl('localhost:9222');
 console.log(wsUrl); // ws://localhost:9222/devtools/browser/...
 
@@ -160,11 +194,12 @@ FROM zenika/alpine-chrome:latest
 # Expose debugging port
 EXPOSE 9222
 
-# Start Chrome with remote debugging
+# Start Chrome with remote debugging and an explicit profile
 CMD ["chromium-browser", \
      "--headless=new", \
      "--remote-debugging-port=9222", \
      "--remote-debugging-address=0.0.0.0", \
+     "--user-data-dir=/tmp/browser-pilot-profile", \
      "--no-sandbox"]
 ```
 

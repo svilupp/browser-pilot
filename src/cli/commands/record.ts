@@ -3,26 +3,32 @@ import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import type { Step } from '../../actions/types.ts';
-import { connect, getBrowserWebSocketUrl } from '../../index.ts';
+import { connect } from '../../index.ts';
 import {
   canonicalizeRecordingArtifact,
   createRecordingManifest,
   type RecordingFrame,
   type RecordingManifest,
 } from '../../recording/manifest.ts';
-import { Recorder, type ListenMode, type RecorderListenOptions, type RecorderOptions } from '../../recording/recorder.ts';
+import {
+  type ListenMode,
+  Recorder,
+  type RecorderListenOptions,
+  type RecorderOptions,
+} from '../../recording/recorder.ts';
 import { redactValueForRecording } from '../../recording/redaction.ts';
 import type { RawRecordedEvent } from '../../recording/types.ts';
 import { buildTraceSummaries } from '../../trace/views.ts';
+import { formatBrowserDiscoveryError, resolveCLIEndpoint } from '../browser-endpoint.ts';
 import { output } from '../index.ts';
 import {
   generateSessionId,
   getDefaultSession,
   loadSession,
-  saveSession,
-  updateSession,
   type RecordSettings,
   type SessionData,
+  saveSession,
+  updateSession,
 } from '../session.ts';
 
 type RecordProfile = 'automation' | 'realtime' | 'voice' | 'auth';
@@ -134,7 +140,12 @@ export function parseRecordArgs(args: string[]): RecordOptions {
       options.maxPayload = Number.parseInt(args[++i] ?? '', 10);
     } else if (arg === '--profile') {
       const profile = args[++i];
-      if (profile === 'automation' || profile === 'realtime' || profile === 'voice' || profile === 'auth') {
+      if (
+        profile === 'automation' ||
+        profile === 'realtime' ||
+        profile === 'voice' ||
+        profile === 'auth'
+      ) {
         options.profile = profile;
       }
     } else if (arg === '-o' || arg === '--output') {
@@ -156,7 +167,13 @@ export function parseRecordArgs(args: string[]): RecordOptions {
 }
 
 function isSubcommand(value: string): value is RecordSubcommand {
-  return value === 'capture' || value === 'inspect' || value === 'summary' || value === 'derive' || value === 'export';
+  return (
+    value === 'capture' ||
+    value === 'inspect' ||
+    value === 'summary' ||
+    value === 'derive' ||
+    value === 'export'
+  );
 }
 
 async function resolveConnection(
@@ -189,11 +206,14 @@ async function resolveConnection(
 
   let wsUrl: string;
   try {
-    wsUrl = await getBrowserWebSocketUrl('localhost:9222');
-  } catch {
+    wsUrl = (await resolveCLIEndpoint()).wsUrl;
+  } catch (error) {
     throw new Error(
-      'Could not auto-discover browser.\n' +
-        'Either start Chrome with --remote-debugging-port=9222 or pass -s to reuse a session.'
+      formatBrowserDiscoveryError(error, {
+        explicitHint: '  - Create a session first: bp connect --browser-url <ws-url>',
+        reuseSessionHint: 'bp record -s <session-id>',
+        latestSessionHint: 'bp record -s',
+      })
     );
   }
 
@@ -290,7 +310,9 @@ function deriveAssertions(artifact: RecordingManifest): Step[] {
   return assertions;
 }
 
-async function loadArtifact(pathOrFallback: string): Promise<{ path: string; artifact: RecordingManifest }> {
+async function loadArtifact(
+  pathOrFallback: string
+): Promise<{ path: string; artifact: RecordingManifest }> {
   if (!existsSync(pathOrFallback)) {
     throw new Error(`Artifact not found: ${pathOrFallback}`);
   }
@@ -355,7 +377,9 @@ async function runRecordCapture(
   nodeFs.mkdirSync(screenshotDir, { recursive: true });
 
   const existingArtifact = existsSync(canonicalPath)
-    ? canonicalizeRecordingArtifact(JSON.parse(nodeFs.readFileSync(canonicalPath, 'utf-8')) as unknown)
+    ? canonicalizeRecordingArtifact(
+        JSON.parse(nodeFs.readFileSync(canonicalPath, 'utf-8')) as unknown
+      )
     : null;
   const recordingFrames = existingArtifact ? artifactToFrames(existingArtifact) : [];
 
@@ -499,7 +523,9 @@ async function runRecordCapture(
         console.log(`Use: bp record summary ${outputPath}`);
       }
     } catch (error) {
-      console.error(`Error saving recording: ${error instanceof Error ? error.message : String(error)}`);
+      console.error(
+        `Error saving recording: ${error instanceof Error ? error.message : String(error)}`
+      );
       process.exit(1);
     }
   };
@@ -525,7 +551,9 @@ async function runRecordInspect(
   pathHint: string | undefined,
   globalOptions: { session?: string; format?: 'json' | 'pretty' }
 ): Promise<void> {
-  const session = globalOptions.session ? await loadSession(globalOptions.session) : await getDefaultSession();
+  const session = globalOptions.session
+    ? await loadSession(globalOptions.session)
+    : await getDefaultSession();
   const artifactPath = resolveArtifactPath(pathHint, session ?? undefined);
   const { path, artifact } = await loadArtifact(artifactPath);
   output(buildSummary(artifact, path), globalOptions.format ?? 'pretty');
@@ -535,7 +563,9 @@ async function runRecordSummary(
   pathHint: string | undefined,
   globalOptions: { session?: string; format?: 'json' | 'pretty' }
 ): Promise<void> {
-  const session = globalOptions.session ? await loadSession(globalOptions.session) : await getDefaultSession();
+  const session = globalOptions.session
+    ? await loadSession(globalOptions.session)
+    : await getDefaultSession();
   const artifactPath = resolveArtifactPath(pathHint, session ?? undefined);
   const { path, artifact } = await loadArtifact(artifactPath);
   const summary = buildSummary(artifact, path);
@@ -552,7 +582,9 @@ async function runRecordDerive(
     throw new Error('record derive requires -o <workflow.json>');
   }
 
-  const session = globalOptions.session ? await loadSession(globalOptions.session) : await getDefaultSession();
+  const session = globalOptions.session
+    ? await loadSession(globalOptions.session)
+    : await getDefaultSession();
   const artifactPath = resolveArtifactPath(pathHint, session ?? undefined);
   const { artifact } = await loadArtifact(artifactPath);
   const steps = artifact.recipe.steps;
@@ -580,7 +612,9 @@ async function runRecordExport(
     throw new Error('record export requires -o <bundle.json>');
   }
 
-  const session = globalOptions.session ? await loadSession(globalOptions.session) : await getDefaultSession();
+  const session = globalOptions.session
+    ? await loadSession(globalOptions.session)
+    : await getDefaultSession();
   const artifactPath = resolveArtifactPath(pathHint, session ?? undefined);
   const { artifact, path } = await loadArtifact(artifactPath);
   const bundle = {

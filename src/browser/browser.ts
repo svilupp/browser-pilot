@@ -9,6 +9,7 @@ import {
   createProvider,
   type Provider,
   type ProviderSession,
+  resolveBrowserEndpoint,
 } from '../providers/index.ts';
 import { Page } from './page.ts';
 
@@ -114,15 +115,31 @@ export class Browser {
    * Connect to a browser instance
    */
   static async connect(options: BrowserOptions): Promise<Browser> {
-    const provider = createProvider(options);
-    const session = await provider.createSession(options.session);
+    let connectOptions = options;
+
+    if (options.provider === 'generic' && !options.wsUrl) {
+      const endpoint = await resolveBrowserEndpoint({
+        explicitWsUrl: options.wsUrl,
+        channel: options.channel,
+        userDataDir: options.userDataDir,
+        allowLocalDiscovery: true,
+        allowLegacyHostFallback: true,
+      });
+      connectOptions = {
+        ...options,
+        wsUrl: endpoint.wsUrl,
+      };
+    }
+
+    const provider = createProvider(connectOptions);
+    const session = await provider.createSession(connectOptions.session);
 
     const cdp = await createCDPClient(session.wsUrl, {
-      debug: options.debug,
-      timeout: options.timeout,
+      debug: connectOptions.debug,
+      timeout: connectOptions.timeout,
     });
 
-    return new Browser(cdp, provider, session, options);
+    return new Browser(cdp, provider, session, connectOptions);
   }
 
   /**

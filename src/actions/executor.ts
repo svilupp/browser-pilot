@@ -21,9 +21,9 @@ import {
   type RecordingFrame,
 } from '../recording/manifest.ts';
 import { redactValueForRecording } from '../recording/redaction.ts';
-import { TRACE_BINDING_NAME, TRACE_SCRIPT } from '../trace/script.ts';
-import { createTraceId, normalizeTraceEvent, type CanonicalTraceEvent } from '../trace/model.ts';
 import { globToRegex } from '../trace/live.ts';
+import { type CanonicalTraceEvent, createTraceId, normalizeTraceEvent } from '../trace/model.ts';
+import { TRACE_BINDING_NAME, TRACE_SCRIPT } from '../trace/script.ts';
 import type {
   ActionType,
   BatchOptions,
@@ -55,9 +55,24 @@ interface RecordingContext {
   skipActions: Set<ActionType>;
 }
 
-function loadExistingRecording(
-  manifestPath: string
-): { frames: RecordingFrame[]; traceEvents: CanonicalTraceEvent[]; recordedAt?: string; startUrl?: string } {
+function readString(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined;
+}
+
+function readStringOr(value: unknown, fallback = ''): string {
+  return readString(value) ?? fallback;
+}
+
+function formatConsoleArg(entry: Record<string, unknown>): string {
+  return readString(entry['value']) ?? readString(entry['description']) ?? '';
+}
+
+function loadExistingRecording(manifestPath: string): {
+  frames: RecordingFrame[];
+  traceEvents: CanonicalTraceEvent[];
+  recordedAt?: string;
+  startUrl?: string;
+} {
   try {
     const raw = JSON.parse(fs.readFileSync(manifestPath, 'utf-8')) as unknown;
 
@@ -978,8 +993,13 @@ export class BatchExecutor {
     } catch {
       // already installed
     }
-    await this.page.cdpClient.send('Page.addScriptToEvaluateOnNewDocument', { source: TRACE_SCRIPT });
-    await this.page.cdpClient.send('Runtime.evaluate', { expression: TRACE_SCRIPT, awaitPromise: false });
+    await this.page.cdpClient.send('Page.addScriptToEvaluateOnNewDocument', {
+      source: TRACE_SCRIPT,
+    });
+    await this.page.cdpClient.send('Runtime.evaluate', {
+      expression: TRACE_SCRIPT,
+      awaitPromise: false,
+    });
   }
 
   private async waitForWsMessage(
@@ -1004,13 +1024,13 @@ export class BatchExecutor {
       };
 
       const onCreated = (params: Record<string, unknown>) => {
-        wsUrls.set(String(params['requestId'] ?? ''), String(params['url'] ?? ''));
+        wsUrls.set(readStringOr(params['requestId']), readStringOr(params['url']));
       };
 
       const onFrame = (params: Record<string, unknown>) => {
-        const requestId = String(params['requestId'] ?? '');
+        const requestId = readStringOr(params['requestId']);
         const response = (params['response'] ?? {}) as { payloadData?: string };
-        const payload = String(response.payloadData ?? '');
+        const payload = response.payloadData ?? '';
         const url = wsUrls.get(requestId) ?? '';
         if (!regex.test(url) && !regex.test(payload)) {
           return;
@@ -1030,7 +1050,7 @@ export class BatchExecutor {
         }
 
         try {
-          const parsed = JSON.parse(String(params['payload'] ?? '')) as {
+          const parsed = JSON.parse(readStringOr(params['payload'])) as {
             event?: string;
             data?: Record<string, unknown>;
           };
@@ -1039,8 +1059,8 @@ export class BatchExecutor {
           }
 
           const data = parsed.data ?? {};
-          const payload = String(data['payload'] ?? '');
-          const url = String(data['url'] ?? '');
+          const payload = readStringOr(data['payload']);
+          const url = readStringOr(data['url']);
           if (!regex.test(url) && !regex.test(payload)) {
             return;
           }
@@ -1051,7 +1071,7 @@ export class BatchExecutor {
 
           cleanup();
           resolve({
-            requestId: String(data['connectionId'] ?? ''),
+            requestId: readStringOr(data['connectionId']),
             url,
             payload,
           });
@@ -1092,7 +1112,7 @@ export class BatchExecutor {
     regex: RegExp,
     where: Record<string, unknown> | undefined
   ): Promise<Record<string, unknown> | null> {
-    const recent = await this.page.evaluate(
+    const recent = await this.page.evaluate<unknown[]>(
       '(() => Array.isArray(globalThis.__bpTraceRecentEvents) ? globalThis.__bpTraceRecentEvents : [])()'
     );
     if (!Array.isArray(recent)) {
@@ -1104,13 +1124,14 @@ export class BatchExecutor {
       if (!entry || typeof entry !== 'object') {
         continue;
       }
-      const event = String((entry as Record<string, unknown>)['event'] ?? '');
+      const record = entry as Record<string, unknown>;
+      const event = readStringOr(record['event']);
       if (event !== 'ws.frame.received') {
         continue;
       }
-      const data = (((entry as Record<string, unknown>)['data'] ?? {}) as Record<string, unknown>);
-      const payload = String(data['payload'] ?? '');
-      const url = String(data['url'] ?? '');
+      const data = (record['data'] ?? {}) as Record<string, unknown>;
+      const payload = readStringOr(data['payload']);
+      const url = readStringOr(data['url']);
       if (!regex.test(url) && !regex.test(payload)) {
         continue;
       }
@@ -1118,7 +1139,7 @@ export class BatchExecutor {
         continue;
       }
       return {
-        requestId: String(data['connectionId'] ?? ''),
+        requestId: readStringOr(data['connectionId']),
         url,
         payload,
       };
@@ -1143,18 +1164,15 @@ export class BatchExecutor {
         if (params['type'] !== 'error') {
           return;
         }
-        const args = Array.isArray(params['args']) ? (params['args'] as Array<Record<string, unknown>>) : [];
-        errors.push(
-          args
-            .map((entry) => String(entry['value'] ?? entry['description'] ?? ''))
-            .filter(Boolean)
-            .join(' ')
-        );
+        const args = Array.isArray(params['args'])
+          ? (params['args'] as Array<Record<string, unknown>>)
+          : [];
+        errors.push(args.map(formatConsoleArg).filter(Boolean).join(' '));
       };
 
       const onException = (params: Record<string, unknown>) => {
         const details = (params['exceptionDetails'] ?? {}) as Record<string, unknown>;
-        errors.push(String(details['text'] ?? 'Runtime exception'));
+        errors.push(readString(details['text']) ?? 'Runtime exception');
       };
 
       const timer = setTimeout(() => {
@@ -1195,11 +1213,7 @@ export class BatchExecutor {
     const result = await this.page.evaluate(
       `(() => navigator.permissions.query({ name: ${JSON.stringify(name)} }).then((status) => ({ name: ${JSON.stringify(name)}, state: status.state })))()`
     );
-    if (
-      !result ||
-      typeof result !== 'object' ||
-      (result as { state?: unknown }).state !== state
-    ) {
+    if (!result || typeof result !== 'object' || (result as { state?: unknown }).state !== state) {
       throw new Error(`Permission ${name} is not ${state}`);
     }
     return result as Record<string, unknown>;

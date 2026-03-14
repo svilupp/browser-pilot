@@ -9,10 +9,10 @@
  */
 
 import { isTranscriptionAvailable, transcribe } from '../../audio/transcribe.ts';
-import { connect, getBrowserWebSocketUrl, pcmToWav } from '../../index.ts';
+import { connect, pcmToWav } from '../../index.ts';
 import { isRecord } from '../../utils/json.ts';
+import { formatBrowserDiscoveryError, resolveCLIEndpoint } from '../browser-endpoint.ts';
 import { output } from '../index.ts';
-import { getSessionLogger } from '../session-logger.ts';
 import {
   generateSessionId,
   getDefaultSession,
@@ -21,6 +21,7 @@ import {
   saveSession,
   updateSession,
 } from '../session.ts';
+import { getSessionLogger } from '../session-logger.ts';
 
 const AUDIO_HELP = `
 bp audio - Actively exercise voice and audio pipelines
@@ -207,14 +208,14 @@ async function resolveConnection(
   // Auto-connect to local browser
   let wsUrl: string;
   try {
-    wsUrl = await getBrowserWebSocketUrl('localhost:9222');
-  } catch {
+    wsUrl = (await resolveCLIEndpoint()).wsUrl;
+  } catch (error) {
     throw new Error(
-      'Could not auto-discover browser.\n' +
-        'Either:\n' +
-        '  1. Start Chrome with: --remote-debugging-port=9222\n' +
-        '  2. Use an existing session: bp audio -s <session-id>\n' +
-        '  3. Use latest session: bp audio -s'
+      formatBrowserDiscoveryError(error, {
+        explicitHint: '  - Create a session first: bp connect --browser-url <ws-url>',
+        reuseSessionHint: 'bp audio -s <session-id>',
+        latestSessionHint: 'bp audio -s',
+      })
     );
   }
 

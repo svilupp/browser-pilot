@@ -4,6 +4,8 @@
 
 Use it when the question spans time, network, console, permissions, media, UI, or voice behavior.
 
+For local Chrome on Chrome 144+, try plain `bp connect` first after enabling remote debugging in `chrome://inspect/#remote-debugging`. Only add `--channel` or `--user-data-dir` when needed to narrow auto-discovery.
+
 ## Commands
 
 - `bp trace start`
@@ -26,7 +28,7 @@ Use it when the question spans time, network, console, permissions, media, UI, o
 ## Live capture workflow
 
 ```bash
-bp connect --provider generic --name realtime
+bp connect --name realtime
 bp trace start -s realtime --timeout 20000
 # reproduce the issue in the browser
 bp trace summary -s realtime --view ws

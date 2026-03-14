@@ -1,10 +1,10 @@
 import * as fs from 'node:fs';
 import { dirname, resolve } from 'node:path';
-import type { CanonicalTraceEvent, TraceView } from '../../trace/model.ts';
-import { type ListenMode, LiveTraceCollector } from '../../trace/live.ts';
 import { canonicalizeRecordingArtifact } from '../../recording/manifest.ts';
-import { buildTraceSummaries, buildTraceSummary } from '../../trace/views.ts';
+import { type ListenMode, LiveTraceCollector } from '../../trace/live.ts';
+import type { CanonicalTraceEvent, TraceView } from '../../trace/model.ts';
 import { getSessionTracePath, readTraceEvents } from '../../trace/store.ts';
+import { buildTraceSummaries, buildTraceSummary } from '../../trace/views.ts';
 import { attachSession, resolveSession } from '../attach.ts';
 import { output } from '../index.ts';
 import { getDefaultSession, loadSession } from '../session.ts';
@@ -86,7 +86,12 @@ export function parseTraceArgs(args: string[]): TraceOptions {
 
     if (
       !options.subcommand &&
-      (arg === 'start' || arg === 'tail' || arg === 'summary' || arg === 'watch' || arg === 'export' || arg === 'merge')
+      (arg === 'start' ||
+        arg === 'tail' ||
+        arg === 'summary' ||
+        arg === 'watch' ||
+        arg === 'export' ||
+        arg === 'merge')
     ) {
       options.subcommand = arg;
       continue;
@@ -248,7 +253,10 @@ function evaluateWatchAssertion(events: CanonicalTraceEvent[], assertion: string
     const summary = buildTraceSummary(events, 'console') as { errors: number };
     return {
       ok: summary.errors === 0,
-      reason: summary.errors === 0 ? 'No console errors detected' : `${summary.errors} console/runtime errors detected`,
+      reason:
+        summary.errors === 0
+          ? 'No console errors detected'
+          : `${summary.errors} console/runtime errors detected`,
     };
   }
 
@@ -278,7 +286,12 @@ async function traceStart(
   options: TraceOptions,
   globalOptions: { session?: string; trace?: boolean }
 ): Promise<void> {
-  const events = await runLiveTrace(globalOptions.session, options, globalOptions.trace ?? false, 'start');
+  const events = await runLiveTrace(
+    globalOptions.session,
+    options,
+    globalOptions.trace ?? false,
+    'start'
+  );
   output(
     {
       success: true,
@@ -394,7 +407,10 @@ async function traceMerge(
 
   fs.mkdirSync(dirname(resolve(options.output)), { recursive: true });
   fs.writeFileSync(resolve(options.output), JSON.stringify(payload, null, 2));
-  output({ success: true, output: resolve(options.output), events: merged.length }, globalOptions.format ?? 'pretty');
+  output(
+    { success: true, output: resolve(options.output), events: merged.length },
+    globalOptions.format ?? 'pretty'
+  );
 }
 
 export async function traceCommand(

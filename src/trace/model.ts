@@ -12,14 +12,7 @@ export type TraceChannel =
   | 'dom'
   | 'session';
 
-export type TraceView =
-  | 'ws'
-  | 'voice'
-  | 'console'
-  | 'permissions'
-  | 'media'
-  | 'ui'
-  | 'session';
+export type TraceView = 'ws' | 'voice' | 'console' | 'permissions' | 'media' | 'ui' | 'session';
 
 export interface CanonicalTraceEvent {
   traceId: string;

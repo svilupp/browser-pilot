@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.0.16] - 2026-03-14
+
+- Added Chrome 147 `DevToolsActivePort` auto-discovery for plain `bp connect`, pinned CI/harness coverage to Chrome 147, and updated docs/skills to recommend trying auto-discovery first.
+
 ## [0.0.15] - 2026-03-12
 
 ### Breaking changes

@@ -110,15 +110,23 @@ export {
 // Providers
 export {
   BrowserBaseProvider,
+  BrowserEndpointResolutionError,
   BrowserlessProvider,
+  buildLocalBrowserScanTargets,
+  type ChromeChannel,
   type ConnectOptions,
   type CreateSessionOptions,
   createProvider,
+  discoverLocalBrowsers,
   discoverTargets,
   GenericProvider,
   getBrowserWebSocketUrl,
   type Provider,
   type ProviderSession,
+  parseDevToolsActivePortFile,
+  type ResolvedBrowserEndpoint,
+  resolveBrowserEndpoint,
+  resolveChromeUserDataDirs,
 } from './providers/index.ts';
 // Storage (Cookies)
 export type {

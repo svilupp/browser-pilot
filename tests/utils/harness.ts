@@ -3,24 +3,91 @@
  * Manages Chrome lifecycle and fixture server
  */
 
+import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import * as chromeLauncher from 'chrome-launcher';
-import { type Browser, connect, getBrowserWebSocketUrl, type Page } from '../../src';
+import {
+  type Browser,
+  type ChromeChannel,
+  connect,
+  getBrowserWebSocketUrl,
+  type Page,
+  resolveChromeUserDataDirs,
+} from '../../src';
+
+interface CreateTestHarnessOptions {
+  chromePath?: string;
+  port?: number;
+  userDataDir?: string | false;
+  discoveryEnv?: Record<string, string>;
+  cleanupPaths?: string[];
+}
 
 export interface TestHarness {
   browser: Browser;
   baseUrl: string;
   chrome: chromeLauncher.LaunchedChrome;
   server: ReturnType<typeof Bun.serve>;
+  userDataDir?: string;
+  devToolsActivePortFile?: string;
+  discoveryEnv?: Record<string, string>;
+  homeDir?: string;
+  cleanupPaths?: string[];
 }
 
 // Global harness - only used for single-harness mode
 let globalHarness: TestHarness | null = null;
 
+function resolveChromePath(): string | undefined {
+  return process.env['BROWSER_PILOT_CHROME_PATH'] ?? process.env['CHROME_PATH'];
+}
+
+function buildDiscoveryEnv(homeDir: string): Record<string, string> {
+  return {
+    HOME: homeDir,
+    USERPROFILE: homeDir,
+    LOCALAPPDATA: join(homeDir, 'AppData', 'Local'),
+    XDG_CONFIG_HOME: join(homeDir, '.config'),
+    CHROME_CONFIG_HOME: join(homeDir, '.config'),
+  };
+}
+
+async function waitForFile(path: string, timeoutMs = 5000): Promise<void> {
+  const started = Date.now();
+
+  while (Date.now() - started < timeoutMs) {
+    try {
+      await stat(path);
+      return;
+    } catch {
+      await Bun.sleep(100);
+    }
+  }
+
+  throw new Error(`Timed out waiting for file: ${path}`);
+}
+
+async function ensureDevToolsActivePortFile(filePath: string, browserHost: string): Promise<void> {
+  try {
+    await waitForFile(filePath, 1000);
+    return;
+  } catch {
+    const wsUrl = await getBrowserWebSocketUrl(browserHost);
+    const parsed = new URL(wsUrl);
+    const port = parsed.port;
+    const path = parsed.pathname;
+    await writeFile(filePath, `${port}\n${path}\n`);
+  }
+}
+
 /**
  * Setup a new isolated test harness - launches Chrome and starts fixture server
  * Each call creates a new isolated instance (no singleton)
  */
-export async function createTestHarness(): Promise<TestHarness> {
+export async function createTestHarness(
+  options: CreateTestHarnessOptions = {}
+): Promise<TestHarness> {
   // 1. Start fixture server
   const server = Bun.serve({
     port: 0, // Random available port
@@ -56,7 +123,10 @@ export async function createTestHarness(): Promise<TestHarness> {
   console.log(`  Fixture server started at ${baseUrl}`);
 
   // 2. Launch Chrome with debugging
+  const chromePath = options.chromePath ?? resolveChromePath();
+  const userDataDir = options.userDataDir === false ? false : options.userDataDir;
   const chrome = await chromeLauncher.launch({
+    chromePath,
     chromeFlags: [
       '--headless=new',
       '--disable-gpu',
@@ -69,11 +139,16 @@ export async function createTestHarness(): Promise<TestHarness> {
       '--mute-audio',
       '--hide-scrollbars',
     ],
-    // Don't use default profile
-    userDataDir: false,
+    port: options.port,
+    userDataDir: userDataDir ?? false,
   });
 
   console.log(`  Chrome launched on port ${chrome.port}`);
+
+  const devToolsActivePortFile = userDataDir ? join(userDataDir, 'DevToolsActivePort') : undefined;
+  if (devToolsActivePortFile) {
+    await ensureDevToolsActivePortFile(devToolsActivePortFile, `localhost:${chrome.port}`);
+  }
 
   // 3. Connect browser-pilot
   const wsUrl = await getBrowserWebSocketUrl(`localhost:${chrome.port}`);
@@ -85,7 +160,38 @@ export async function createTestHarness(): Promise<TestHarness> {
 
   console.log('  Browser connected');
 
-  return { browser, baseUrl, chrome, server };
+  return {
+    browser,
+    baseUrl,
+    chrome,
+    server,
+    userDataDir: userDataDir === false ? undefined : userDataDir,
+    devToolsActivePortFile,
+    discoveryEnv: options.discoveryEnv,
+    homeDir: options.discoveryEnv?.['HOME'],
+    cleanupPaths: options.cleanupPaths,
+  };
+}
+
+export async function createAutoConnectHarness(
+  channel: ChromeChannel = 'stable'
+): Promise<TestHarness> {
+  const homeDir = await mkdtemp(join(tmpdir(), 'browser-pilot-autoconnect-'));
+  const discoveryEnv = buildDiscoveryEnv(homeDir);
+  const userDataDirs = resolveChromeUserDataDirs({
+    platform: process.platform,
+    env: discoveryEnv,
+    homeDir,
+  });
+  const userDataDir = userDataDirs[channel];
+
+  await mkdir(userDataDir, { recursive: true });
+
+  return createTestHarness({
+    userDataDir,
+    discoveryEnv,
+    cleanupPaths: [homeDir],
+  });
 }
 
 /**
@@ -112,6 +218,10 @@ export async function destroyHarness(h: TestHarness): Promise<void> {
 
   await h.chrome.kill();
   h.server.stop();
+
+  for (const path of h.cleanupPaths ?? []) {
+    await rm(path, { recursive: true, force: true });
+  }
 }
 
 /**

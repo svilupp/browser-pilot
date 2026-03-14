@@ -5,7 +5,8 @@
  * for faster subsequent commands. Use --no-daemon to disable.
  */
 
-import { type BrowserOptions, connect, getBrowserWebSocketUrl } from '../../index.ts';
+import { type BrowserOptions, connect } from '../../index.ts';
+import { formatBrowserDiscoveryError, resolveCLIEndpoint } from '../browser-endpoint.ts';
 import { spawnDaemon, waitForDaemonReady } from '../daemon-spawn.ts';
 import { output } from '../index.ts';
 import {
@@ -29,6 +30,8 @@ Options:
   -p, --provider <type>   Provider: generic | browserbase | browserless (default: generic)
   --url <value>           Browser WebSocket URL, or page URL when used with --new-tab
   --browser-url <ws-url>  Explicit browser WebSocket URL
+  --channel <name>        Local Chrome channel: stable | beta | dev | canary
+  --user-data-dir <path>  Explicit local Chrome user data dir for auto-discovery
   --page-url <url>        URL to open in the attached page/new tab
   -n, --name <id>         Custom session name (default: auto-generated)
   -r, --resume <id>       Resume an existing session by ID
@@ -48,10 +51,12 @@ Options:
   -h, --help              Show this help
 
 Examples:
-  bp connect                                    # Auto-connect to local Chrome (port 9222)
+  bp connect                                    # Auto-connect to local Chrome
+  bp connect --channel beta                     # Narrow auto-discovery to Chrome Beta
+  bp connect --user-data-dir ~/tmp/chrome-dev   # Use a specific Chrome profile
   bp connect --record                           # Connect with session-level recording
-  bp connect --provider generic --name dev      # Connect with custom session name
-  bp connect --url ws://localhost:9222/devtools  # Explicit WebSocket URL
+  bp connect --name dev                         # Auto-connect with a custom session name
+  bp connect --url ws://localhost:9222/devtools/browser/abc123  # Explicit WebSocket URL
   bp connect --resume dev                       # Resume a previous session
   bp connect --target-url localhost:3000         # Attach to tab matching URL
   bp connect --new-tab --url https://example.com # Create and attach to a fresh tab
@@ -62,6 +67,8 @@ interface ConnectOptions {
   provider?: ProviderType;
   url?: string;
   browserUrl?: string;
+  channel?: BrowserOptions['channel'];
+  userDataDir?: string;
   pageUrl?: string;
   name?: string;
   resume?: string;
@@ -90,6 +97,14 @@ function parseConnectArgs(args: string[]): ConnectOptions {
       options.url = args[++i];
     } else if (arg === '--browser-url') {
       options.browserUrl = args[++i];
+    } else if (arg === '--channel') {
+      const channel = args[++i];
+      if (channel !== 'stable' && channel !== 'beta' && channel !== 'dev' && channel !== 'canary') {
+        throw new Error('--channel must be one of: stable, beta, dev, canary');
+      }
+      options.channel = channel;
+    } else if (arg === '--user-data-dir') {
+      options.userDataDir = args[++i];
     } else if (arg === '--page-url') {
       options.pageUrl = args[++i];
     } else if (arg === '--name' || arg === '-n') {
@@ -180,6 +195,9 @@ export async function connectCommand(
   const provider: ProviderType = options.provider ?? 'generic';
   let wsUrl = options.browserUrl ?? options.url;
   let pageUrl = options.pageUrl;
+  let connectionSource: 'explicit-ws' | 'devtools-active-port' | 'json-version' | undefined;
+  let resolvedChannel: BrowserOptions['channel'] | 'custom' | undefined;
+  let resolvedUserDataDir: string | undefined;
 
   if (
     options.newTab &&
@@ -196,12 +214,24 @@ export async function connectCommand(
   // Auto-discover WebSocket URL for generic provider
   if (provider === 'generic' && !wsUrl) {
     try {
-      wsUrl = await getBrowserWebSocketUrl('localhost:9222');
-    } catch {
+      const resolved = await resolveCLIEndpoint({
+        explicitWsUrl: wsUrl,
+        channel: options.channel,
+        userDataDir: options.userDataDir,
+      });
+      wsUrl = resolved.wsUrl;
+      connectionSource = resolved.source;
+      resolvedChannel = resolved.channel;
+      resolvedUserDataDir = resolved.userDataDir;
+    } catch (error) {
       throw new Error(
-        'Could not auto-discover browser. Specify --url or start Chrome with --remote-debugging-port=9222'
+        formatBrowserDiscoveryError(error, {
+          explicitFlag: '--browser-url',
+        })
       );
     }
+  } else if (wsUrl) {
+    connectionSource = 'explicit-ws';
   }
 
   // Build connection options
@@ -209,6 +239,8 @@ export async function connectCommand(
     provider,
     debug: globalOptions.trace,
     wsUrl,
+    channel: options.channel,
+    userDataDir: options.userDataDir,
     apiKey: options.apiKey,
     projectId: options.projectId,
   };
@@ -248,9 +280,13 @@ export async function connectCommand(
     currentUrl,
     metadata: {
       ...browser.metadata,
+      ...(connectionSource ? { connectionSource } : {}),
+      ...(resolvedChannel ? { resolvedChannel } : {}),
+      ...(resolvedUserDataDir ? { resolvedUserDataDir } : {}),
       ...(recordSettings ? { record: recordSettings } : {}),
     },
   };
+  const outputMetadata = session.metadata;
 
   await saveSession(session);
 
@@ -292,7 +328,10 @@ export async function connectCommand(
       provider,
       currentUrl,
       recording: !!recordSettings,
-      metadata: browser.metadata,
+      connectionSource,
+      resolvedChannel,
+      resolvedUserDataDir,
+      metadata: outputMetadata,
       daemon: daemonResult,
     },
     globalOptions.format

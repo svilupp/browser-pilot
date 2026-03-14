@@ -26,7 +26,20 @@ bun add browser-pilot
 npm install browser-pilot
 ```
 
-For local Chrome:
+For local Chrome on Chrome 144+:
+
+```bash
+# 1. Start Chrome normally
+# 2. Open chrome://inspect/#remote-debugging
+# 3. Enable remote debugging, then run:
+bp connect
+```
+
+Tip: try plain `bp connect` first. Only add `--channel` or `--user-data-dir` if auto-discovery finds more than one eligible profile.
+
+Use `bp connect --channel beta` or `bp connect --user-data-dir <path>` when more than one Chrome profile is eligible.
+
+Legacy/manual fallback still works with a separate debug profile:
 
 ```bash
 /Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome \
@@ -48,7 +61,7 @@ For local Chrome:
 ## Golden path 1: automate a page
 
 ```bash
-bp connect --provider generic --name dev
+bp connect --name dev
 bp snapshot -i -s dev
 bp exec -s dev '[
   {"action":"fill","selector":"ref:e5","value":"user@example.com"},
@@ -74,7 +87,7 @@ Do not start by opening the raw artifact. Use `record summary`, `record inspect`
 ## Golden path 3: debug a realtime or voice session
 
 ```bash
-bp connect --provider generic --name realtime
+bp connect --name realtime
 bp trace start -s realtime --timeout 20000
 # reproduce the issue in the app
 bp trace summary -s realtime --view ws
