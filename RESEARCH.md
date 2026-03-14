@@ -1,626 +1,534 @@
-# Research: Chrome DevTools MCP Integration with Browser-Pilot
+# Research: Connecting Browser-Pilot to Any Running Chrome Session
 
 > **Date:** 2026-03-14
-> **Subject:** Technical deep-dive into `chrome-devtools-mcp`, Chrome remote debugging, and integration path with browser-pilot
+> **Subject:** How Chrome's new autoConnect / `DevToolsActivePort` discovery works and how browser-pilot can use it to connect to any running Chrome — no launch flags needed
 
 ---
 
 ## Table of Contents
 
 1. [Executive Summary](#executive-summary)
-2. [What is chrome-devtools-mcp?](#what-is-chrome-devtools-mcp)
-3. [How autoConnect Works](#how-autoconnect-works)
-4. [Chrome Remote Debugging Internals](#chrome-remote-debugging-internals)
-5. [MCP Tools Exposed (29 total)](#mcp-tools-exposed)
-6. [Browser-Pilot Current Architecture](#browser-pilot-current-architecture)
-7. [Integration Analysis](#integration-analysis)
-8. [Implementation Plan](#implementation-plan)
-9. [Validation Strategy](#validation-strategy)
-10. [Sources](#sources)
+2. [The Problem: Chrome 136+ Broke the Old Way](#the-problem-chrome-136-broke-the-old-way)
+3. [The New Way: DevToolsActivePort + autoConnect (Chrome 144+)](#the-new-way-devtoolsactiveport--autoconnect-chrome-144)
+4. [DevToolsActivePort File Deep Dive](#devtoolsactiveport-file-deep-dive)
+5. [CDP Connection Flow Once You Have the WebSocket URL](#cdp-connection-flow-once-you-have-the-websocket-url)
+6. [CDP Domain Availability: User Chrome vs Automation Chrome](#cdp-domain-availability-user-chrome-vs-automation-chrome)
+7. [All Chrome Connection Methods Compared](#all-chrome-connection-methods-compared)
+8. [What Browser-Pilot Already Has](#what-browser-pilot-already-has)
+9. [Implementation Plan for Browser-Pilot](#implementation-plan-for-browser-pilot)
+10. [Validation Strategy](#validation-strategy)
+11. [Edge Cases and Gotchas](#edge-cases-and-gotchas)
+12. [Sources](#sources)
 
 ---
 
 ## Executive Summary
 
-`chrome-devtools-mcp` is an **official Google project** that wraps Puppeteer behind an MCP server, giving AI agents 29 tools for browser automation, debugging, and performance analysis. Its killer feature is **`--autoConnect`** — connecting to a user's already-running Chrome (M144+) without needing `--remote-debugging-port` at launch time.
+**Goal:** Let browser-pilot connect to any running Chrome session — the user's actual browser with their cookies, logins, and state — for CLI-first automation.
 
-**The core insight:** chrome-devtools-mcp's autoConnect reads Chrome's `DevToolsActivePort` file to discover the debugging WebSocket URL. Browser-pilot can do the same thing directly — no Puppeteer needed — since browser-pilot already has its own CDP client. This would let browser-pilot connect to any Chrome session with zero dependencies, which is a significant advantage over chrome-devtools-mcp's Puppeteer dependency.
+**How:** Chrome 144+ (stable since Jan 2026) introduced a way for users to enable remote debugging from within a running Chrome instance at `chrome://inspect/#remote-debugging`. When enabled, Chrome writes a `DevToolsActivePort` file containing the port and WebSocket path. Browser-pilot can read this file, construct the WebSocket URL, and connect with its existing zero-dependency CDP client.
 
----
-
-## What is chrome-devtools-mcp?
-
-**Repo:** [ChromeDevTools/chrome-devtools-mcp](https://github.com/ChromeDevTools/chrome-devtools-mcp)
-**License:** Apache-2.0 (Google LLC)
-**Latest:** v0.20.0
-
-### Architecture
-
-```
-AI Agent <──stdio (MCP JSON-RPC)──> chrome-devtools-mcp <──Puppeteer──> Chrome (CDP/WebSocket)
-```
-
-The MCP server is a Node.js process that:
-1. Receives MCP tool calls over **stdio** (JSON-RPC)
-2. Translates them into **Puppeteer API calls**
-3. Puppeteer communicates with Chrome via **CDP over WebSocket**
-
-### Key Dependencies
-- `puppeteer` v24.39.0 — browser automation
-- `lighthouse` v13.0.3 — performance auditing
-- `chrome-devtools-frontend` v1.0.1596260 — bundled DevTools UI
-- MCP SDK v1.27.1 — protocol handling
-
-### Key Source Files
-| File | Purpose |
-|------|---------|
-| `src/index.ts` | Server creation (`createMcpServer()`) |
-| `src/browser.ts` | Browser connection/launch logic, autoConnect |
-| `src/DevToolsConnectionAdapter.ts` | Adapts Puppeteer CDP sessions |
-| `src/McpPage.ts` | Page state wrapper around Puppeteer `Page` |
-| `src/McpContext.ts` | MCP context management |
-| `src/bin/chrome-devtools-mcp-main.ts` | CLI entry point |
-
-### Design Notes
-- A **Mutex** serializes all tool execution (only one tool runs at a time)
-- Target filter excludes `chrome://` and `chrome-extension://` URLs (except `chrome://newtab` and `chrome://inspect`)
-- Google collects telemetry by default (opt out: `--no-usage-statistics`)
+**Key findings:**
+- The discovery mechanism is trivially simple: read a 2-line text file, construct a `ws://` URL
+- All CDP domains browser-pilot uses (DOM, Runtime, Page, Network, Input, Accessibility, etc.) work identically on a user's running Chrome
+- Browser-pilot already has `getBrowserWebSocketUrl()` for port-based discovery — autoConnect just adds file-based discovery as a faster/more reliable strategy
+- The daemon advantage is huge: once connected, browser-pilot caches the WebSocket for ~5-15ms reconnects, while other tools cold-start every time
+- No new dependencies needed — this is pure file I/O + the existing CDP client
 
 ---
 
-## How autoConnect Works
+## The Problem: Chrome 136+ Broke the Old Way
 
-This is the most important technical detail for integration.
+### What Changed
 
-### The Mechanism
+Starting in **Chrome 136** (mid-2025), `--remote-debugging-port` and `--remote-debugging-pipe` are **silently ignored** when Chrome is launched with its default user data directory.
 
-1. **Determine Chrome's user data directory** based on platform + channel:
+```bash
+# This USED TO WORK — now silently does nothing on Chrome 136+
+chrome --remote-debugging-port=9222
 
-   | Platform | Channel=stable |
-   |----------|---------------|
-   | Linux | `~/.config/google-chrome/` |
-   | macOS | `~/Library/Application Support/Google/Chrome/` |
-   | Windows | `%LOCALAPPDATA%\Google\Chrome\User Data\` |
+# This still works, but creates a SEPARATE profile (no cookies/logins)
+chrome --remote-debugging-port=9222 --user-data-dir=/tmp/chrome-debug
+```
 
-2. **Read the `DevToolsActivePort` file** from that directory:
-   ```
-   path.join(userDataDir, 'DevToolsActivePort')
-   ```
+### Why Google Did This
 
-3. **Parse the file** (two lines):
-   ```
-   9222
-   /devtools/browser/f4f7e416-1c3b-4b4c-b188-1be21ac7097e
-   ```
-   Line 1 = port, Line 2 = WebSocket path
+Attackers were using Chrome Remote Debugging to bypass App-Bound Encryption and steal cookies. Remote debugging lets the browser itself decrypt cookies for the debugging session, making cookie theft trivial.
 
-4. **Construct WebSocket URL**:
-   ```
-   ws://127.0.0.1:{port}{path}
-   ```
+### The Impact
 
-5. **Connect** via `puppeteer.connect({ browserWSEndpoint: wsUrl })`
+- Any tool that ran `chrome --remote-debugging-port=9222` against the user's real profile now gets silently ignored
+- The port doesn't open, no `DevToolsActivePort` file is written
+- Tools see "DevToolsActivePort file doesn't exist" errors
+- **You can still debug a separate profile** with `--user-data-dir`, but you lose all user state (cookies, logins, extensions)
 
-### Requirements for autoConnect
-- **Chrome M144+** (stable since Jan 2026)
-- User must navigate to `chrome://inspect/#remote-debugging` and enable remote debugging
-- Chrome shows a **permission dialog** each time an MCP server requests a session
-- While connected, Chrome displays "Chrome is being controlled by automated test software"
-
-### Known Issues
-- Incorrect `DevToolsActivePort` path on some Linux configurations ([#818](https://github.com/ChromeDevTools/chrome-devtools-mcp/issues/818), [#914](https://github.com/ChromeDevTools/chrome-devtools-mcp/issues/914))
-- If file not found, errors with a message directing users to `chrome://inspect/#remote-debugging`
+### Exceptions
+- **Chrome for Testing** (`chrome-for-testing` binary) — exempt from this restriction
+- **Headless Chrome** — continues to work with temporary profiles
+- **Chrome 144+ autoConnect** — the new sanctioned way to debug your real profile
 
 ---
 
-## Chrome Remote Debugging Internals
+## The New Way: DevToolsActivePort + autoConnect (Chrome 144+)
 
-### Connection Methods
+### How It Works (User's Perspective)
 
-| Method | Requires Restart? | Chrome Version |
-|--------|-------------------|----------------|
-| `--remote-debugging-port` | Yes (relaunch) | Any |
-| `--remote-debugging-pipe` | Yes (relaunch) | Any |
-| `autoConnect` via `chrome://inspect` | **No** | M144+ |
-| `chrome.debugger` extension API | No | Any |
+1. User opens their normal Chrome browser
+2. User navigates to `chrome://inspect/#remote-debugging`
+3. User clicks to enable remote debugging (one-time toggle, persists)
+4. Chrome starts an HTTP/WebSocket server on a random localhost port
+5. Chrome writes a `DevToolsActivePort` file to the user data directory
 
-### HTTP Discovery Endpoints (port-based debugging)
+### How It Works (Tool's Perspective)
 
-When Chrome runs with `--remote-debugging-port=<port>`:
+1. Determine Chrome's user data directory (platform-specific, see below)
+2. Read `<userDataDir>/DevToolsActivePort` — a 2-line text file
+3. Parse: line 1 = port, line 2 = WebSocket path
+4. Connect WebSocket to `ws://127.0.0.1:<port><path>`
+5. Chrome shows a **permission dialog** to the user — they must approve
+6. Once approved, full CDP access is available
 
-| Endpoint | Purpose |
-|----------|---------|
-| `GET /json/version` | Browser metadata + browser-level WebSocket URL |
-| `GET /json` or `GET /json/list` | List of debuggable targets (tabs/pages) |
-| `GET /json/protocol` | Full CDP protocol schema |
-| `PUT /json/new?url=<url>` | Create new tab (CSRF-protected, requires PUT) |
-| `GET /json/activate/<targetId>` | Bring target to foreground |
-| `GET /json/close/<targetId>` | Close a target |
+### Security Gates (Cannot Be Bypassed)
 
-### `/json/version` Response
-```json
-{
-  "Browser": "Chrome/120.0.6099.109",
-  "Protocol-Version": "1.3",
-  "User-Agent": "Mozilla/5.0 ...",
-  "V8-Version": "12.0.267.17",
-  "webSocketDebuggerUrl": "ws://127.0.0.1:9222/devtools/browser/14706e92-..."
-}
+1. **User must enable remote debugging** — one-time action at `chrome://inspect/#remote-debugging`
+2. **Permission dialog on every connection** — Chrome prompts user each time a client connects
+3. **"Controlled by automation" banner** — visible while connected
+4. The `chrome://inspect` page is a privileged Chrome internal page that cannot be navigated to or interacted with via CDP
+
+**Bottom line:** Full automation without any user interaction is not possible with autoConnect. The user must opt in. This is intentional security design.
+
+---
+
+## DevToolsActivePort File Deep Dive
+
+### File Format
+
+Plain text, two lines:
+
+```
+<port>
+/devtools/browser/<guid>
 ```
 
-### `/json/list` Response
-```json
-[
-  {
-    "id": "DAB7FB6187B554E10B0BD18821265734",
-    "title": "Example Page",
-    "type": "page",
-    "url": "https://example.com",
-    "webSocketDebuggerUrl": "ws://127.0.0.1:9222/devtools/page/DAB7FB..."
-  }
-]
-```
-
-### `DevToolsActivePort` File
-
-When Chrome has remote debugging enabled (either via `--remote-debugging-port=0` or via the new `chrome://inspect` UI), it writes this file to the user data directory:
-
+Example:
 ```
 9222
-/devtools/browser/f4f7e416-1c3b-4b4c-b188-1be21ac7097e
+/devtools/browser/fa1e7ced-c136-4379-a030-360f9f0eb6b4
 ```
 
-This is **the key** to autoConnect — no network scanning needed, just read a file.
+Together they form: `ws://127.0.0.1:9222/devtools/browser/fa1e7ced-c136-4379-a030-360f9f0eb6b4`
 
-### CDP Connection Flow
+### File Location by Platform
+
+| Platform | Channel=stable | Env Var Overrides |
+|----------|---------------|-------------------|
+| **Linux** | `~/.config/google-chrome/DevToolsActivePort` | `$CHROME_CONFIG_HOME` > `$XDG_CONFIG_HOME` |
+| **macOS** | `~/Library/Application Support/Google/Chrome/DevToolsActivePort` | — |
+| **Windows** | `%LOCALAPPDATA%\Google\Chrome\User Data\DevToolsActivePort` | — |
+
+**Other channels:**
+
+| Channel | Linux dir name | macOS/Win suffix |
+|---------|---------------|-----------------|
+| stable | `google-chrome` | (none) |
+| beta | `google-chrome-beta` | ` Beta` |
+| dev | `google-chrome-dev` | ` Dev` |
+| canary | `chrome-canary` | ` Canary` |
+
+### File Lifecycle
+
+| Event | What happens |
+|-------|-------------|
+| Chrome starts with `--remote-debugging-port` | File written after port binds |
+| Chrome starts with `--remote-debugging-port=0` | File written with randomly chosen port |
+| User enables debugging at `chrome://inspect` (M144+) | File written |
+| Chrome shuts down normally | **File is NOT deleted** (stale file remains) |
+| Chrome crashes | **File is NOT deleted** (stale file remains) |
+| Normal Chrome launch (no debugging) | File is NOT created, existing stale files NOT cleaned |
+| ChromeDriver starts | Deletes existing file before launching Chrome |
+
+### Stale File Detection
+
+Since Chrome doesn't clean up on exit, tools must handle stale files:
 
 ```
-1. HTTP Discovery      GET /json/version → webSocketDebuggerUrl
-                        (or read DevToolsActivePort file)
-        ↓
-2. Browser WebSocket   ws://127.0.0.1:9222/devtools/browser/<guid>
-        ↓
-3. Target Enumeration  Target.getTargets() → list of pages/workers
-        ↓
-4. Session Attach      Target.attachToTarget({ targetId, flatten: true })
-                        → returns sessionId
-        ↓
-5. Send Commands       { id, method, params, sessionId } on same WebSocket
-        ↓
-6. Receive Events      { method, params, sessionId } (no id = event)
+1. Read DevToolsActivePort
+2. Try HTTP GET http://127.0.0.1:<port>/json/version
+3. If connection refused → file is stale
+4. If GUID in response doesn't match line 2 → file is stale (different Chrome instance)
+5. If both match → Chrome is alive and this is the right instance
 ```
 
-### `--remote-debugging-pipe` vs `--remote-debugging-port`
+### Multiple Instances / Profiles
 
-| Feature | Port | Pipe |
-|---------|------|------|
-| Transport | WebSocket over TCP | File descriptors (FD 3/4) |
-| Multiple clients | Yes | No (single client) |
-| HTTP JSON API | Available | Not available |
-| Network exposure | Localhost | Process-private |
-| Performance | TCP overhead | Direct memory copy |
-| Use case | Connect to existing | Launch and control |
+- The file is written to the **user data directory** (parent of profile directories like `Default/`, `Profile 1/`)
+- Only one Chrome process can lock a user data directory at a time
+- Therefore: **one DevToolsActivePort file per running Chrome instance**
+- Multiple Chrome instances require separate `--user-data-dir` flags
 
-### Security (Chrome 136+)
+### Known Issues
 
-- `--remote-debugging-port` and `--remote-debugging-pipe` are **no longer respected** with the default Chrome profile. Must also pass `--user-data-dir` pointing to a non-default directory.
-- Chrome for Testing is exempt from this restriction.
-- `autoConnect` (M144+) is the sanctioned way to debug a regular Chrome session.
+- **Linux path bug:** Puppeteer had a typo resolving `~/.config` → `/home/<user>/config` (missing dot). Fixed in puppeteer/puppeteer#14600. Browser-pilot should use `$XDG_CONFIG_HOME` with fallback to `$HOME/.config`.
+- **Snap/Flatpak Chrome on Linux:** Different data directory paths. Snap: `~/snap/chromium/common/chromium/`. Would need additional detection logic.
+- **Chromium vs Chrome:** Chromium uses `chromium/` instead of `google-chrome/` on Linux, `Chromium/` instead of `Google/Chrome/` on macOS.
 
 ---
 
-## MCP Tools Exposed
+## CDP Connection Flow Once You Have the WebSocket URL
 
-chrome-devtools-mcp exposes **29 tools** (3 in `--slim` mode).
+This is the same flow browser-pilot already uses. No changes needed here.
 
-### Input Automation (9)
-| Tool | Description |
-|------|-------------|
-| `click` | Click element by UID from snapshot |
-| `click_at` | Click at x,y coordinates |
-| `hover` | Hover over element |
-| `fill` | Type into input/textarea or select option |
-| `fill_form` | Fill multiple form fields at once |
-| `type_text` | Type text via keyboard |
-| `press_key` | Press key combinations |
-| `drag` | Drag element onto another |
-| `upload_file` | Upload file through file input |
+```
+1. WebSocket connect    ws://127.0.0.1:<port>/devtools/browser/<guid>
+        ↓                   This is the BROWSER-level session
+2. Target.getTargets()  → List of all tabs/workers/etc.
+        ↓
+3. scoreTarget()        → Pick best page target (browser-pilot already does this)
+        ↓
+4. Target.attachToTarget({ targetId, flatten: true })
+        ↓                   Returns sessionId for the PAGE-level session
+5. Enable domains       Page.enable, DOM.enable, Runtime.enable, etc.
+        ↓                   (browser-pilot already does this in Page.init())
+6. Ready                Full CDP access to the page
+```
 
-### Navigation (6)
-| Tool | Description |
-|------|-------------|
-| `navigate_page` | Go to URL, back/forward, reload |
-| `new_page` | Create new tab |
-| `close_page` | Close tab |
-| `select_page` | Switch active page |
-| `list_pages` | List open pages |
-| `wait_for` | Wait for text to appear |
+### The `/json/version` HTTP Endpoint
 
-### Debugging (6)
-| Tool | Description |
-|------|-------------|
-| `evaluate_script` | Execute JavaScript |
-| `take_screenshot` | Capture screenshot |
-| `take_snapshot` | Accessibility tree (UIDs like `ref:e12`) |
-| `list_console_messages` | Console messages with pagination |
-| `get_console_message` | Specific console message details |
-| `lighthouse_audit` | Lighthouse accessibility/SEO/perf audit |
+Even with autoConnect, the HTTP endpoints are available on the same port:
 
-### Performance (4)
-| Tool | Description |
-|------|-------------|
-| `performance_start_trace` | Start trace recording |
-| `performance_stop_trace` | Stop trace, get results |
-| `performance_analyze_insight` | Analyze specific trace insight |
-| `take_memory_snapshot` | Capture heap snapshot |
+```
+GET http://127.0.0.1:<port>/json/version   → Browser info + webSocketDebuggerUrl
+GET http://127.0.0.1:<port>/json/list      → All debuggable targets
+GET http://127.0.0.1:<port>/json/protocol  → Full CDP protocol schema
+PUT http://127.0.0.1:<port>/json/new?url=  → Create new tab
+GET http://127.0.0.1:<port>/json/activate/<id> → Focus a tab
+GET http://127.0.0.1:<port>/json/close/<id>    → Close a tab
+```
 
-### Network (2)
-| Tool | Description |
-|------|-------------|
-| `list_network_requests` | List requests with filtering |
-| `get_network_request` | Request/response details by ID |
-
-### Emulation (2)
-| Tool | Description |
-|------|-------------|
-| `emulate` | Network/CPU throttling, geolocation, viewport |
-| `resize_page` | Change viewport dimensions |
-
-### Dialog (1)
-| Tool | Description |
-|------|-------------|
-| `handle_dialog` | Accept/dismiss browser dialogs |
-
-### Slim Mode (3 tools only)
-Navigation, script evaluation, and screenshots.
+Browser-pilot already uses `/json/version` in `getBrowserWebSocketUrl()` and `/json/list` in `discoverTargets()`.
 
 ---
 
-## Browser-Pilot Current Architecture
+## CDP Domain Availability: User Chrome vs Automation Chrome
 
-### Connection Lifecycle
+**Key finding: No meaningful restrictions.** All standard CDP domains work the same way on a user's Chrome.
 
-```
-Browser.connect(options)
-    ↓
-createProvider(options)        ← Factory: browserbase | browserless | generic
-    ↓
-provider.createSession()       ← Returns { wsUrl, sessionId, close() }
-    ↓
-createCDPClient(wsUrl)         ← Pure WebSocket, no dependencies
-    ↓
-Browser instance
-    ↓
-browser.page()                 ← Target discovery + attach
-    ↓
-Target.getTargets → scoreTarget() → pickBestTarget()
-    ↓
-Target.attachToTarget(targetId, { flatten: true })
-    ↓
-Page.init() → enable CDP domains
-    ↓
-Page ready
-```
+### Browser-Level Session (initial WebSocket)
 
-### Provider Interface
+Available: `Browser`, `Target`, `SystemInfo`, `IO`
+NOT available: `Page`, `DOM`, `CSS`, `Network`, etc. (these are page-level)
+
+### Page-Level Session (after `Target.attachToTarget`)
+
+Available: **Everything** — `Page`, `DOM`, `CSS`, `Network`, `Runtime`, `Debugger`, `Input`, `Emulation`, `Accessibility`, `Fetch`, etc.
+
+### The One Minor Difference
+
+`Browser.getCommandLine()` only works if Chrome was launched with `--enable-automation`. On a user's Chrome (connected via autoConnect), this method won't return useful data. **Browser-pilot doesn't use this method**, so it's a non-issue.
+
+### Verified: All browser-pilot CDP domains work
+
+Every CDP domain browser-pilot uses is fully available on page sessions regardless of how Chrome was started:
+
+| Domain | Used by browser-pilot | Works on user's Chrome? |
+|--------|----------------------|------------------------|
+| Target | Yes (discovery, attach) | Yes |
+| Page | Yes (navigate, screenshot, scripts) | Yes |
+| DOM | Yes (queries, box model, focus) | Yes |
+| Runtime | Yes (evaluate, bindings) | Yes |
+| Input | Yes (mouse, keyboard) | Yes |
+| Network | Yes (cookies, interception) | Yes |
+| Emulation | Yes (viewport, UA, geo) | Yes |
+| Accessibility | Yes (snapshots) | Yes |
+| Fetch | Yes (request interception) | Yes |
+| Browser | Yes (permissions, downloads) | Yes |
+
+---
+
+## All Chrome Connection Methods Compared
+
+| Method | User Interaction | Real Profile? | Chrome Version | browser-pilot support |
+|--------|-----------------|---------------|----------------|----------------------|
+| `--remote-debugging-port` + custom `--user-data-dir` | None | No (separate profile) | Any | Yes (generic provider) |
+| `--remote-debugging-port` + default profile | None | Yes | **< 136 only** | Yes (generic provider) |
+| `--remote-debugging-pipe` | None | Depends | Any | No (not needed) |
+| **autoConnect (`DevToolsActivePort`)** | **Enable once + approve dialog** | **Yes** | **M144+** | **Not yet — this research** |
+| `chrome.debugger` extension API | Install extension | Yes | Any | No (requires extension) |
+| Chrome for Testing | None | No (test binary) | Any | Yes (generic provider) |
+
+**autoConnect is the only way to get the user's real profile on Chrome 136+** without requiring Chrome for Testing.
+
+---
+
+## What Browser-Pilot Already Has
+
+Browser-pilot is already 90% of the way there. The existing architecture maps perfectly:
+
+### Existing Discovery (generic.ts)
+
 ```typescript
-interface Provider {
-  readonly name: string;
-  createSession(options?: CreateSessionOptions): Promise<ProviderSession>;
-  resumeSession?(sessionId: string): Promise<ProviderSession>;
-}
-
-interface ProviderSession {
-  wsUrl: string;
-  sessionId?: string;
-  metadata?: Record<string, unknown>;
-  close(): Promise<void>;
-}
-```
-
-### Existing Generic Provider
-
-The Generic provider (`src/providers/generic.ts`) is already a pass-through:
-```typescript
-class GenericProvider implements Provider {
-  readonly name = 'generic';
-  async createSession(): Promise<ProviderSession> {
-    return { wsUrl: this.wsUrl, close: async () => {} };
-  }
-}
-```
-
-**It already has discovery helpers:**
-```typescript
-// Already exists in src/providers/generic.ts:81-110
-export async function discoverTargets(host = 'localhost:9222'): Promise<Target[]>
+// Already in src/providers/generic.ts
 export async function getBrowserWebSocketUrl(host = 'localhost:9222'): Promise<string>
+export async function discoverTargets(host = 'localhost:9222'): Promise<Target[]>
 ```
 
-### CLI Auto-Discovery
+### Existing CLI Auto-Discovery (connect.ts)
 
-`bp connect` (without `--url`) already auto-discovers local Chrome:
 ```typescript
-// In connect.ts — if no wsUrl and provider is generic:
+// Already in bp connect — if no wsUrl and provider is generic:
 wsUrl = await getBrowserWebSocketUrl('localhost:9222');
-// Queries http://localhost:9222/json/version, retries up to 10 times
 ```
 
-### CDP Domains Used by Browser-Pilot
+### What's Missing
 
-Browser-pilot uses these CDP domains directly (no Puppeteer abstraction):
+1. **`DevToolsActivePort` file reader** — read 2 lines from a text file, construct wsUrl
+2. **Platform-specific Chrome user data dir resolver** — 10 lines of code
+3. **Stale file validation** — try connecting, handle failure gracefully
+4. **CLI flag** — `bp connect --auto` or `bp connect --provider local-chrome`
 
-- **Target:** `getTargets`, `createTarget`, `closeTarget`, `attachToTarget`
-- **Page:** `enable`, `navigate`, `reload`, `captureScreenshot`, `addScriptToEvaluateOnNewDocument`, `handleJavaScriptDialog`
-- **DOM:** `enable`, `getDocument`, `querySelector`, `resolveNode`, `getBoxModel`, `getContentQuads`, `describeNode`, `focus`, `scrollIntoViewIfNeeded`
-- **Runtime:** `enable`, `evaluate`, `callFunctionOn`, `addBinding`, `releaseObject`
-- **Input:** `dispatchMouseEvent`, `dispatchKeyEvent`, `insertText`
-- **Network:** `enable`, `disable`, `setCookie`, `getCookies`, `deleteCookies`
-- **Emulation:** `setDeviceMetricsOverride`, `setUserAgentOverride`, `setGeolocationOverride`, etc.
-- **Accessibility:** `getFullAXTree`
-- **Fetch:** `enable`, `disable`, `continueRequest`, `fulfillRequest`, `failRequest`
-- **Browser:** `grantPermissions`, `revokePermissions`, `setDownloadBehavior`
+That's it. No new CDP logic, no new WebSocket handling, no new page interaction code.
 
 ---
 
-## Integration Analysis
+## Implementation Plan for Browser-Pilot
 
-### What browser-pilot gains from chrome-devtools-mcp's approach
+### Phase 1: DevToolsActivePort Discovery (Core)
 
-| Capability | Currently in BP | In chrome-devtools-mcp | Integration Value |
-|------------|----------------|----------------------|-------------------|
-| Connect to local Chrome (port-based) | Yes (generic provider) | Yes | Already have it |
-| **autoConnect (no launch flags)** | **No** | **Yes** | **HIGH — killer feature** |
-| Accessibility snapshots | Yes (refs: `e12`) | Yes (UIDs) | Already have it |
-| Page automation (click/fill/etc.) | Yes | Yes (via Puppeteer) | Already have it |
-| Performance tracing | No | Yes (Lighthouse) | Medium |
-| Console message capture | No | Yes | Medium |
-| Memory snapshots | No | Yes | Low |
-| Network request inspection | Partial (interceptor) | Yes (list/detail) | Medium |
-| MCP server interface | No | Yes | Separate concern |
-
-### The Big Win: autoConnect Without Puppeteer
-
-chrome-devtools-mcp uses Puppeteer to connect to Chrome. But the autoConnect discovery mechanism is **just reading a file** — the `DevToolsActivePort` file. Browser-pilot can do this directly:
-
-```typescript
-// Pseudocode for what browser-pilot needs
-function discoverChromeAutoConnect(channel = 'stable'): string {
-  const userDataDir = getChromeUserDataDir(channel); // platform-specific
-  const portFile = path.join(userDataDir, 'DevToolsActivePort');
-  const [port, wsPath] = fs.readFileSync(portFile, 'utf8').split('\n');
-  return `ws://127.0.0.1:${port.trim()}${wsPath.trim()}`;
-}
-```
-
-**Browser-pilot advantage:** Zero dependencies. No Puppeteer. Direct CDP over WebSocket using the existing `CDPClient`.
-
-### What Would NOT Be Integrated
-
-- **Puppeteer:** Browser-pilot has its own CDP client — adding Puppeteer would be antithetical to the zero-dependency design
-- **MCP server protocol:** This is a separate concern. Browser-pilot is a library/CLI, not an MCP server. An MCP wrapper could be built separately on top of browser-pilot.
-- **Lighthouse:** Large dependency. Could be a separate optional module if needed.
-- **Telemetry:** Not needed.
-
----
-
-## Implementation Plan
-
-### Phase 1: autoConnect Provider (Core Feature)
-
-**New file:** `src/providers/local-chrome.ts`
+Add to `src/providers/generic.ts` (or a new `src/providers/local-chrome.ts`):
 
 ```typescript
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir, platform } from 'node:os';
 
-export class LocalChromeProvider implements Provider {
-  readonly name = 'local-chrome';
+/**
+ * Parse DevToolsActivePort file content into a WebSocket URL.
+ */
+export function parseDevToolsActivePort(content: string): string {
+  const lines = content.trim().split('\n');
+  if (lines.length < 2) throw new Error('DevToolsActivePort: expected 2 lines');
 
-  constructor(private options: {
-    channel?: 'stable' | 'beta' | 'dev' | 'canary';
-    userDataDir?: string;  // override auto-detection
-  } = {}) {}
+  const port = parseInt(lines[0].trim(), 10);
+  const wsPath = lines[1].trim();
 
-  async createSession(): Promise<ProviderSession> {
-    const wsUrl = await this.discoverWebSocketUrl();
-    return {
-      wsUrl,
-      metadata: { provider: 'local-chrome', channel: this.options.channel },
-      close: async () => {}, // don't close user's browser
-    };
-  }
+  if (!Number.isFinite(port) || port < 1 || port > 65535)
+    throw new Error(`DevToolsActivePort: invalid port "${lines[0]}"`);
+  if (!wsPath.startsWith('/'))
+    throw new Error(`DevToolsActivePort: invalid path "${wsPath}"`);
 
-  private async discoverWebSocketUrl(): Promise<string> {
-    // Strategy 1: Read DevToolsActivePort file (autoConnect, M144+)
-    const userDataDir = this.options.userDataDir ?? getChromeUserDataDir(this.options.channel);
-    const portFilePath = join(userDataDir, 'DevToolsActivePort');
-
-    if (existsSync(portFilePath)) {
-      const content = readFileSync(portFilePath, 'utf8').trim();
-      const lines = content.split('\n');
-      if (lines.length >= 2) {
-        const port = parseInt(lines[0].trim(), 10);
-        const wsPath = lines[1].trim();
-        if (port > 0 && port <= 65535 && wsPath.startsWith('/')) {
-          return `ws://127.0.0.1:${port}${wsPath}`;
-        }
-      }
-    }
-
-    // Strategy 2: Fall back to HTTP discovery on common ports
-    for (const port of [9222, 9229]) {
-      try {
-        return await getBrowserWebSocketUrl(`localhost:${port}`);
-      } catch { /* try next */ }
-    }
-
-    throw new Error(
-      'Could not find a running Chrome instance.\n' +
-      'Options:\n' +
-      '  1. Chrome 144+: Open chrome://inspect/#remote-debugging and enable it\n' +
-      '  2. Any Chrome: Launch with --remote-debugging-port=9222\n' +
-      '  3. Specify --url ws://... directly'
-    );
-  }
+  return `ws://127.0.0.1:${port}${wsPath}`;
 }
 
-function getChromeUserDataDir(channel: string = 'stable'): string {
+/**
+ * Resolve Chrome user data directory for the current platform.
+ */
+export function getChromeUserDataDir(
+  channel: 'stable' | 'beta' | 'dev' | 'canary' = 'stable'
+): string {
   const p = platform();
-  const channelSuffix = channel === 'stable' ? '' :
-    channel === 'beta' ? ' Beta' :
-    channel === 'dev' ? ' Dev' :
-    channel === 'canary' ? ' Canary' : '';
 
-  switch (p) {
-    case 'linux':
-      const linuxName = channel === 'canary' ? 'chrome-canary' :
-        channel === 'stable' ? 'google-chrome' : `google-chrome-${channel}`;
-      return join(homedir(), '.config', linuxName);
-    case 'darwin':
-      return join(homedir(), 'Library', 'Application Support', `Google/Chrome${channelSuffix}`);
-    case 'win32':
-      return join(process.env.LOCALAPPDATA ?? '', `Google\\Chrome${channelSuffix}\\User Data`);
-    default:
-      throw new Error(`Unsupported platform: ${p}`);
+  if (p === 'linux') {
+    const configHome = process.env.CHROME_CONFIG_HOME
+      ?? process.env.XDG_CONFIG_HOME
+      ?? join(homedir(), '.config');
+    const dirName = channel === 'canary' ? 'chrome-canary'
+      : channel === 'stable' ? 'google-chrome'
+      : `google-chrome-${channel}`;
+    return join(configHome, dirName);
   }
+
+  if (p === 'darwin') {
+    const suffix = channel === 'stable' ? '' : ` ${channel.charAt(0).toUpperCase() + channel.slice(1)}`;
+    return join(homedir(), 'Library', 'Application Support', `Google`, `Chrome${suffix}`);
+  }
+
+  if (p === 'win32') {
+    const suffix = channel === 'stable' ? '' : ` ${channel.charAt(0).toUpperCase() + channel.slice(1)}`;
+    return join(process.env.LOCALAPPDATA ?? '', 'Google', `Chrome${suffix}`, 'User Data');
+  }
+
+  throw new Error(`Unsupported platform: ${p}`);
+}
+
+/**
+ * Discover Chrome WebSocket URL via DevToolsActivePort file.
+ * Falls back to HTTP discovery on common ports.
+ */
+export async function discoverLocalChrome(options: {
+  channel?: 'stable' | 'beta' | 'dev' | 'canary';
+  userDataDir?: string;
+} = {}): Promise<string> {
+  // Strategy 1: DevToolsActivePort file (Chrome 144+ autoConnect, or --remote-debugging-port)
+  const userDataDir = options.userDataDir ?? getChromeUserDataDir(options.channel);
+  const portFilePath = join(userDataDir, 'DevToolsActivePort');
+
+  if (existsSync(portFilePath)) {
+    try {
+      const content = readFileSync(portFilePath, 'utf8');
+      const wsUrl = parseDevToolsActivePort(content);
+
+      // Validate: is Chrome actually running on this port?
+      const port = new URL(wsUrl).port;
+      await fetch(`http://127.0.0.1:${port}/json/version`);
+      return wsUrl;
+    } catch {
+      // File exists but Chrome isn't responding — stale file, try fallback
+    }
+  }
+
+  // Strategy 2: HTTP discovery on common debugging ports
+  for (const port of [9222, 9229]) {
+    try {
+      return await getBrowserWebSocketUrl(`127.0.0.1:${port}`);
+    } catch { /* try next */ }
+  }
+
+  throw new Error(
+    'Could not find a running Chrome instance.\n\n' +
+    'To connect browser-pilot to your Chrome:\n' +
+    '  Chrome 144+:  Open chrome://inspect/#remote-debugging and enable it\n' +
+    '  Any Chrome:   Launch with --remote-debugging-port=9222\n' +
+    '  Direct:       bp connect --url ws://...\n'
+  );
 }
 ```
 
 ### Phase 2: CLI Integration
 
-Update `bp connect` to support the new provider:
+Update `bp connect`:
 
 ```bash
-# Auto-discover running Chrome (reads DevToolsActivePort)
-bp connect --provider local-chrome
+# NEW: Auto-discover running Chrome via DevToolsActivePort
+bp connect --auto                        # stable channel
+bp connect --auto --channel canary       # canary channel
+bp connect --auto --chrome-data-dir /path/to/profile
 
-# Specify channel
-bp connect --provider local-chrome --channel canary
-
-# Shorthand (potential new flag)
-bp connect --local
-bp connect --auto
+# EXISTING (unchanged):
+bp connect --url ws://...                # direct WebSocket
+bp connect --provider browserbase        # cloud provider
 ```
 
-### Phase 3: Enhanced Discovery (Optional)
+### Phase 3: Stale File Cleanup (Nice-to-have)
 
-Add capabilities that chrome-devtools-mcp has but browser-pilot currently lacks:
+Optionally add `bp chrome status` or similar:
 
-1. **Console message capture** — subscribe to `Runtime.consoleAPICalled` and `Runtime.exceptionThrown`
-2. **Network request logging** — already partially there via `Network.enable` + event listeners
-3. **Performance tracing** — `Tracing.start` / `Tracing.end` / `Tracing.dataCollected` CDP domains
-
-### Phase 4: MCP Server Wrapper (Separate Package)
-
-If desired, build an MCP server that wraps browser-pilot (separate from this integration):
-
+```bash
+bp chrome status          # Check if Chrome is running + debuggable
+bp chrome discover        # Find all running Chrome instances
 ```
-AI Agent <──stdio──> bp-mcp-server <──library call──> browser-pilot <──CDP/WS──> Chrome
-```
-
-This would be a thin MCP adapter, not a port of chrome-devtools-mcp.
 
 ---
 
 ## Validation Strategy
 
-### 1. Unit Test: DevToolsActivePort Parsing
+### Unit Tests
 
 ```typescript
-test('parses DevToolsActivePort file', () => {
-  const content = '9222\n/devtools/browser/abc-123\n';
-  const wsUrl = parseDevToolsActivePort(content);
-  expect(wsUrl).toBe('ws://127.0.0.1:9222/devtools/browser/abc-123');
+// DevToolsActivePort parsing
+test('parses valid DevToolsActivePort', () => {
+  expect(parseDevToolsActivePort('9222\n/devtools/browser/abc-123\n'))
+    .toBe('ws://127.0.0.1:9222/devtools/browser/abc-123');
 });
 
-test('handles malformed DevToolsActivePort', () => {
+test('rejects malformed DevToolsActivePort', () => {
   expect(() => parseDevToolsActivePort('')).toThrow();
   expect(() => parseDevToolsActivePort('not-a-number\n/path')).toThrow();
-  expect(() => parseDevToolsActivePort('9222')).toThrow(); // missing path
+  expect(() => parseDevToolsActivePort('9222')).toThrow();
+  expect(() => parseDevToolsActivePort('0\n/path')).toThrow();
+  expect(() => parseDevToolsActivePort('99999\n/path')).toThrow();
+  expect(() => parseDevToolsActivePort('9222\nno-leading-slash')).toThrow();
+});
+
+// Platform path resolution
+test('resolves Chrome data dir for each platform', () => {
+  // Mock platform() and homedir(), verify paths
 });
 ```
 
-### 2. Unit Test: Platform-Specific User Data Dir
+### Integration Test (requires real Chrome)
 
 ```typescript
-test('resolves Chrome user data dir per platform', () => {
-  // Mock os.platform() and os.homedir()
-  const dir = getChromeUserDataDir('stable');
-  // Assert platform-specific path
-});
-```
-
-### 3. Integration Test: Connect to Local Chrome
-
-```typescript
-test('connects to local Chrome via autoConnect', async () => {
-  // Requires Chrome running with remote debugging enabled
-  const browser = await Browser.connect({ provider: 'local-chrome' });
+test('connects to local Chrome via DevToolsActivePort', async () => {
+  const browser = await Browser.connect({ provider: 'generic', wsUrl: await discoverLocalChrome() });
   const page = await browser.page();
-  const snapshot = await page.snapshot();
-  expect(snapshot).toBeTruthy();
+  const snap = await page.snapshot();
+  expect(snap).toBeTruthy();
   await browser.disconnect();
 });
 ```
 
-### 4. Manual Validation Checklist
+### Manual Validation Checklist
 
-- [ ] Launch Chrome normally (no flags)
-- [ ] Navigate to `chrome://inspect/#remote-debugging`
-- [ ] Enable remote debugging
-- [ ] Run `bp connect --provider local-chrome`
-- [ ] Verify connection succeeds
-- [ ] Run `bp snapshot` — see accessibility tree of active tab
-- [ ] Run `bp exec '{"action":"click","selector":"..."}' ` — interact with the page
+- [ ] Open Chrome normally (no flags)
+- [ ] Navigate to `chrome://inspect/#remote-debugging`, enable it
+- [ ] Run `bp connect --auto`
+- [ ] Verify connection succeeds, session created
+- [ ] `bp snapshot` — see accessibility tree of current tab
+- [ ] `bp exec '{"action":"goto","url":"https://example.com"}'` — navigate
+- [ ] `bp exec '{"action":"screenshot"}'` — take screenshot
 - [ ] Verify Chrome shows "being controlled" banner
-- [ ] Disconnect — verify Chrome continues running normally
-
-### 5. Fallback Validation
-
-- [ ] Test with Chrome < 144 (no `DevToolsActivePort` file) — should fall back to port scanning
-- [ ] Test with Chrome launched via `--remote-debugging-port=9222` — should work via fallback
-- [ ] Test with no Chrome running — should give clear error message
-- [ ] Test on Linux, macOS, Windows — platform path detection
+- [ ] Disconnect — Chrome continues running normally
+- [ ] Test with stale DevToolsActivePort file (kill Chrome, try connect → clear error)
+- [ ] Test on Linux, macOS, Windows
+- [ ] Test with `--channel canary` if Canary installed
 
 ---
 
-## Key Differences: browser-pilot vs chrome-devtools-mcp
+## Edge Cases and Gotchas
 
-| Aspect | browser-pilot | chrome-devtools-mcp |
-|--------|--------------|-------------------|
-| CDP Client | Custom, zero-dep | Puppeteer (24.39.0) |
-| Dependencies | **0 production** | Puppeteer + Lighthouse + DevTools frontend |
-| Runtime | Node, Bun, Workers | Node only |
-| Interface | Library + CLI | MCP server (stdio) |
-| Snapshot format | `ref:e12` notation | UID-based (similar) |
-| autoConnect | **Not yet** (easy to add) | Yes |
-| Daemon mode | Yes (Unix socket) | No |
-| Session caching | Yes | No |
-| Performance tracing | No | Yes (Lighthouse) |
-| Console capture | No | Yes |
+### Stale DevToolsActivePort Files
 
-### Why This Integration Matters
+Chrome does NOT delete the file on shutdown or crash. Browser-pilot must:
+1. Read the file
+2. Try to connect (or HTTP ping)
+3. If connection refused → treat as stale, fall back to port scanning
+4. Give a clear error message if nothing works
 
-1. **Connect to ANY Chrome session** — users can automate their actual browsing session, with cookies, logins, and state intact
-2. **Zero dependencies** — browser-pilot does it without Puppeteer, keeping the package lean
-3. **Daemon advantage** — once connected via autoConnect, the daemon caches the WebSocket for ~5-15ms reconnects vs chrome-devtools-mcp's cold-start every time
-4. **Worker-compatible** — the discovery logic is Node/Bun only, but once you have the wsUrl, Cloudflare Workers can connect too
+### Chrome 136+ with Default Profile
+
+If the user launches Chrome with `--remote-debugging-port=9222` on Chrome 136+, it's **silently ignored** when using the default profile. The `DevToolsActivePort` file won't be written. Browser-pilot should detect this and suggest autoConnect instead.
+
+### IPv6 / Localhost Resolution
+
+Use `127.0.0.1` explicitly, not `localhost`. Some systems resolve `localhost` to `::1` (IPv6), causing `ECONNREFUSED` on WebSocket connections. Puppeteer 17+ had this exact bug.
+
+### Snap/Flatpak Chrome on Linux
+
+Sandboxed Chrome installations have different user data paths:
+- **Snap:** `~/snap/chromium/common/chromium/`
+- **Flatpak:** `~/.var/app/org.chromium.Chromium/config/chromium/`
+
+Phase 1 can skip these; document as known limitation.
+
+### Multiple Chrome Installations
+
+If the user has both Chrome stable and Canary, each has a separate user data directory and potentially separate `DevToolsActivePort` files. The `--channel` flag lets users specify which one.
+
+### WebSocket URL Contains a GUID
+
+The GUID in the WebSocket path (`/devtools/browser/<guid>`) is unique per Chrome session. If Chrome restarts, the GUID changes. A stale WebSocket URL will fail to connect (HTTP 404 or WebSocket upgrade failure).
+
+### Daemon Compatibility
+
+The existing daemon architecture works perfectly with autoConnect:
+- `bp connect --auto` discovers the WebSocket URL and creates a session
+- The daemon caches the WebSocket connection
+- Subsequent `bp exec` / `bp snapshot` commands connect via Unix socket (~5-15ms)
+- If Chrome restarts, the daemon detects the stale connection and falls back
 
 ---
 
 ## Sources
 
-- [npm: chrome-devtools-mcp](https://www.npmjs.com/package/chrome-devtools-mcp)
-- [GitHub: ChromeDevTools/chrome-devtools-mcp](https://github.com/ChromeDevTools/chrome-devtools-mcp)
-- [Chrome Blog: Chrome DevTools MCP](https://developer.chrome.com/blog/chrome-devtools-mcp)
-- [Chrome Blog: Debug your browser session with autoConnect](https://developer.chrome.com/blog/chrome-devtools-mcp-debug-your-browser-session)
 - [Chrome Blog: Remote debugging port security changes (Chrome 136+)](https://developer.chrome.com/blog/remote-debugging-port)
+- [Chrome Blog: Debug your browser session with autoConnect](https://developer.chrome.com/blog/chrome-devtools-mcp-debug-your-browser-session)
 - [Chrome DevTools Protocol documentation](https://chromedevtools.github.io/devtools-protocol/)
-- [chrome.debugger API reference](https://developer.chrome.com/docs/extensions/reference/api/debugger)
-- [Puppeteer.connect() API](https://pptr.dev/api/puppeteer.puppeteer.connect)
-- [Playwright BrowserType.connectOverCDP()](https://playwright.dev/docs/api/class-browsertype)
+- [Chromium source: devtools_http_handler.cc (writes DevToolsActivePort)](https://source.chromium.org/chromium/chromium/src/+/main:content/browser/devtools/devtools_http_handler.cc;l=109)
+- [Chromium docs: User Data Directory](https://chromium.googlesource.com/chromium/src/+/HEAD/docs/user_data_dir.md)
 - [CDP FAQ: DevToolsActivePort format](https://github.com/ChromeDevTools/devtools-protocol/issues/55)
-- [GitHub Issue #818: Incorrect userdata dir](https://github.com/ChromeDevTools/chrome-devtools-mcp/issues/818)
-- [GitHub Issue #914: Could not find DevToolsActivePort](https://github.com/ChromeDevTools/chrome-devtools-mcp/issues/914)
+- [GitHub: ChromeDevTools/chrome-devtools-mcp (reference implementation)](https://github.com/ChromeDevTools/chrome-devtools-mcp)
+- [Puppeteer Linux path bug (Issue #14600)](https://github.com/nicholmikey/nicholmikey)
+- [chrome-devtools-mcp DevToolsActivePort path issues (#818, #914)](https://github.com/ChromeDevTools/chrome-devtools-mcp/issues/818)
+- [Selenium Chrome 136 regression (#15688)](https://github.com/SeleniumHQ/selenium/issues/15688)
+- [CDP Browser domain reference](https://chromedevtools.github.io/devtools-protocol/tot/Browser/)
+- [CDP Target domain reference](https://chromedevtools.github.io/devtools-protocol/tot/Target/)
