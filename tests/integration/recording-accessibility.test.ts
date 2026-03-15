@@ -12,8 +12,8 @@
 import { afterAll, afterEach, beforeAll, describe, expect, test } from 'bun:test';
 import { Recorder } from '../../src/recording/recorder.ts';
 import type { RichStep } from '../../src/recording/types.ts';
-import { withRetry } from '../utils/retry';
-import { TestContext } from './setup';
+import { withRetry } from '../utils/retry.ts';
+import { TestContext } from './setup.ts';
 
 const ctx = new TestContext();
 

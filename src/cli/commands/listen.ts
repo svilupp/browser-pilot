@@ -107,12 +107,8 @@ export function parseListenArgs(args: string[]): ListenOptions {
   return options;
 }
 
-/** Convert a simple glob pattern to a RegExp. Supports * only. */
-export function globToRegex(pattern: string): RegExp {
-  const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&');
-  const withWildcards = escaped.replace(/\*/g, '.*');
-  return new RegExp(`^${withWildcards}$`);
-}
+import { globToRegex } from '../../utils/strings.ts';
+export { globToRegex };
 
 type EventHandler = (params: Record<string, unknown>) => void;
 
@@ -448,8 +444,10 @@ export async function listenCommand(
       monitor.stop();
       log(`\nStopped. ${monitor.lineCount} events captured.`);
       outputStream.close?.();
-      browser.disconnect().catch(() => {});
-      process.exit(0);
+      void browser
+        .disconnect()
+        .catch(() => {})
+        .then(() => process.exit(0));
     };
 
     process.on('SIGINT', cleanup);

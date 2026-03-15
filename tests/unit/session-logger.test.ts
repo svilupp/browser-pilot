@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import * as fs from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { getSessionLogger, SessionLogger } from '../../src/cli/session-logger';
+import { getSessionLogger, SessionLogger } from '../../src/cli/session-logger.ts';
 
 const SESSION_DIR = join(homedir(), '.browser-pilot', 'sessions');
 

@@ -1,0 +1,6 @@
+id: no-fetch-cast
+language: typescript
+rule:
+  pattern: await $RESP.json() as $TYPE
+message: "Validate fetched JSON instead of casting — use unknown and narrow"
+severity: warning

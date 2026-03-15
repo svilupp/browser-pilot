@@ -1,0 +1,8 @@
+id: no-unknown-cast
+language: typescript
+rule:
+  pattern: $EXPR as unknown as $TYPE
+ignores:
+  - "tests/**"
+message: "Double cast via unknown — refactor to proper narrowing"
+severity: warning

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
-import { generateHintsFromSnapshot } from '../../src/browser/hint-generator';
-import type { PageSnapshot } from '../../src/browser/types';
+import { generateHintsFromSnapshot } from '../../src/browser/hint-generator.ts';
+import type { PageSnapshot } from '../../src/browser/types.ts';
 
 describe('generateHintsFromSnapshot', () => {
   const createMockSnapshot = (

@@ -22,6 +22,8 @@ run_check "typecheck (tsc)" bun run typecheck
 run_check "lint (biome)" bun run lint
 run_check "lint:type (oxlint)" bun run lint:type
 run_check "test (unit)" bun test tests/unit
+run_check "test (fitness)" bun test tests/fitness
+run_check "api:check" bun run api:check
 
 if [ "$failed" -eq 0 ]; then
   printf "\033[32m  all checks passed\033[0m\n"

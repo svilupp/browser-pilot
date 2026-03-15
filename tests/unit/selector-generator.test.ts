@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'bun:test';
-import { generateSelectorStrings, generateSelectors } from '../../src/browser/selector-generator';
-import type { InteractiveElement } from '../../src/browser/types';
+import {
+  generateSelectorStrings,
+  generateSelectors,
+} from '../../src/browser/selector-generator.ts';
+import type { InteractiveElement } from '../../src/browser/types.ts';
 
 describe('generateSelectors', () => {
   it('always includes ref selector as first item', () => {

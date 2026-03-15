@@ -116,7 +116,16 @@ type ActionType =
   | 'assertExists'
   | 'assertText'
   | 'assertUrl'
-  | 'assertValue';
+  | 'assertValue'
+  | 'waitForWsMessage'
+  | 'assertNoConsoleErrors'
+  | 'assertTextChanged'
+  | 'assertPermission'
+  | 'assertMediaTrackLive'
+  | 'chooseOption'
+  | 'upload'
+  | 'review'
+  | 'delta';
 
 interface Step {
   action: ActionType;
@@ -147,6 +156,11 @@ interface Step {
   expect?: string;
   retry?: number;
   retryDelay?: number;
+  files?: string[];
+  expectAny?: Condition[];
+  expectAll?: Condition[];
+  failIf?: Condition[];
+  dangerous?: boolean;
 }
 
 interface RecordOptions {
@@ -204,6 +218,9 @@ interface StepResult {
   coordinates?: { x: number; y: number };
   boundingBox?: { x: number; y: number; width: number; height: number };
   screenshotPath?: string;
+  outcomeStatus?: OutcomeStatus;
+  matchedConditions?: MatchedCondition[];
+  retrySafe?: boolean;
 }
 
 interface BatchResult {
@@ -212,6 +229,61 @@ interface BatchResult {
   steps: StepResult[];
   totalDurationMs: number;
   recordingManifest?: string;
+}
+```
+
+## Outcome Types
+
+```typescript
+type OutcomeStatus = 'success' | 'failed' | 'ambiguous' | 'unsafe_to_retry';
+
+type Condition =
+  | { kind: 'urlMatches'; pattern: string }
+  | { kind: 'elementVisible'; selector: string | string[] }
+  | { kind: 'elementHidden'; selector: string | string[] }
+  | { kind: 'textAppears'; selector?: string | string[]; text: string }
+  | { kind: 'textChanges'; selector?: string | string[]; to?: string }
+  | { kind: 'networkResponse'; urlPattern: string; status?: number }
+  | { kind: 'stateSignatureChanges' };
+
+interface MatchedCondition {
+  condition: Condition;
+  matched: boolean;
+  detail?: string;
+}
+```
+
+## Review Types
+
+```typescript
+interface ReviewResult {
+  url: string;
+  title: string;
+  headings: string[];
+  forms: Array<{ label?: string; value: unknown; type: string; disabled: boolean }>;
+  alerts: string[];
+  summaryCards: SummaryCard[];
+  tables: TableData[];
+  keyValues: KeyValuePair[];
+  statusLabels: string[];
+}
+
+interface DeltaResult {
+  changes: DeltaChange[];
+  before: PageState;
+  after: PageState;
+  hasChanges: boolean;
+}
+
+interface WorkflowSummary {
+  success: boolean;
+  totalSteps: number;
+  succeededSteps: number;
+  failedSteps: number;
+  totalDurationMs: number;
+  steps: WorkflowStepSummary[];
+  verdict: string;
+  workflowRetrySafe: boolean;
 }
 ```
 

@@ -8,8 +8,15 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import * as fs from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { withRetry } from '../utils/retry';
-import { generateSessionName, getBaseUrl, getWebSocketUrl, runCLI, setup, teardown } from './setup';
+import { withRetry } from '../utils/retry.ts';
+import {
+  generateSessionName,
+  getBaseUrl,
+  getWebSocketUrl,
+  runCLI,
+  setup,
+  teardown,
+} from './setup.ts';
 
 const SESSION_DIR = join(homedir(), '.browser-pilot', 'sessions');
 

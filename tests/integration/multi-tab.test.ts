@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import type { Browser, Page } from '../../src';
-import { createTestHarness, destroyHarness, type TestHarness } from '../utils/harness';
+import type { Browser, Page } from '../../src/index.ts';
+import { createTestHarness, destroyHarness, type TestHarness } from '../utils/harness.ts';
 
 let harness: TestHarness;
 let browser: Browser;

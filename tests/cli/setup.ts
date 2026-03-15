@@ -5,7 +5,7 @@
  * to avoid conflicts when tests run in parallel.
  */
 
-import { createTestHarness, destroyHarness, type TestHarness } from '../utils/harness';
+import { createTestHarness, destroyHarness, type TestHarness } from '../utils/harness.ts';
 
 export interface CLIResult {
   stdout: string;

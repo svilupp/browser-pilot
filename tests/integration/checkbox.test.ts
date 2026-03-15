@@ -8,9 +8,9 @@ import {
   expectElementText,
   expectHasClass,
   expectTextContent,
-} from '../utils/assertions';
-import { withRetry } from '../utils/retry';
-import { TestContext } from './setup';
+} from '../utils/assertions.ts';
+import { withRetry } from '../utils/retry.ts';
+import { TestContext } from './setup.ts';
 
 // Each test file gets its own isolated context
 const ctx = new TestContext();

@@ -2,8 +2,8 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { homedir, networkInterfaces } from 'node:os';
 import { join } from 'node:path';
-import { withRetry } from '../utils/retry';
-import { generateSessionName, getWebSocketUrl, runCLI, setup, teardown } from './setup';
+import { withRetry } from '../utils/retry.ts';
+import { generateSessionName, getWebSocketUrl, runCLI, setup, teardown } from './setup.ts';
 
 const SESSION_DIR = join(homedir(), '.browser-pilot', 'sessions');
 

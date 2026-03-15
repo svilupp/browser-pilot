@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, mock } from 'bun:test';
-import { Page } from '../../src/browser/page';
-import type { CDPClient } from '../../src/cdp/client';
+import { Page } from '../../src/browser/page.ts';
+import type { CDPClient } from '../../src/cdp/client.ts';
 
 /**
  * Tests for Epic 6: Iframe Context Safety

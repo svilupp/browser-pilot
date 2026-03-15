@@ -4,6 +4,9 @@
 
 import type { PageSnapshot, SnapshotNode } from './types.ts';
 
+/** Comparable scalar fields of SnapshotNode */
+type SnapshotNodeField = 'role' | 'name' | 'value' | 'disabled' | 'checked' | 'ref';
+
 /**
  * Diff metadata
  */
@@ -30,7 +33,7 @@ export interface ChangedElement {
   key: string;
   before: SnapshotNode;
   after: SnapshotNode;
-  changedFields: string[];
+  changedFields: SnapshotNodeField[];
 }
 
 /**
@@ -82,8 +85,8 @@ function flattenTree(
 /**
  * Compare two nodes and return changed fields
  */
-function compareNodes(before: SnapshotNode, after: SnapshotNode): string[] {
-  const changedFields: string[] = [];
+function compareNodes(before: SnapshotNode, after: SnapshotNode): SnapshotNodeField[] {
+  const changedFields: SnapshotNodeField[] = [];
 
   // Compare basic properties
   if (before.role !== after.role) {
@@ -207,8 +210,8 @@ export function formatDiffPretty(diff: SnapshotDiff): string {
     const name = item.after.name ? ` "${item.after.name}"` : '';
     const fieldChanges = item.changedFields
       .map((field) => {
-        const beforeVal = (item.before as unknown as Record<string, unknown>)[field];
-        const afterVal = (item.after as unknown as Record<string, unknown>)[field];
+        const beforeVal = item.before[field];
+        const afterVal = item.after[field];
         return `${field}: ${JSON.stringify(beforeVal)} → ${JSON.stringify(afterVal)}`;
       })
       .join(', ');

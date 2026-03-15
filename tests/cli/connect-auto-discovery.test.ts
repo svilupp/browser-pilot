@@ -2,8 +2,8 @@ import { describe, expect, test } from 'bun:test';
 import { mkdir, mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createAutoConnectHarness, createTestHarness, destroyHarness } from '../utils/harness';
-import { generateSessionName, runCLI } from './setup';
+import { createAutoConnectHarness, createTestHarness, destroyHarness } from '../utils/harness.ts';
+import { generateSessionName, runCLI } from './setup.ts';
 
 describe('CLI connect auto-discovery', () => {
   test('plain bp connect auto-discovers a local browser from DevToolsActivePort', async () => {

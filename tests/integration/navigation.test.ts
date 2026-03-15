@@ -3,9 +3,9 @@
  */
 
 import { afterAll, afterEach, beforeAll, describe, expect, test } from 'bun:test';
-import { expectPageTitle, expectPageUrl, expectTextContent } from '../utils/assertions';
-import { withRetry } from '../utils/retry';
-import { TestContext } from './setup';
+import { expectPageTitle, expectPageUrl, expectTextContent } from '../utils/assertions.ts';
+import { withRetry } from '../utils/retry.ts';
+import { TestContext } from './setup.ts';
 
 // Each test file gets its own isolated context
 const ctx = new TestContext();

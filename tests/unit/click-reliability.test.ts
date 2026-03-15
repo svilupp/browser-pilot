@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, mock } from 'bun:test';
-import { ActionabilityError } from '../../src/browser/actionability';
+import { ActionabilityError } from '../../src/browser/actionability.ts';
 
 /**
  * Tests for Epic 3: Click reliability improvements

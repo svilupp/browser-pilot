@@ -1,0 +1,13 @@
+id: no-inline-ci-skip
+language: typescript
+rule:
+  any:
+    - pattern: describe.skip($$$)
+    - pattern: test.skip($$$)
+    - pattern: it.skip($$$)
+message: "Move skipped tests to tests/quarantine/ instead of inline skip"
+severity: warning
+files:
+  - "tests/**/*.ts"
+ignores:
+  - "tests/quarantine/**"

@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><title>Dangerous Submit</title></head>
+<body>
+  <h1>Wire Transfer</h1>
+  <form id="transfer-form">
+    <label for="amount">Amount ($)</label>
+    <input id="amount" type="text" value="1000">
+    <label for="recipient">Recipient</label>
+    <input id="recipient" type="text" value="Bob">
+    <button id="transfer-btn" type="button">Transfer</button>
+  </form>
+  <div id="result" style="display:none; padding: 12px; margin-top: 12px; border-radius: 4px;"></div>
+  <div id="error" style="display:none; background: #f44336; color: white; padding: 12px; margin-top: 12px; border-radius: 4px;">
+    Transfer failed: insufficient funds
+  </div>
+  <script>
+    const btn = document.getElementById('transfer-btn');
+    const result = document.getElementById('result');
+    const error = document.getElementById('error');
+    const params = new URLSearchParams(location.search);
+    const shouldFail = params.get('fail') === 'true';
+
+    btn.addEventListener('click', () => {
+      btn.disabled = true;
+      btn.textContent = 'Processing...';
+      result.style.display = 'none';
+      error.style.display = 'none';
+
+      setTimeout(() => {
+        if (shouldFail) {
+          error.style.display = 'block';
+          btn.disabled = false;
+          btn.textContent = 'Transfer';
+        } else {
+          result.style.display = 'block';
+          result.style.background = '#4caf50';
+          result.style.color = 'white';
+          result.textContent = `Transfer complete — confirmation #${Math.floor(Math.random() * 100000)}`;
+          // Button stays disabled after success (can't re-submit)
+        }
+      }, 500);
+    });
+  </script>
+</body>
+</html>

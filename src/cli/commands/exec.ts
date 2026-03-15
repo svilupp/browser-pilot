@@ -347,6 +347,24 @@ export async function execCommand(
           data: stepResult.result as Record<string, unknown>,
         });
       }
+
+      // Log outcome evaluation results
+      if (stepResult.outcomeStatus) {
+        logger.logTrace({
+          channel: 'action',
+          event: `action.outcome.${stepResult.outcomeStatus}`,
+          summary: `Outcome: ${stepResult.outcomeStatus}${stepResult.retrySafe === false ? ' (unsafe to retry)' : ''}`,
+          data: {
+            outcomeStatus: stepResult.outcomeStatus,
+            retrySafe: stepResult.retrySafe,
+            matchedConditions: stepResult.matchedConditions?.map((mc) => ({
+              kind: mc.condition.kind,
+              matched: mc.matched,
+              detail: mc.detail,
+            })),
+          },
+        });
+      }
     }
 
     // Mirror recording to export path if configured
@@ -399,6 +417,9 @@ export async function execCommand(
       error: s.error,
       text: s.text,
       result: s.result,
+      ...(s.outcomeStatus !== undefined ? { outcomeStatus: s.outcomeStatus } : {}),
+      ...(s.matchedConditions !== undefined ? { matchedConditions: s.matchedConditions } : {}),
+      ...(s.retrySafe !== undefined ? { retrySafe: s.retrySafe } : {}),
     }));
 
     const payload = {

@@ -14,9 +14,10 @@ For local Chrome on Chrome 144+, try plain `bp connect` first after enabling rem
 
 1. Inspect the page: `bp snapshot`, `bp page`, `bp forms`, `bp text`, `bp diagnose`
 2. Act in the browser: `bp exec`, `bp run`
-3. Capture a human demo: `bp record`
-4. Analyze time-based behavior: `bp trace`
-5. Exercise voice/media or browser conditions: `bp audio`, `bp env`
+3. Verify outcomes: `bp review`, outcome conditions in `bp exec`
+4. Capture a human demo: `bp record`
+5. Analyze time-based behavior: `bp trace`
+6. Exercise voice/media or browser conditions: `bp audio`, `bp env`
 
 ## Default automation workflow
 
@@ -30,6 +31,34 @@ bp exec -s dev '[
 ```
 
 If multiple Chrome profiles are eligible, use `bp connect --channel beta` or `bp connect --user-data-dir <path>`.
+
+## Outcome-aware workflow
+
+When you need to verify that an action actually worked (not just clicked):
+
+```bash
+bp exec -s dev '[
+  {"action":"click","selector":"#save-btn",
+   "expectAny":[
+     {"kind":"textAppears","text":"Changes saved"},
+     {"kind":"elementVisible","selector":"#success-toast"}
+   ],
+   "failIf":[{"kind":"textAppears","text":"Error"}],
+   "dangerous":true}
+]'
+```
+
+The result includes `outcomeStatus` (success/failed/ambiguous/unsafe_to_retry), `matchedConditions`, and `retrySafe`.
+
+## Review page state
+
+When you need structured business state (not raw snapshot):
+
+```bash
+bp review -s dev --json
+```
+
+Returns headings, forms, alerts, tables, key-value pairs, and status labels. Useful after form submissions, checkout flows, or any page with business data.
 
 Rules:
 
@@ -103,6 +132,17 @@ bp exec -s vt '[
 ]'
 ```
 
+### Outcome conditions in exec/run
+
+Any action step can include outcome conditions:
+
+- `expectAny`: success if any condition matches
+- `expectAll`: success only if all conditions match
+- `failIf`: failure if any condition matches (checked first)
+- `dangerous`: never auto-retry on ambiguous outcome
+
+Condition kinds: `urlMatches`, `elementVisible`, `elementHidden`, `textAppears`, `textChanges`, `networkResponse`, `stateSignatureChanges`.
+
 ## Quick command map
 
 - Discover elements: `bp snapshot -i`
@@ -111,5 +151,6 @@ bp exec -s vt '[
 - Execute saved file: `bp run`
 - Record demo: `bp record`
 - Summarize artifact or live trace: `bp trace summary`
+- Review structured state: `bp review`
 - Active voice control: `bp audio`
 - Browser conditions: `bp env`

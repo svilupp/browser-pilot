@@ -1,0 +1,6 @@
+id: no-any-cast
+language: typescript
+rule:
+  pattern: $EXPR as any
+message: "Avoid `as any` — use proper type narrowing or unknown"
+severity: error

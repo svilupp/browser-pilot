@@ -5,8 +5,8 @@
  */
 
 import { afterAll, afterEach, beforeAll, describe, expect, test } from 'bun:test';
-import { withRetry } from '../utils/retry';
-import { TestContext } from './setup';
+import { withRetry } from '../utils/retry.ts';
+import { TestContext } from './setup.ts';
 
 const ctx = new TestContext();
 

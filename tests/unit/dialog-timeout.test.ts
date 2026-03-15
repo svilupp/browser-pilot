@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, mock } from 'bun:test';
-import { Page } from '../../src/browser/page';
+import { Page } from '../../src/browser/page.ts';
 
 /**
  * Tests for Epic 12: Dialog handler timeout and auto-dismiss

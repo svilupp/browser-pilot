@@ -15,10 +15,10 @@
  *   });
  */
 
-import type { Page } from '../../src';
-import { createTestHarness, destroyHarness, type TestHarness } from '../utils/harness';
-import { type RetryOptions, withRetry } from '../utils/retry';
-import { captureFailureScreenshot } from '../utils/screenshots';
+import type { Page } from '../../src/index.ts';
+import { createTestHarness, destroyHarness, type TestHarness } from '../utils/harness.ts';
+import { type RetryOptions, withRetry } from '../utils/retry.ts';
+import { captureFailureScreenshot } from '../utils/screenshots.ts';
 
 /**
  * Test context class - each test file creates its own instance

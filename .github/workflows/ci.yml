@@ -10,95 +10,76 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# prek + all tools resolve from node_modules via `bun install`.
+# CI runs the same scripts as local dev — no special setup needed.
 jobs:
-  lint-and-type:
+  lint:
     name: Lint & Type Check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
+      - run: bun install
+      - run: bun run harden:quick
 
-      - name: Install dependencies
-        run: bun install
-
-      - name: Type check
-        run: bun run typecheck
-
-  test:
-    name: Test
+  unit:
+    name: Unit & Fitness Tests
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        test-type: [unit, integration, cli]
     steps:
       - uses: actions/checkout@v4
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
+      - run: bun install
+      - run: bun test tests/unit
+      - run: bun test tests/fitness
 
-      - name: Install dependencies
-        run: bun install
-
+  browser:
+    name: Integration & CLI Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install
       - name: Install Chrome
-        if: matrix.test-type != 'unit'
         id: setup-chrome
         uses: browser-actions/setup-chrome@v2
         with:
           chrome-version: 147
-
-      - name: Verify Chrome installation
-        if: matrix.test-type != 'unit'
-        run: |
-          echo "Chrome path: $CHROME_PATH"
-          echo "Chrome version (action): $CHROME_VERSION_UNDER_TEST"
-          "$CHROME_PATH" --version
-          test "$("$CHROME_PATH" --version | grep -o '[0-9]\+' | head -1)" = "147"
-        env:
-          CHROME_PATH: ${{ steps.setup-chrome.outputs.chrome-path }}
-          CHROME_VERSION_UNDER_TEST: ${{ steps.setup-chrome.outputs.chrome-version }}
-
-      - name: Run ${{ matrix.test-type }} tests
-        run: bun test:${{ matrix.test-type }}
+      - run: bun test tests/integration --timeout 30000
         env:
           CI: true
-          TEST_TIMEOUT: 60000
           CHROME_PATH: ${{ steps.setup-chrome.outputs.chrome-path }}
           BROWSER_PILOT_CHROME_PATH: ${{ steps.setup-chrome.outputs.chrome-path }}
-
-      - name: Upload failure screenshots
-        if: failure() && matrix.test-type != 'unit'
+      - run: bun test tests/cli --timeout 30000
+        env:
+          CI: true
+          CHROME_PATH: ${{ steps.setup-chrome.outputs.chrome-path }}
+          BROWSER_PILOT_CHROME_PATH: ${{ steps.setup-chrome.outputs.chrome-path }}
+      - name: Upload failure artifacts
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.test-type }}-failure-screenshots
-          path: tests/screenshots/
+          name: browser-test-artifacts
+          path: |
+            tests/screenshots/
+            ~/.browser-pilot/sessions/*/daemon.log
+            ~/.browser-pilot/sessions/*/session.json
           retention-days: 7
           if-no-files-found: ignore
 
-  # Build check to ensure package builds correctly
   build:
-    name: Build Check
+    name: Build & API Check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
-
-      - name: Install dependencies
-        run: bun install
-
-      - name: Build check (type check + verify exports)
-        run: |
-          bun run typecheck
-          # Verify main entry point is valid
-          bun -e "import('./index.ts')"
-          echo "Build check passed!"
+      - run: bun install
+      - run: bun run build
+      - run: bun run api:check

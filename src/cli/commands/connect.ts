@@ -92,7 +92,13 @@ function parseConnectArgs(args: string[]): ConnectOptions {
     const arg = args[i]!;
 
     if (arg === '--provider' || arg === '-p') {
-      options.provider = args[++i] as ProviderType;
+      const p = args[++i];
+      if (p !== 'browserbase' && p !== 'browserless' && p !== 'generic') {
+        throw new Error(
+          `Invalid provider: ${p}. Must be one of: browserbase, browserless, generic`
+        );
+      }
+      options.provider = p;
     } else if (arg === '--url') {
       options.url = args[++i];
     } else if (arg === '--browser-url') {

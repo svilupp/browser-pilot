@@ -1,0 +1,16 @@
+id: no-cli-import-in-core
+language: typescript
+rule:
+  any:
+    - pattern: import $$$FROM from '$$$PATH'
+      regex: "cli/"
+    - pattern: import $$$FROM from '$$$PATH'
+      regex: "daemon/"
+message: "Core library code must not import from CLI or daemon modules"
+severity: error
+files:
+  - "src/**/*.ts"
+ignores:
+  - "src/cli/**"
+  - "src/daemon/**"
+  - "src/index.ts"

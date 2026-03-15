@@ -18,6 +18,7 @@ import { listCommand } from './commands/list.ts';
 import { pageCommand } from './commands/page.ts';
 import { quickstartCommand } from './commands/quickstart.ts';
 import { recordCommand } from './commands/record.ts';
+import { reviewCommand } from './commands/review.ts';
 import { runCommand } from './commands/run.ts';
 import { screenshotCommand } from './commands/screenshot.ts';
 import { snapshotCommand } from './commands/snapshot.ts';
@@ -29,7 +30,7 @@ const HELP = `
 bp - automation-first browser CLI for agents
 
 Route the job first:
-  Inspect page state              snapshot, page, forms, text, targets, diagnose
+  Inspect page state              snapshot, page, forms, review, text, targets, diagnose
   Act in the browser              exec, run
   Capture a human demo            record
   Analyze behavior over time      trace   (listen is a compatibility alias)
@@ -55,6 +56,7 @@ Commands:
   daemon      Manage session daemon
   list        List sessions
   close       Close session
+  review      Structured business state (headings, tables, alerts, key-values)
   clean       Clean old sessions and artifacts
   actions     Complete action reference
 
@@ -279,6 +281,10 @@ async function main(): Promise<void> {
 
       case 'record':
         await recordCommand(remaining, options);
+        break;
+
+      case 'review':
+        await reviewCommand(remaining, options);
         break;
 
       case 'trace':

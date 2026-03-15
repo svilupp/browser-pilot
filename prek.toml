@@ -1,0 +1,118 @@
+# Configuration for prek git hooks
+# See https://prek.j178.dev for more information.
+
+[[repos]]
+repo = "builtin"
+hooks = [
+  { id = "trailing-whitespace", stages = ["pre-commit"] },
+  { id = "end-of-file-fixer", stages = ["pre-commit"] },
+  { id = "check-json", stages = ["pre-commit"] },
+  { id = "check-toml", stages = ["pre-commit"] },
+  { id = "check-yaml", stages = ["pre-commit"] },
+  { id = "no-commit-to-branch", args = ["--branch", "main"], stages = ["pre-commit"] },
+]
+
+[[repos]]
+repo = "local"
+hooks = [
+  # Priority 10 — lint + structure (parallel within same priority)
+  {
+    id = "biome-check",
+    name = "Biome lint",
+    language = "system",
+    entry = "biome check --staged --no-errors-on-unmatched",
+    stages = ["pre-commit"],
+    priority = 10,
+    pass_filenames = false,
+  },
+  {
+    id = "ast-grep-fast",
+    name = "ast-grep structural rules",
+    language = "system",
+    entry = "ast-grep scan -c sgconfig.yml",
+    types_or = ["ts"],
+    stages = ["pre-commit"],
+    priority = 10,
+    pass_filenames = false,
+  },
+
+  # Priority 20 — type-aware checks
+  {
+    id = "oxlint",
+    name = "Oxlint",
+    language = "system",
+    entry = "oxlint --type-aware --tsconfig ./tsconfig.json src/ tests/ scripts/",
+    stages = ["pre-commit"],
+    priority = 20,
+    pass_filenames = false,
+  },
+  {
+    id = "typecheck",
+    name = "TypeScript type check",
+    language = "system",
+    entry = "tsc --noEmit",
+    stages = ["pre-commit"],
+    priority = 20,
+    pass_filenames = false,
+  },
+
+  # Priority 30 — unit tests + fitness (pre-push)
+  {
+    id = "test-unit",
+    name = "Unit tests",
+    language = "system",
+    entry = "bun test tests/unit",
+    stages = ["pre-push"],
+    priority = 30,
+    pass_filenames = false,
+  },
+  {
+    id = "fitness-functions",
+    name = "Fitness functions",
+    language = "system",
+    entry = "bun test tests/fitness",
+    stages = ["pre-push"],
+    priority = 30,
+    pass_filenames = false,
+  },
+
+  # Priority 40 — browser tests (pre-push only)
+  {
+    id = "test-integration",
+    name = "Integration tests",
+    language = "system",
+    entry = "bun test tests/integration --timeout 30000",
+    stages = ["pre-push"],
+    priority = 40,
+    pass_filenames = false,
+  },
+  {
+    id = "test-cli",
+    name = "CLI tests",
+    language = "system",
+    entry = "bun test tests/cli --timeout 30000",
+    stages = ["pre-push"],
+    priority = 40,
+    pass_filenames = false,
+  },
+
+  # Priority 99 — full hardening (manual only)
+  {
+    id = "ast-grep-full",
+    name = "Full ast-grep scan",
+    language = "system",
+    entry = "ast-grep scan -c sgconfig.yml",
+    stages = ["manual"],
+    priority = 99,
+    pass_filenames = false,
+  },
+  {
+    id = "knip",
+    name = "Dead code detection",
+    language = "system",
+    entry = "knip",
+    stages = ["manual"],
+    priority = 99,
+    pass_filenames = false,
+  },
+]

@@ -5,9 +5,9 @@
  */
 
 import { afterAll, afterEach, beforeAll, describe, expect, test } from 'bun:test';
-import { injectRefOverlay, removeRefOverlay } from '../../src/browser/overlay';
-import { withRetry } from '../utils/retry';
-import { TestContext } from './setup';
+import { injectRefOverlay, removeRefOverlay } from '../../src/browser/overlay.ts';
+import { withRetry } from '../utils/retry.ts';
+import { TestContext } from './setup.ts';
 
 // Each test file gets its own isolated context
 const ctx = new TestContext();
@@ -56,7 +56,7 @@ describe('Inspect Overlay', () => {
 
         await injectRefOverlay(page, snapshot);
 
-        const labelInfo = (await page.evaluate(`
+        const labelInfo = await page.evaluate<{ left: string; top: string; text: string } | null>(`
           (function() {
             const label = document.querySelector('.__bp-ref-label');
             if (!label) return null;
@@ -67,7 +67,7 @@ describe('Inspect Overlay', () => {
               text: label.textContent
             };
           })()
-        `)) as { left: string; top: string; text: string } | null;
+        `);
 
         expect(labelInfo).not.toBeNull();
         expect(labelInfo?.text).toMatch(/^e\d+$/);

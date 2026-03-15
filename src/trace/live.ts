@@ -1,4 +1,5 @@
 import type { CDPClient } from '../cdp/client.ts';
+import { formatConsoleArg, globToRegex, readString, readStringOr } from '../utils/strings.ts';
 import type { CanonicalTraceEvent } from './model.ts';
 import { createTraceId, normalizeTraceEvent } from './model.ts';
 import { TRACE_BINDING_NAME, TRACE_SCRIPT } from './script.ts';
@@ -16,23 +17,7 @@ export interface LiveTraceCollectorOptions {
 
 type EventHandler = (params: Record<string, unknown>) => void;
 
-export function globToRegex(pattern: string): RegExp {
-  const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&');
-  const withWildcards = escaped.replace(/\*/g, '.*');
-  return new RegExp(`^${withWildcards}$`);
-}
-
-function readString(value: unknown): string | undefined {
-  return typeof value === 'string' ? value : undefined;
-}
-
-function readStringOr(value: unknown, fallback = ''): string {
-  return readString(value) ?? fallback;
-}
-
-function formatConsoleArg(entry: Record<string, unknown>): string {
-  return readString(entry['value']) ?? readString(entry['description']) ?? '';
-}
+export { globToRegex };
 
 export class LiveTraceCollector {
   private readonly cdp: CDPClient;

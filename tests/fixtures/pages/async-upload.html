@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><title>File Upload</title></head>
+<body>
+  <h1>Upload Documents</h1>
+  <form id="upload-form">
+    <label for="file-input">Choose files:</label>
+    <input id="file-input" type="file" multiple accept=".pdf,.doc,.docx,.txt">
+    <div id="file-list" style="margin-top:12px;"></div>
+    <div id="error" style="display:none; color:red; margin-top:8px;"></div>
+    <button id="upload-btn" type="button" disabled>Upload</button>
+  </form>
+  <div id="progress" style="display:none; margin-top:12px;">
+    <div>Uploading...</div>
+    <progress id="bar" value="0" max="100"></progress>
+  </div>
+  <div id="result" style="display:none; margin-top:12px; color:green;"></div>
+  <script>
+    const input = document.getElementById('file-input');
+    const fileList = document.getElementById('file-list');
+    const uploadBtn = document.getElementById('upload-btn');
+    const errorDiv = document.getElementById('error');
+    const progress = document.getElementById('progress');
+    const result = document.getElementById('result');
+
+    input.addEventListener('change', () => {
+      fileList.innerHTML = '';
+      errorDiv.style.display = 'none';
+      const files = Array.from(input.files);
+      if (files.length > 0) {
+        uploadBtn.disabled = false;
+        files.forEach(f => {
+          const div = document.createElement('div');
+          div.textContent = `${f.name} (${(f.size / 1024).toFixed(1)} KB)`;
+          fileList.appendChild(div);
+        });
+      } else {
+        uploadBtn.disabled = true;
+      }
+    });
+
+    uploadBtn.addEventListener('click', () => {
+      progress.style.display = 'block';
+      uploadBtn.disabled = true;
+      let val = 0;
+      const interval = setInterval(() => {
+        val += 20;
+        document.getElementById('bar').value = val;
+        if (val >= 100) {
+          clearInterval(interval);
+          progress.style.display = 'none';
+          result.style.display = 'block';
+          result.textContent = `Upload complete! ${input.files.length} file(s) uploaded.`;
+        }
+      }, 200);
+    });
+  </script>
+</body>
+</html>

@@ -10,6 +10,7 @@ Automation-first browser control for agents.
 - Analyze behavior over time: `bp trace`
 - Exercise voice/media: `bp audio`
 - Change browser conditions: `bp env`
+- Review structured state: `bp review`
 
 ## Canonical workflows
 
@@ -55,6 +56,8 @@ bp trace summary -s vt --view voice
 - `bp record summary <artifact>` returns counts, trace summaries, and next-command tips
 - `bp trace summary <source> --view <view>` returns a view-specific summary over canonical trace events
 - `bp trace export ...` writes events plus derived summaries
+- `bp review --json` returns structured business state: headings, forms, alerts, tables, key-values, status labels
+- `bp exec --json` with outcome conditions returns `outcomeStatus`, `matchedConditions`, `retrySafe` per step
 
 ## Trace-backed steps in exec/run
 
@@ -64,6 +67,35 @@ bp trace summary -s vt --view voice
 - `assertPermission`
 - `assertMediaTrackLive`
 
+## Outcome conditions in exec/run
+
+Any action step can verify its effect with conditions:
+
+- `expectAny`: success if any condition matches
+- `expectAll`: success only if all match
+- `failIf`: failure if any matches (checked first)
+- `dangerous`: never auto-retry on ambiguous outcome
+
+Condition kinds: `urlMatches`, `elementVisible`, `elementHidden`, `textAppears`, `textChanges`, `networkResponse`, `stateSignatureChanges`.
+
+Example:
+
+```bash
+bp exec -s dev '[
+  {"action":"submit","selector":"form",
+   "expectAny":[{"kind":"urlMatches","pattern":"*/dashboard*"}],
+   "failIf":[{"kind":"textAppears","text":"Error"}],
+   "dangerous":true}
+]'
+```
+
+## Widget actions in exec/run
+
+- `chooseOption`: custom combobox/dropdown selection
+- `upload`: file upload with verification
+- `review`: structured page state extraction
+- `delta`: page change detection
+
 ## Anti-rules
 
 - Do not open raw recording artifacts first. Start with `bp record summary`, `bp record inspect`, or `bp trace summary --view ...`
@@ -71,3 +103,4 @@ bp trace summary -s vt --view voice
 - Do not use `bp env` as a generic utilities namespace. It is only for browser/session state controls
 - Prefer `bp trace tail ...`; `bp listen ...` is compatibility only
 - Prefer `--debug`; `--trace` is a legacy alias
+- Do not use `bp snapshot` when you need structured business data. Use `bp review`

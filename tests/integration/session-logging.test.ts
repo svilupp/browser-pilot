@@ -15,8 +15,8 @@ import {
   runCLI,
   setup,
   teardown,
-} from '../cli/setup';
-import { withRetry } from '../utils/retry';
+} from '../cli/setup.ts';
+import { withRetry } from '../utils/retry.ts';
 
 const SESSION_DIR = join(homedir(), '.browser-pilot', 'sessions');
 
