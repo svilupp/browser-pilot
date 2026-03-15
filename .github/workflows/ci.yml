@@ -10,13 +10,14 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# prek + all tools resolve from node_modules via `bun install`.
+# CI runs the same scripts as local dev — no special setup needed.
 jobs:
   lint:
     name: Lint & Type Check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: j178/prek-action@v1
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
@@ -28,7 +29,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: j178/prek-action@v1
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
@@ -41,7 +41,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: j178/prek-action@v1
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
@@ -78,7 +77,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: j178/prek-action@v1
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
