@@ -36,3 +36,9 @@ export {
   type TracerOptions,
 } from './tracer.ts';
 export { buildTraceSummaries, buildTraceSummary, formatTraceSummaryPretty } from './views.ts';
+export {
+  buildWorkflowSummary,
+  formatWorkflowSummary,
+  type WorkflowStepSummary,
+  type WorkflowSummary,
+} from './workflow-summary.ts';

@@ -4,7 +4,7 @@
 
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { Page } from '../../src';
+import type { Page } from '../../src/index.ts';
 
 const SCREENSHOT_DIR = './tests/screenshots';
 

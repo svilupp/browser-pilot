@@ -1,0 +1,12 @@
+id: no-console-in-library
+language: typescript
+rule:
+  pattern: console.$METHOD($$$)
+message: "Use trace module instead of console.$METHOD in library code"
+severity: warning
+files:
+  - "src/**/*.ts"
+ignores:
+  - "src/cli/**"
+  - "src/daemon/**"
+  - "src/trace/**"

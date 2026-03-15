@@ -14,7 +14,7 @@ import {
   getBrowserWebSocketUrl,
   type Page,
   resolveChromeUserDataDirs,
-} from '../../src';
+} from '../../src/index.ts';
 
 interface CreateTestHarnessOptions {
   chromePath?: string;

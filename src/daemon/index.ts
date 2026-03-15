@@ -166,7 +166,7 @@ async function main(): Promise<void> {
     const raw = fs.readFileSync(sessionFilePath, 'utf-8');
     const session = parseSessionRecord(raw);
     if (!session) throw new Error('Invalid session JSON shape');
-    session['daemon'] = daemonInfo as unknown as Record<string, unknown>;
+    session['daemon'] = { ...daemonInfo };
     fs.writeFileSync(sessionFilePath, JSON.stringify(session, null, 2));
     daemonLog('info', 'Daemon info written to session file');
   } catch (err) {
@@ -211,7 +211,7 @@ async function main(): Promise<void> {
       await cdp.close();
       daemonLog('info', 'CDP connection closed');
     } catch (err) {
-      daemonLog('error', `Error closing CDP: ${err}`);
+      daemonLog('error', `Error closing CDP: ${String(err)}`);
     }
 
     // Remove daemon info from session file

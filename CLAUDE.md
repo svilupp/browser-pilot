@@ -7,16 +7,30 @@ Lightweight CDP-based browser automation for AI agents. Zero production dependen
 ## Commands
 
 ```bash
-bun run check:quiet         # All checks, shows errors only (tsc + biome + oxlint + unit tests)
+bun run check:quiet         # All checks, errors only (tsc + biome + oxlint + unit + fitness + api)
 bun run check               # Same checks, verbose output
 bun run lint:fix             # Auto-fix formatting (biome)
 bun test                    # Run all tests
 bun test tests/unit         # Unit tests only (fast, mocked CDP)
 bun test tests/integration  # Integration tests (real browser)
+bun test tests/fitness      # Architectural fitness functions
 bun run dev:bp              # Run CLI from source (no build needed)
+
+# Hardening commands
+bun run harden              # Full hardening: all prek hooks + manual (knip, full ast-grep)
+bun run harden:quick        # Quick: pre-commit hooks only
+bun run gate:agent          # Validate last commit (agent workflow)
+bun run api:check           # API Extractor: check public API surface
+ast-grep scan -c sgconfig.yml  # Run structural rules (11 rules)
+bunx knip                   # Dead code detection
 ```
 
 Before PR: run `bun run check:quiet`
+
+### Git Hooks (prek)
+Pre-commit (≤15s): biome (changed files), oxlint, tsc
+Pre-push (≤90s): + unit tests, integration tests, CLI tests
+Install: `bun install` (triggers `prek install` via prepare script)
 
 > **Dev tip:** Use `bun run dev:bp` (or `bun ./src/cli/index.ts`) instead of `bp` during development to avoid stale binaries.
 
@@ -108,6 +122,27 @@ Complex patterns (custom dropdowns, multi-step forms) are composed from primitiv
 | Action highlight overlays | `src/browser/action-highlight.ts` |
 | Recording manifest types | `src/recording/manifest.ts` |
 | Recording redaction helpers | `src/recording/redaction.ts` |
+| Shared string utils | `src/utils/strings.ts` (readString, globToRegex, formatConsoleArg) |
+| Runtime: env access | `src/runtime/env.ts` (centralized process.env) |
+| Runtime: clock | `src/runtime/clock.ts` (centralized Date.now) |
+| Runtime: ID generation | `src/runtime/id.ts` (centralized Math.random) |
+| Branded types | `src/types/branded.ts` (SessionId, TargetId, BrowserWsUrl) |
+| Fitness tests | `tests/fitness/` (architectural constraints) |
+| Consumer type tests | `tests/types/` (compile-only API verification) |
+| ast-grep rules | `rules/` (11 structural rules) |
+| API report | `etc/browser-pilot.api.md` (API Extractor output) |
+| Outcome conditions | `src/actions/conditions.ts` |
+| Condition combinators | `src/actions/combinators.ts` |
+| Delta extraction | `src/browser/delta.ts` |
+| Review extraction | `src/browser/review.ts` |
+| Semantic fingerprints | `src/browser/fingerprint.ts` |
+| Custom combobox | `src/browser/combobox.ts` |
+| File upload helper | `src/browser/upload.ts` |
+| Overlay detection | `src/browser/overlay-detect.ts` |
+| Safe submit | `src/browser/safe-submit.ts` |
+| Target pinning | `src/browser/target-pin.ts` |
+| Workflow summaries | `src/trace/workflow-summary.ts` |
+| CLI review command | `src/cli/commands/review.ts` |
 
 ### Lazy Session Attach (CLI)
 `bp exec` and `bp eval` try the daemon fast-path first (Unix socket), then fall back to direct WebSocket. Stale daemons are auto-cleaned. Implementation: `src/cli/attach.ts`.
@@ -138,6 +173,7 @@ The CLI now includes lightweight page-inspection commands in addition to `snapsh
 - `bp page` — compact overview: URL, title, headings, form fields, interactive controls
 - `bp forms` — structured form metadata only
 - `bp targets` — list browser tabs/targets with URLs and IDs
+- `bp review` — structured business state: headings, forms, alerts, tables, key-values, status labels
 - `bp connect --new-tab [--page-url <url>]` — create and attach to a fresh tab
 
 Snapshot text output now uses `ref:e12` notation, which is also the selector syntax agents should reuse in later commands. Refs are cached per session+URL after a snapshot.
@@ -228,6 +264,77 @@ Any step can include `retry` (number, default 0) and `retryDelay` (ms, default 5
 { action: 'click', selector: '#flaky-btn', retry: 3, retryDelay: 1000 }
 ```
 
+### Outcome-Based Execution
+Batch steps support outcome conditions to verify state transitions, not just mechanical success. Optional on all steps — simple actions work exactly as before.
+
+```typescript
+await page.batch([
+  {
+    action: 'click',
+    selector: '#save-btn',
+    expectAny: [
+      { kind: 'textAppears', text: 'Changes saved' },
+      { kind: 'elementVisible', selector: '#success-toast' },
+    ],
+    failIf: [
+      { kind: 'textAppears', text: 'Error' },
+    ],
+    dangerous: true,  // Never auto-retry if ambiguous
+  },
+]);
+```
+
+Condition kinds: `urlMatches`, `elementVisible`, `elementHidden`, `textAppears`, `textChanges`, `networkResponse`, `stateSignatureChanges`.
+
+Evaluation order: `failIf` (any match = failed) → `expectAll` (all must match) → `expectAny` (any match = success).
+
+`StepResult` gains: `outcomeStatus` (`success` | `failed` | `ambiguous` | `unsafe_to_retry`), `matchedConditions`, `retrySafe`.
+
+Dangerous steps that result in ambiguous outcome get `unsafe_to_retry` and are never auto-retried.
+
+- Implementation: `src/actions/conditions.ts`
+- Types: `src/actions/types.ts` (Condition, OutcomeStatus, MatchedCondition)
+- Combinators: `src/actions/combinators.ts` (conditionAny, conditionAll, conditionNot, conditionRace)
+
+### Delta & Review Surfaces
+Two read surfaces for "what changed?" and "what is the business state?":
+
+- `page.captureState()` → `PageState` — lightweight state snapshot
+- `page.delta(before)` → `DeltaResult` — URL, heading, field, button, alert changes
+- `page.review()` → `ReviewResult` — headings, forms, alerts, tables, key-value pairs, status labels
+- Batch actions: `{ action: 'review' }`, `{ action: 'delta' }`
+- CLI: `bp review`
+- Implementation: `src/browser/delta.ts`, `src/browser/review.ts`
+
+### Semantic Fingerprints
+Stable element identity across rerenders using semantic fingerprints (role + name + section path + stable attributes).
+- `buildFingerprintMap(nodes)` — fingerprints all interactive nodes
+- `recoverStaleRef(staleFingerprint, currentFingerprints)` — recovers stale refs with confidence scoring
+- Implementation: `src/browser/fingerprint.ts`
+
+### Smart Widget Primitives
+- `chooseOption(page, config)` — state machine for custom comboboxes: open → search → select → verify
+- `uploadFiles(page, config)` — file upload with CDP `setInputFiles` + acceptance verification
+- `detectOverlay(page)` — detect visible modal/overlay with role/z-index heuristics
+- Batch actions: `{ action: 'chooseOption', ... }`, `{ action: 'upload', selector: '...', files: [...] }`
+- Implementation: `src/browser/combobox.ts`, `src/browser/upload.ts`, `src/browser/overlay-detect.ts`
+
+### Safe Submit
+`submitAndVerify(page, options)` — submit with built-in outcome evaluation. Never auto-retries.
+- Implementation: `src/browser/safe-submit.ts`
+
+### Target Pinning
+Fingerprint and recover browser targets across target ID churn.
+- `createTargetFingerprint(targetId, url, title)` → `TargetFingerprint`
+- `recoverPinnedTarget(pin, targets)` → `PinRecoveryResult` (exact, url_match, title_match, best_guess)
+- Implementation: `src/browser/target-pin.ts`
+
+### Workflow Summaries
+Business-readable workflow evidence from batch results.
+- `buildWorkflowSummary(batchResult)` → `WorkflowSummary`
+- `formatWorkflowSummary(summary)` → compact text report
+- Implementation: `src/trace/workflow-summary.ts`
+
 ## Snapshot Format
 
 Accessibility tree extraction via `Accessibility.getFullAXTree`. Nodes get refs (e1, e2...) for identification.
@@ -244,7 +351,7 @@ Accessibility tree extraction via `Accessibility.getFullAXTree`. Nodes get refs 
 - `CDPError`: `src/cdp/protocol.ts` (for CDP-level errors)
 - `ActionabilityError`: `src/browser/actionability.ts` (stores `failureType` and `coveringElement`)
 
-### Structured Failure Reasons (planned — see PLAN_v2.md Epic 4)
+### Structured Failure Reasons
 `StepResult.failureReason` classifies errors for agent consumption:
 `missing` | `hidden` | `covered` | `disabled` | `readonly` | `detached` | `replaced` | `notEditable` | `timeout` | `navigation` | `cdpError` | `unknown`
 
@@ -274,11 +381,12 @@ test('clicks element', async () => {
 
 ## Improvement Plan
 
-See `PLAN_v2.md` for the full reliability and effectiveness improvement plan (15 epics). Key themes:
-- **Click reliability**: Hit-target retry through transient overlays, viewport validation after scroll
-- **Failure classification**: Structured `failureReason` in StepResult with auto-recovery and AI-friendly suggestions
-- **Event-driven waits**: Replace all hardcoded `sleep()` calls in submit, selectCustom, iframe context
-- **Workflow runner**: `bp run <workflow.json>` for multi-step action + assertion in one invocation
-- **Keyboard modifiers**: `press('a', { modifiers: ['Control'] })` and `shortcut('Control+a')` batch action
-- **Iframe safety**: Explicit errors on broken frame context, never silent degradation
-- **Benchmarks**: Repo-local `bun run bench` with CI regression gates
+See `PLAN.md` for the full improvement plan. All 8 phases have been implemented:
+- **Phase 1**: Outcome-based execution with conditions (`expectAny`, `expectAll`, `failIf`, `dangerous`)
+- **Phase 2**: Delta and review surfaces (`page.delta()`, `page.review()`, `bp review`)
+- **Phase 3**: Semantic fingerprints for stable element identity
+- **Phase 4**: Smart widget primitives (`chooseOption`, `uploadFiles`, `detectOverlay`)
+- **Phase 5**: Safe submit and condition combinators (`submitAndVerify`, `conditionRace`)
+- **Phase 6**: Target pinning and recovery
+- **Phase 7**: Workflow transcript summaries
+- **Phase 8**: Safety fitness tests (no site-specific rules, no dangerous auto-retry, runtime portability)

@@ -330,6 +330,56 @@ const allText = await page.text();
 const mainText = await page.text('.main-content');
 ```
 
+### review()
+
+Extract structured business state from the current page.
+
+```typescript
+const review = await page.review();
+
+console.log(review.headings);      // Page headings
+console.log(review.forms);         // Form field values and states
+console.log(review.alerts);        // Alert/notification text
+console.log(review.tables);        // Structured table data
+console.log(review.keyValues);     // Key-value pairs found
+console.log(review.statusLabels);  // Status text elements
+```
+
+**Returns:** `ReviewResult`
+
+### captureState()
+
+Capture a lightweight page state for delta comparison.
+
+```typescript
+const before = await page.captureState();
+await page.click('#save');
+const delta = await page.delta(before);
+
+if (delta.hasChanges) {
+  console.log(delta.changes); // URL, heading, field, button, alert changes
+}
+```
+
+**Returns:** `PageState`
+
+### delta(before?)
+
+Compute what changed between two page states.
+
+```typescript
+const before = await page.captureState();
+// ... do something ...
+const delta = await page.delta(before);
+console.log(delta.changes);
+console.log(delta.hasChanges);
+```
+
+**Parameters:**
+- `before?: PageState` - Previous state to compare against. If omitted, returns current state.
+
+**Returns:** `DeltaResult | PageState`
+
 ### screenshot(options?)
 
 Take a screenshot.
@@ -437,6 +487,25 @@ console.log(result.steps[0]?.screenshotPath);
 Recording notes:
 - Sensitive fields are redacted based on field metadata (`password`, `hidden`, `one-time-code`, `cc-*`)
 - Replays still write `recording.json` when execution stops on a failed step
+
+#### Outcome Conditions
+
+Steps can include conditions to verify the action's effect:
+
+```typescript
+const result = await page.batch([
+  {
+    action: 'submit',
+    selector: 'form',
+    expectAny: [{ kind: 'urlMatches', pattern: '*/success*' }],
+    failIf: [{ kind: 'textAppears', text: 'Error' }],
+    dangerous: true,
+  },
+]);
+
+console.log(result.steps[0]?.outcomeStatus);  // 'success' | 'failed' | 'ambiguous' | 'unsafe_to_retry'
+console.log(result.steps[0]?.retrySafe);       // false (dangerous step)
+```
 
 See [Batch Actions Guide](../guides/batch-actions.md) for details.
 

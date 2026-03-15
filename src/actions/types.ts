@@ -18,6 +18,23 @@ export type FailureReason =
   | 'cdpError'
   | 'unknown';
 
+export type OutcomeStatus = 'success' | 'failed' | 'ambiguous' | 'unsafe_to_retry';
+
+export type Condition =
+  | { kind: 'urlMatches'; pattern: string }
+  | { kind: 'elementVisible'; selector: string | string[] }
+  | { kind: 'elementHidden'; selector: string | string[] }
+  | { kind: 'textAppears'; selector?: string | string[]; text: string }
+  | { kind: 'textChanges'; selector?: string | string[]; to?: string }
+  | { kind: 'networkResponse'; urlPattern: string; status?: number }
+  | { kind: 'stateSignatureChanges' };
+
+export interface MatchedCondition {
+  condition: Condition;
+  matched: boolean;
+  detail?: string;
+}
+
 export type ActionType =
   | 'goto'
   | 'click'
@@ -51,7 +68,11 @@ export type ActionType =
   | 'assertNoConsoleErrors'
   | 'assertTextChanged'
   | 'assertPermission'
-  | 'assertMediaTrackLive';
+  | 'assertMediaTrackLive'
+  | 'delta'
+  | 'review'
+  | 'chooseOption'
+  | 'upload';
 
 export interface Step {
   /** Action type */
@@ -150,8 +171,23 @@ export interface Step {
   /** Media track kind */
   kind?: 'audio' | 'video';
 
+  /** File paths for upload action */
+  files?: string[];
+
   /** Assertion observation window in milliseconds */
   windowMs?: number;
+
+  /** Conditions where ANY matching means success */
+  expectAny?: Condition[];
+
+  /** Conditions where ALL must match for success */
+  expectAll?: Condition[];
+
+  /** Conditions that indicate failure (checked before success conditions) */
+  failIf?: Condition[];
+
+  /** Mark step as dangerous - never auto-retry after ambiguous outcome */
+  dangerous?: boolean;
 }
 
 export interface RecordOptions {
@@ -234,6 +270,15 @@ export interface StepResult {
 
   /** Path to screenshot file captured after this step (when recording enabled) */
   screenshotPath?: string;
+
+  /** Outcome classification when conditions were specified */
+  outcomeStatus?: OutcomeStatus;
+
+  /** Which conditions matched during evaluation */
+  matchedConditions?: MatchedCondition[];
+
+  /** Whether it's safe to retry this step */
+  retrySafe?: boolean;
 }
 
 export interface BatchResult {

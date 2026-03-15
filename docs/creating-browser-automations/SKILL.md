@@ -73,6 +73,26 @@ bp exec -s demo '[
 ]'
 ```
 
+Add outcome conditions to verify actions actually worked:
+
+```bash
+bp exec -s demo '[
+  {"action":"submit","selector":"form",
+   "expectAny":[
+     {"kind":"urlMatches","pattern":"*/success*"},
+     {"kind":"textAppears","text":"Submitted"}
+   ],
+   "failIf":[{"kind":"textAppears","text":"Error"}],
+   "dangerous":true}
+]'
+```
+
+Review page state after a workflow completes:
+
+```bash
+bp review -s demo --json
+```
+
 Or capture replay proof:
 
 ```bash
@@ -83,7 +103,9 @@ bp exec -s validation -f workflow.json
 ## When to reach for other surfaces
 
 - Need fresh targets on a page: `bp snapshot -i`
+- Need structured business state: `bp review`
 - Need one-off direct control: `bp exec`
+- Need to verify an action's effect: outcome conditions in `bp exec`
 - Need long-running analysis or evidence: `bp trace`
 - Need voice/media control: `bp audio`
 - Need permissions/network/visibility changes: `bp env`

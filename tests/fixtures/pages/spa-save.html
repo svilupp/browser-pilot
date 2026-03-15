@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><title>SPA Save</title></head>
+<body>
+  <h1>Settings</h1>
+  <form id="settings-form">
+    <label for="name">Name</label>
+    <input id="name" type="text" value="Alice">
+    <label for="email">Email</label>
+    <input id="email" type="email" value="alice@example.com">
+    <div id="status">Unsaved changes</div>
+    <button id="save-btn" type="button">Save</button>
+  </form>
+  <div id="toast" style="display:none; background: #4caf50; color: white; padding: 12px; margin-top: 12px; border-radius: 4px;">
+    Changes saved successfully
+  </div>
+  <script>
+    const btn = document.getElementById('save-btn');
+    const toast = document.getElementById('toast');
+    const status = document.getElementById('status');
+    btn.addEventListener('click', () => {
+      btn.disabled = true;
+      btn.textContent = 'Saving...';
+      setTimeout(() => {
+        btn.disabled = false;
+        btn.textContent = 'Save';
+        status.textContent = 'All changes saved';
+        toast.style.display = 'block';
+        setTimeout(() => { toast.style.display = 'none'; }, 3000);
+      }, 300);
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,12 @@
+id: no-raw-process-env
+language: typescript
+rule:
+  pattern: process.env
+message: "Use src/runtime/env.ts instead of raw process.env"
+severity: warning
+files:
+  - "src/**/*.ts"
+ignores:
+  - "src/runtime/env.ts"
+  - "src/cli/**"
+  - "src/daemon/**"

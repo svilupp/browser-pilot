@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><title>Custom Combobox</title></head>
+<body>
+  <h1>Select a Country</h1>
+  <div id="combobox">
+    <button type="button" id="trigger" role="combobox" aria-expanded="false" aria-haspopup="listbox">Select country...</button>
+    <div id="listbox" role="listbox" style="display:none; border:1px solid #ccc; max-height:200px; overflow:auto;">
+      <div role="option" data-value="us">United States</div>
+      <div role="option" data-value="uk">United Kingdom</div>
+      <div role="option" data-value="ca">Canada</div>
+      <div role="option" data-value="au">Australia</div>
+      <div role="option" data-value="de">Germany</div>
+      <div role="option" data-value="fr">France</div>
+      <div role="option" data-value="jp">Japan</div>
+    </div>
+  </div>
+  <div id="selected" style="margin-top:12px;">Selected: <span id="value">none</span></div>
+  <script>
+    const trigger = document.getElementById('trigger');
+    const listbox = document.getElementById('listbox');
+    const valueDisplay = document.getElementById('value');
+
+    trigger.addEventListener('click', () => {
+      const expanded = trigger.getAttribute('aria-expanded') === 'true';
+      trigger.setAttribute('aria-expanded', !expanded);
+      listbox.style.display = expanded ? 'none' : 'block';
+    });
+
+    listbox.addEventListener('click', (e) => {
+      const option = e.target.closest('[role="option"]');
+      if (option) {
+        trigger.textContent = option.textContent;
+        valueDisplay.textContent = option.textContent;
+        trigger.setAttribute('aria-expanded', 'false');
+        listbox.style.display = 'none';
+      }
+    });
+  </script>
+</body>
+</html>

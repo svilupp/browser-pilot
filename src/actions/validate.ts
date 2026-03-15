@@ -331,6 +331,30 @@ const ACTION_RULES: Record<ActionType, ActionRule> = {
     },
     optional: {},
   },
+  delta: {
+    required: {},
+    optional: {},
+  },
+  review: {
+    required: {},
+    optional: {},
+  },
+  chooseOption: {
+    required: { value: { type: 'string|string[]' } },
+    optional: {
+      trigger: { type: 'string|string[]' },
+      selector: { type: 'string|string[]' },
+      option: { type: 'string|string[]' },
+      match: { type: 'string', enum: ['exact', 'contains', 'startsWith'] },
+    },
+  },
+  upload: {
+    required: {
+      selector: { type: 'string|string[]' },
+      files: { type: 'string|string[]' },
+    },
+    optional: {},
+  },
 };
 
 const VALID_ACTIONS = Object.keys(ACTION_RULES) as ActionType[];
@@ -373,6 +397,11 @@ const KNOWN_STEP_FIELDS = new Set([
   'state',
   'kind',
   'windowMs',
+  'expectAny',
+  'expectAll',
+  'failIf',
+  'dangerous',
+  'files',
 ]);
 
 // --- Action resolution ---
@@ -633,6 +662,64 @@ export function validateSteps(steps: unknown[]): ValidationResult {
           field: 'retryDelay',
           message: `"retryDelay" expected number, got ${typeof obj['retryDelay']}.`,
         });
+      }
+    }
+    if ('dangerous' in obj && obj['dangerous'] !== undefined) {
+      if (typeof obj['dangerous'] !== 'boolean') {
+        errors.push({
+          stepIndex: i,
+          field: 'dangerous',
+          message: `"dangerous" expected boolean, got ${typeof obj['dangerous']}.`,
+        });
+      }
+    }
+    for (const condField of ['expectAny', 'expectAll', 'failIf'] as const) {
+      if (condField in obj && obj[condField] !== undefined) {
+        if (!Array.isArray(obj[condField])) {
+          errors.push({
+            stepIndex: i,
+            field: condField,
+            message: `"${condField}" expected array, got ${typeof obj[condField]}.`,
+          });
+        } else {
+          const conditions = obj[condField] as unknown[];
+          for (let ci = 0; ci < conditions.length; ci++) {
+            const cond = conditions[ci];
+            if (!cond || typeof cond !== 'object' || Array.isArray(cond)) {
+              errors.push({
+                stepIndex: i,
+                field: condField,
+                message: `"${condField}[${ci}]" must be a condition object.`,
+              });
+              continue;
+            }
+            const condObj = cond as Record<string, unknown>;
+            if (!('kind' in condObj) || typeof condObj['kind'] !== 'string') {
+              errors.push({
+                stepIndex: i,
+                field: condField,
+                message: `"${condField}[${ci}]" missing required "kind" field.`,
+              });
+            } else {
+              const validKinds = [
+                'urlMatches',
+                'elementVisible',
+                'elementHidden',
+                'textAppears',
+                'textChanges',
+                'networkResponse',
+                'stateSignatureChanges',
+              ];
+              if (!validKinds.includes(condObj['kind'])) {
+                errors.push({
+                  stepIndex: i,
+                  field: condField,
+                  message: `"${condField}[${ci}].kind" must be one of: ${validKinds.join(', ')}. Got "${condObj['kind']}".`,
+                });
+              }
+            }
+          }
+        }
       }
     }
 

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, mock } from 'bun:test';
-import type { SessionData } from '../../src/cli/session';
+import type { SessionData } from '../../src/cli/session.ts';
 
 /**
  * Tests for the CLI attach module (resolveSession, attachSession).
@@ -32,7 +32,7 @@ mock.module('../../src/cli/attach.ts', () => ({
     mockAttachImpl(session, options),
 }));
 
-const { resolveSession, attachSession } = await import('../../src/cli/attach');
+const { resolveSession, attachSession } = await import('../../src/cli/attach.ts');
 
 // --- Helpers ---
 

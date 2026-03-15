@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
-import type { SessionData } from '../../src/cli/session';
+import type { SessionData } from '../../src/cli/session.ts';
 
 /**
  * Tests for the daemon system:
@@ -31,7 +31,7 @@ mock.module('../../src/cli/attach.ts', () => ({
     mockAttachImpl(session, options),
 }));
 
-const { attachSession } = await import('../../src/cli/attach');
+const { attachSession } = await import('../../src/cli/attach.ts');
 
 // --- Helpers ---
 
@@ -98,7 +98,7 @@ describe('CDPClient offAny', () => {
     (globalThis as unknown as { WebSocket: unknown }).WebSocket = MockWebSocket;
 
     try {
-      const { createCDPClient } = await import('../../src/cdp/client');
+      const { createCDPClient } = await import('../../src/cdp/client.ts');
       const client = await createCDPClient('ws://example.test');
       expect(typeof client.offAny).toBe('function');
     } finally {
@@ -111,22 +111,22 @@ describe('CDPClient offAny', () => {
 
 describe('daemon types and constants', () => {
   test('DAEMON_MAX_AGE_MS is 60 minutes', async () => {
-    const { DAEMON_MAX_AGE_MS } = await import('../../src/daemon/types');
+    const { DAEMON_MAX_AGE_MS } = await import('../../src/daemon/types.ts');
     expect(DAEMON_MAX_AGE_MS).toBe(60 * 60 * 1000);
   });
 
   test('DAEMON_CONNECT_TIMEOUT_MS is 500ms', async () => {
-    const { DAEMON_CONNECT_TIMEOUT_MS } = await import('../../src/daemon/types');
+    const { DAEMON_CONNECT_TIMEOUT_MS } = await import('../../src/daemon/types.ts');
     expect(DAEMON_CONNECT_TIMEOUT_MS).toBe(500);
   });
 
   test('DAEMON_IDLE_TIMEOUT_MS is 60 minutes', async () => {
-    const { DAEMON_IDLE_TIMEOUT_MS } = await import('../../src/daemon/types');
+    const { DAEMON_IDLE_TIMEOUT_MS } = await import('../../src/daemon/types.ts');
     expect(DAEMON_IDLE_TIMEOUT_MS).toBe(60 * 60 * 1000);
   });
 
   test('DAEMON_HEARTBEAT_INTERVAL_MS is 30 seconds', async () => {
-    const { DAEMON_HEARTBEAT_INTERVAL_MS } = await import('../../src/daemon/types');
+    const { DAEMON_HEARTBEAT_INTERVAL_MS } = await import('../../src/daemon/types.ts');
     expect(DAEMON_HEARTBEAT_INTERVAL_MS).toBe(30_000);
   });
 });
@@ -135,17 +135,17 @@ describe('daemon types and constants', () => {
 
 describe('daemon lifecycle', () => {
   test('isDaemonAlive returns false for non-existent PID', async () => {
-    const { isDaemonAlive } = await import('../../src/daemon/lifecycle');
+    const { isDaemonAlive } = await import('../../src/daemon/lifecycle.ts');
     expect(isDaemonAlive(99999999)).toBe(false);
   });
 
   test('isDaemonAlive returns true for own PID', async () => {
-    const { isDaemonAlive } = await import('../../src/daemon/lifecycle');
+    const { isDaemonAlive } = await import('../../src/daemon/lifecycle.ts');
     expect(isDaemonAlive(process.pid)).toBe(true);
   });
 
   test('createIdleTimer calls onIdle after timeout', async () => {
-    const { createIdleTimer } = await import('../../src/daemon/lifecycle');
+    const { createIdleTimer } = await import('../../src/daemon/lifecycle.ts');
     let called = false;
     const timer = createIdleTimer(() => {
       called = true;
@@ -157,7 +157,7 @@ describe('daemon lifecycle', () => {
   });
 
   test('createIdleTimer reset delays the callback', async () => {
-    const { createIdleTimer } = await import('../../src/daemon/lifecycle');
+    const { createIdleTimer } = await import('../../src/daemon/lifecycle.ts');
     let called = false;
     const timer = createIdleTimer(() => {
       called = true;
@@ -176,7 +176,7 @@ describe('daemon lifecycle', () => {
   });
 
   test('createIdleTimer stop prevents callback', async () => {
-    const { createIdleTimer } = await import('../../src/daemon/lifecycle');
+    const { createIdleTimer } = await import('../../src/daemon/lifecycle.ts');
     let called = false;
     const timer = createIdleTimer(() => {
       called = true;
@@ -319,7 +319,7 @@ describe('session daemon field', () => {
 
 describe('connect command argument parsing', () => {
   test('--no-daemon is listed in help text', async () => {
-    const { connectCommand } = await import('../../src/cli/commands/connect');
+    const { connectCommand } = await import('../../src/cli/commands/connect.ts');
 
     const logs: string[] = [];
     const origLog = console.log;
@@ -339,7 +339,7 @@ describe('connect command argument parsing', () => {
 
 describe('daemon command', () => {
   test('shows help when no subcommand given', async () => {
-    const { daemonCommand } = await import('../../src/cli/commands/daemon');
+    const { daemonCommand } = await import('../../src/cli/commands/daemon.ts');
 
     const logs: string[] = [];
     const origLog = console.log;

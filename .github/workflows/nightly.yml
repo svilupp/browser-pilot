@@ -1,0 +1,86 @@
+name: Nightly Smoke
+
+on:
+  schedule:
+    - cron: '0 6 * * *' # 6am UTC daily
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    name: Browser Smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Install Chrome (stable)
+        id: setup-chrome
+        uses: browser-actions/setup-chrome@v2
+        with:
+          chrome-version: stable
+
+      - name: Run smoke tests
+        run: bun test tests/integration --timeout 60000
+        env:
+          CI: true
+          TEST_TIMEOUT: 60000
+          CHROME_PATH: ${{ steps.setup-chrome.outputs.chrome-path }}
+          BROWSER_PILOT_CHROME_PATH: ${{ steps.setup-chrome.outputs.chrome-path }}
+
+      - name: Run quarantine tests
+        if: always()
+        run: bun test tests/quarantine --timeout 60000 || true
+        env:
+          CI: true
+          CHROME_PATH: ${{ steps.setup-chrome.outputs.chrome-path }}
+          BROWSER_PILOT_CHROME_PATH: ${{ steps.setup-chrome.outputs.chrome-path }}
+
+      - name: Upload failure screenshots
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-${{ matrix.os }}-screenshots
+          path: tests/screenshots/
+          retention-days: 14
+          if-no-files-found: ignore
+
+  knip:
+    name: Dead Code Analysis
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Run knip
+        run: bunx knip || true
+
+  ast-grep-full:
+    name: Full ast-grep Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install ast-grep
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/ast-grep/ast-grep/main/install.sh | bash -s -- --to /usr/local/bin
+
+      - name: Run full scan
+        run: ast-grep scan -c sgconfig.yml || true

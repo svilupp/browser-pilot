@@ -15,14 +15,14 @@ describe('diagnose utilities', () => {
 
 describe('diagnose module imports', () => {
   it('exports diagnoseElement function', async () => {
-    const module = await import('../../src/browser/diagnose');
+    const module = await import('../../src/browser/diagnose.ts');
     expect(typeof module.diagnoseElement).toBe('function');
   });
 
   it('exports DiagnoseResult type check via runtime', async () => {
     // DiagnoseResult is a type, so we can't directly test it
     // but we can check the module imports correctly
-    const module = await import('../../src/browser/diagnose');
+    const module = await import('../../src/browser/diagnose.ts');
     expect(module).toBeDefined();
   });
 });
@@ -109,7 +109,7 @@ describe('diagnose with mock page', () => {
   }
 
   it('returns fuzzy candidates when no exact match', async () => {
-    const { diagnoseElement } = await import('../../src/browser/diagnose');
+    const { diagnoseElement } = await import('../../src/browser/diagnose.ts');
 
     const mockPage = createMockPage({
       snapshotResult: {
@@ -132,7 +132,7 @@ describe('diagnose with mock page', () => {
   });
 
   it('returns exact match when CSS selector finds element', async () => {
-    const { diagnoseElement } = await import('../../src/browser/diagnose');
+    const { diagnoseElement } = await import('../../src/browser/diagnose.ts');
 
     const mockPage = createMockPage({
       snapshotResult: {
@@ -156,7 +156,7 @@ describe('diagnose with mock page', () => {
   });
 
   it('returns exact match for ref: selector', async () => {
-    const { diagnoseElement } = await import('../../src/browser/diagnose');
+    const { diagnoseElement } = await import('../../src/browser/diagnose.ts');
 
     const mockPage = createMockPage({
       snapshotResult: {
@@ -174,7 +174,7 @@ describe('diagnose with mock page', () => {
   });
 
   it('returns suggested selectors for exact match', async () => {
-    const { diagnoseElement } = await import('../../src/browser/diagnose');
+    const { diagnoseElement } = await import('../../src/browser/diagnose.ts');
 
     const mockPage = createMockPage({
       snapshotResult: {
@@ -200,7 +200,7 @@ describe('diagnose with mock page', () => {
   });
 
   it('respects maxCandidates option', async () => {
-    const { diagnoseElement } = await import('../../src/browser/diagnose');
+    const { diagnoseElement } = await import('../../src/browser/diagnose.ts');
 
     const mockPage = createMockPage({
       snapshotResult: {

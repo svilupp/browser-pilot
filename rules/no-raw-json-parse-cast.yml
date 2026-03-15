@@ -1,0 +1,6 @@
+id: no-raw-json-parse-cast
+language: typescript
+rule:
+  pattern: JSON.parse($$$) as $TYPE
+message: "Validate parsed JSON instead of casting"
+severity: warning

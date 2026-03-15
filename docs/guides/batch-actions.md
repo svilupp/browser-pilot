@@ -159,6 +159,13 @@ console.log(result.steps);           // individual results
 { action: 'screenshot', fullPage: true, format: 'jpeg', quality: 80 }
 ```
 
+### Page State
+
+```typescript
+{ action: 'review' }   // Structured business state
+{ action: 'delta' }    // Page change detection
+```
+
 ### JavaScript Evaluation
 
 ```typescript
@@ -192,6 +199,11 @@ interface StepResult {
   suggestion?: string;             // AI-friendly recovery suggestion
   coveringElement?: { tag: string; id?: string; className?: string }; // When reason is 'covered'
   hints?: FailureHint[];           // Alternative selectors to try
+
+  // Outcome evaluation (when conditions specified)
+  outcomeStatus?: OutcomeStatus;      // 'success' | 'failed' | 'ambiguous' | 'unsafe_to_retry'
+  matchedConditions?: MatchedCondition[];  // Detailed condition results
+  retrySafe?: boolean;                // Whether safe to auto-retry
 }
 
 type FailureReason =
@@ -316,6 +328,95 @@ const result = await page.batch([
 ```
 
 Available assertions: `assertVisible`, `assertExists`, `assertText`, `assertUrl`, `assertValue`.
+
+## Outcome Conditions
+
+Any action step can include conditions to verify the outcome, not just the mechanical interaction:
+
+```typescript
+const result = await page.batch([
+  { action: 'goto', url: 'https://example.com/login' },
+  { action: 'fill', selector: '#email', value: 'user@example.com' },
+  { action: 'fill', selector: '#password', value: 'secret' },
+  {
+    action: 'submit',
+    selector: 'form',
+    expectAny: [
+      { kind: 'urlMatches', pattern: '*/dashboard*' },
+      { kind: 'textAppears', text: 'Welcome back' },
+    ],
+    failIf: [
+      { kind: 'textAppears', text: 'Invalid credentials' },
+    ],
+    dangerous: true,
+  },
+]);
+
+// result.steps[3].outcomeStatus: 'success' | 'failed' | 'ambiguous' | 'unsafe_to_retry'
+// result.steps[3].matchedConditions: detailed evaluation results
+// result.steps[3].retrySafe: false (because dangerous: true)
+```
+
+### Condition Kinds
+
+| Kind | Fields | What it checks |
+|------|--------|---------------|
+| `urlMatches` | `pattern: string` | Current URL matches glob |
+| `elementVisible` | `selector: string \| string[]` | Element is visible |
+| `elementHidden` | `selector: string \| string[]` | Element is hidden/absent |
+| `textAppears` | `text: string`, optional `selector` | Text substring found |
+| `textChanges` | optional `to`, optional `selector` | Text content changed |
+| `networkResponse` | `urlPattern: string`, optional `status` | HTTP response seen |
+| `stateSignatureChanges` | (none) | Page state fingerprint changed |
+
+### Evaluation Order
+
+1. `failIf` conditions checked first — any match = `failed`
+2. `expectAll` conditions — all must match
+3. `expectAny` conditions — any match = `success`
+
+### Dangerous Steps
+
+Mark steps with `dangerous: true` when the action is irreversible (e.g., "Place Order", "Delete Account"). Dangerous steps:
+- Get `unsafe_to_retry` instead of `ambiguous` when conditions don't clearly pass or fail
+- Are never auto-retried, even with `retry` set
+- Have `retrySafe: false` in the result
+
+## Widget Actions
+
+### Custom Combobox
+
+```typescript
+{
+  action: 'chooseOption',
+  trigger: '#country-select',  // or selector for the trigger
+  value: 'United States',
+  match: 'contains',  // 'exact' | 'contains' | 'startsWith'
+}
+```
+
+### File Upload
+
+```typescript
+{
+  action: 'upload',
+  selector: '#file-input',
+  files: ['/path/to/document.pdf'],
+}
+```
+
+## Page Review
+
+Extract structured business state in a single step:
+
+```typescript
+const result = await page.batch([
+  { action: 'review' },
+]);
+
+// result.steps[0].result contains:
+// { url, title, headings, forms, alerts, tables, keyValues, statusLabels }
+```
 
 ## Retry
 

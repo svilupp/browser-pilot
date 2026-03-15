@@ -14,7 +14,8 @@
         "noUnusedImports": "error",
         "noUnusedVariables": "error",
         "noUnusedFunctionParameters": "error",
-        "useExhaustiveDependencies": "warn"
+        "useExhaustiveDependencies": "warn",
+        "noUnresolvedImports": "off"
       },
       "style": {
         "noNonNullAssertion": "off",
@@ -23,8 +24,9 @@
         "noParameterAssign": "error"
       },
       "suspicious": {
-        "noExplicitAny": "warn",
-        "noConfusingVoidType": "off"
+        "noExplicitAny": "error",
+        "noConfusingVoidType": "off",
+        "noImportCycles": "warn"
       },
       "complexity": {
         "noForEach": "off",
@@ -34,6 +36,9 @@
       "performance": {
         "noDelete": "warn"
       }
+    },
+    "domains": {
+      "project": "all"
     }
   },
   "formatter": {

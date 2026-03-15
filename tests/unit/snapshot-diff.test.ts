@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
-import { diffSnapshots, formatDiffPretty } from '../../src/browser/snapshot-diff';
-import type { PageSnapshot, SnapshotNode } from '../../src/browser/types';
+import { diffSnapshots, formatDiffPretty } from '../../src/browser/snapshot-diff.ts';
+import type { PageSnapshot, SnapshotNode } from '../../src/browser/types.ts';
 
 function createSnapshot(
   elements: SnapshotNode[],

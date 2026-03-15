@@ -1,0 +1,12 @@
+id: no-raw-math-random
+language: typescript
+rule:
+  pattern: Math.random()
+message: "Use src/runtime/id.ts instead of raw Math.random()"
+severity: warning
+files:
+  - "src/**/*.ts"
+ignores:
+  - "src/runtime/id.ts"
+  - "src/cli/**"
+  - "src/daemon/**"

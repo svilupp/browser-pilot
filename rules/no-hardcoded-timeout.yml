@@ -1,0 +1,15 @@
+id: no-hardcoded-timeout
+language: typescript
+rule:
+  any:
+    - pattern: setTimeout($FN, $NUM)
+      inside:
+        not:
+          kind: variable_declaration
+    - pattern: sleep($NUM)
+  has:
+    pattern: $NUM
+    kind: number
+    regex: "^[0-9]{4,}$"
+message: "Hardcoded timeout >999ms — extract to a named constant"
+severity: warning

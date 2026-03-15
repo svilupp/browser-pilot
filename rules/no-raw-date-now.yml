@@ -1,0 +1,12 @@
+id: no-raw-date-now
+language: typescript
+rule:
+  pattern: Date.now()
+message: "Use src/runtime/clock.ts instead of raw Date.now()"
+severity: warning
+files:
+  - "src/**/*.ts"
+ignores:
+  - "src/runtime/clock.ts"
+  - "src/cli/**"
+  - "src/daemon/**"

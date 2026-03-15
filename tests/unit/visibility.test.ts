@@ -28,7 +28,7 @@ function createMockCDPClient(evaluateResult: unknown, callFunctionResult?: unkno
 describe('visibility utilities', () => {
   describe('getVisibilityStateBySelector', () => {
     it('returns visibility state for visible element', async () => {
-      const { getVisibilityStateBySelector } = await import('../../src/browser/visibility');
+      const { getVisibilityStateBySelector } = await import('../../src/browser/visibility.ts');
 
       const mockState = {
         visible: true,
@@ -51,7 +51,7 @@ describe('visibility utilities', () => {
     });
 
     it('returns reasons for hidden element (display:none)', async () => {
-      const { getVisibilityStateBySelector } = await import('../../src/browser/visibility');
+      const { getVisibilityStateBySelector } = await import('../../src/browser/visibility.ts');
 
       const mockState = {
         visible: false,
@@ -73,7 +73,7 @@ describe('visibility utilities', () => {
     });
 
     it('returns reasons for zero opacity element', async () => {
-      const { getVisibilityStateBySelector } = await import('../../src/browser/visibility');
+      const { getVisibilityStateBySelector } = await import('../../src/browser/visibility.ts');
 
       const mockState = {
         visible: false,
@@ -96,7 +96,7 @@ describe('visibility utilities', () => {
     });
 
     it('returns reasons for zero-size element', async () => {
-      const { getVisibilityStateBySelector } = await import('../../src/browser/visibility');
+      const { getVisibilityStateBySelector } = await import('../../src/browser/visibility.ts');
 
       const mockState = {
         visible: false,
@@ -118,7 +118,7 @@ describe('visibility utilities', () => {
     });
 
     it('returns null for non-existent element', async () => {
-      const { getVisibilityStateBySelector } = await import('../../src/browser/visibility');
+      const { getVisibilityStateBySelector } = await import('../../src/browser/visibility.ts');
 
       const cdp = createMockCDPClient(null);
       const result = await getVisibilityStateBySelector(cdp as never, '#nonexistent');
@@ -127,7 +127,7 @@ describe('visibility utilities', () => {
     });
 
     it('passes contextId when provided', async () => {
-      const { getVisibilityStateBySelector } = await import('../../src/browser/visibility');
+      const { getVisibilityStateBySelector } = await import('../../src/browser/visibility.ts');
 
       const mockState = {
         visible: true,
@@ -154,7 +154,7 @@ describe('visibility utilities', () => {
 
   describe('getVisibilityState (by nodeId)', () => {
     it('resolves node and returns visibility state', async () => {
-      const { getVisibilityState } = await import('../../src/browser/visibility');
+      const { getVisibilityState } = await import('../../src/browser/visibility.ts');
 
       const mockState = {
         visible: true,
@@ -175,7 +175,7 @@ describe('visibility utilities', () => {
     });
 
     it('returns null when node cannot be resolved', async () => {
-      const { getVisibilityState } = await import('../../src/browser/visibility');
+      const { getVisibilityState } = await import('../../src/browser/visibility.ts');
 
       const cdp = {
         send: mock((method: string) => {
@@ -193,7 +193,7 @@ describe('visibility utilities', () => {
 
   describe('detectCoveringElementBySelector', () => {
     it('returns null when element is not covered', async () => {
-      const { detectCoveringElementBySelector } = await import('../../src/browser/visibility');
+      const { detectCoveringElementBySelector } = await import('../../src/browser/visibility.ts');
 
       const cdp = createMockCDPClient({ covered: false });
       const result = await detectCoveringElementBySelector(cdp as never, '#uncovered-button');
@@ -202,7 +202,7 @@ describe('visibility utilities', () => {
     });
 
     it('returns covering element info when element is covered', async () => {
-      const { detectCoveringElementBySelector } = await import('../../src/browser/visibility');
+      const { detectCoveringElementBySelector } = await import('../../src/browser/visibility.ts');
 
       const mockResult = {
         covered: true,
@@ -225,7 +225,7 @@ describe('visibility utilities', () => {
     });
 
     it('returns null when element not found', async () => {
-      const { detectCoveringElementBySelector } = await import('../../src/browser/visibility');
+      const { detectCoveringElementBySelector } = await import('../../src/browser/visibility.ts');
 
       const cdp = createMockCDPClient({ error: 'Element not found' });
       const result = await detectCoveringElementBySelector(cdp as never, '#nonexistent');
@@ -236,7 +236,7 @@ describe('visibility utilities', () => {
 
   describe('detectCoveringElement (by nodeId)', () => {
     it('returns covering element when covered', async () => {
-      const { detectCoveringElement } = await import('../../src/browser/visibility');
+      const { detectCoveringElement } = await import('../../src/browser/visibility.ts');
 
       const mockResult = {
         covered: true,
@@ -254,7 +254,7 @@ describe('visibility utilities', () => {
     });
 
     it('returns null when not covered', async () => {
-      const { detectCoveringElement } = await import('../../src/browser/visibility');
+      const { detectCoveringElement } = await import('../../src/browser/visibility.ts');
 
       const cdp = createMockCDPClient(null, { covered: false });
       const result = await detectCoveringElement(cdp as never, 123);

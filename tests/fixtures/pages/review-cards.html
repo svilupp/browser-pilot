@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Order Summary</title>
+  <style>
+    body { font-family: sans-serif; margin: 2rem; }
+    .card { border: 1px solid #ccc; border-radius: 8px; padding: 1rem; margin: 1rem 0; }
+    table { width: 100%; border-collapse: collapse; margin: 1rem 0; }
+    th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+    th { background: #f5f5f5; }
+    .status { display: inline-block; padding: 4px 12px; border-radius: 4px; }
+    .status-processing { background: #fff3cd; color: #856404; }
+    .alert-success { background: #d4edda; color: #155724; padding: 8px; border-radius: 4px; margin: 8px 0; }
+    dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 16px; }
+    dt { font-weight: bold; }
+  </style>
+</head>
+<body>
+  <h1>Order Summary</h1>
+
+  <div role="alert" class="alert-success">Your order has been placed successfully!</div>
+
+  <div class="card">
+    <h2>Order Details</h2>
+    <dl>
+      <dt>Order Number</dt>
+      <dd>ORD-2024-7891</dd>
+      <dt>Date</dt>
+      <dd>March 15, 2026</dd>
+      <dt>Payment Method</dt>
+      <dd>Visa ending in 4242</dd>
+    </dl>
+  </div>
+
+  <div class="card">
+    <h2>Items</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Product</th>
+          <th>Qty</th>
+          <th>Price</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Wireless Mouse</td>
+          <td>1</td>
+          <td>$29.99</td>
+        </tr>
+        <tr>
+          <td>USB-C Cable (3-pack)</td>
+          <td>2</td>
+          <td>$15.98</td>
+        </tr>
+        <tr>
+          <td>Monitor Stand</td>
+          <td>1</td>
+          <td>$49.99</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2>Shipping</h2>
+    <p>Status: <span role="status" class="status status-processing">Processing</span></p>
+    <p>Estimated Delivery: March 20-22, 2026</p>
+  </div>
+
+  <div class="card">
+    <h2>Summary</h2>
+    <p>Subtotal: $95.96</p>
+    <p>Shipping: $5.99</p>
+    <p>Tax: $8.17</p>
+    <p><strong>Total: $110.12</strong></p>
+  </div>
+
+  <div style="margin-top: 1rem;">
+    <button type="button">Track Order</button>
+    <button type="button">Download Invoice</button>
+    <button type="button" disabled>Cancel Order</button>
+  </div>
+</body>
+</html>

@@ -11,7 +11,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  lint-and-type:
+  fast:
     name: Lint & Type Check
     runs-on: ubuntu-latest
     steps:
@@ -28,13 +28,35 @@ jobs:
       - name: Type check
         run: bun run typecheck
 
-  test:
-    name: Test
+      - name: Biome lint
+        run: bun run lint
+
+      - name: Oxlint
+        run: bun run lint:type
+
+      - name: Fitness functions
+        run: bun test tests/fitness
+
+  unit:
+    name: Unit Tests
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        test-type: [unit, integration, cli]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Run unit tests
+        run: bun test:unit
+
+  integration:
+    name: Integration Tests
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -47,41 +69,89 @@ jobs:
         run: bun install
 
       - name: Install Chrome
-        if: matrix.test-type != 'unit'
         id: setup-chrome
         uses: browser-actions/setup-chrome@v2
         with:
           chrome-version: 147
 
       - name: Verify Chrome installation
-        if: matrix.test-type != 'unit'
         run: |
           echo "Chrome path: $CHROME_PATH"
-          echo "Chrome version (action): $CHROME_VERSION_UNDER_TEST"
           "$CHROME_PATH" --version
           test "$("$CHROME_PATH" --version | grep -o '[0-9]\+' | head -1)" = "147"
         env:
           CHROME_PATH: ${{ steps.setup-chrome.outputs.chrome-path }}
-          CHROME_VERSION_UNDER_TEST: ${{ steps.setup-chrome.outputs.chrome-version }}
 
-      - name: Run ${{ matrix.test-type }} tests
-        run: bun test:${{ matrix.test-type }}
+      - name: Run integration tests
+        run: bun test:integration
         env:
           CI: true
           TEST_TIMEOUT: 60000
           CHROME_PATH: ${{ steps.setup-chrome.outputs.chrome-path }}
           BROWSER_PILOT_CHROME_PATH: ${{ steps.setup-chrome.outputs.chrome-path }}
 
-      - name: Upload failure screenshots
-        if: failure() && matrix.test-type != 'unit'
+      - name: Upload failure artifacts
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.test-type }}-failure-screenshots
-          path: tests/screenshots/
+          name: integration-failure-artifacts
+          path: |
+            tests/screenshots/
+            ~/.browser-pilot/sessions/*/daemon.log
+            ~/.browser-pilot/sessions/*/session.json
+            ~/.browser-pilot/sessions/*/recording.json
           retention-days: 7
           if-no-files-found: ignore
 
-  # Build check to ensure package builds correctly
+  cli:
+    name: CLI Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Install Chrome
+        id: setup-chrome
+        uses: browser-actions/setup-chrome@v2
+        with:
+          chrome-version: 147
+
+      - name: Verify Chrome installation
+        run: |
+          echo "Chrome path: $CHROME_PATH"
+          "$CHROME_PATH" --version
+          test "$("$CHROME_PATH" --version | grep -o '[0-9]\+' | head -1)" = "147"
+        env:
+          CHROME_PATH: ${{ steps.setup-chrome.outputs.chrome-path }}
+
+      - name: Run CLI tests
+        run: bun test:cli
+        env:
+          CI: true
+          TEST_TIMEOUT: 60000
+          CHROME_PATH: ${{ steps.setup-chrome.outputs.chrome-path }}
+          BROWSER_PILOT_CHROME_PATH: ${{ steps.setup-chrome.outputs.chrome-path }}
+
+      - name: Upload failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-failure-artifacts
+          path: |
+            tests/screenshots/
+            ~/.browser-pilot/sessions/*/daemon.log
+            ~/.browser-pilot/sessions/*/session.json
+            ~/.browser-pilot/sessions/*/recording.json
+          retention-days: 7
+          if-no-files-found: ignore
+
   build:
     name: Build Check
     runs-on: ubuntu-latest
@@ -99,6 +169,11 @@ jobs:
       - name: Build check (type check + verify exports)
         run: |
           bun run typecheck
-          # Verify main entry point is valid
           bun -e "import('./index.ts')"
           echo "Build check passed!"
+
+      - name: Build package
+        run: bun run build
+
+      - name: API Extractor
+        run: bun run api:check

@@ -21,13 +21,15 @@ import {
   type RecordingFrame,
 } from '../recording/manifest.ts';
 import { redactValueForRecording } from '../recording/redaction.ts';
-import { globToRegex } from '../trace/live.ts';
 import { type CanonicalTraceEvent, createTraceId, normalizeTraceEvent } from '../trace/model.ts';
 import { TRACE_BINDING_NAME, TRACE_SCRIPT } from '../trace/script.ts';
+import { formatConsoleArg, globToRegex, readString, readStringOr } from '../utils/strings.ts';
+import { captureStateSignature, evaluateOutcome, NetworkResponseTracker } from './conditions.ts';
 import type {
   ActionType,
   BatchOptions,
   BatchResult,
+  Condition,
   FailureReason,
   RecordOptions,
   Step,
@@ -53,18 +55,6 @@ interface RecordingContext {
   quality: number;
   highlights: boolean;
   skipActions: Set<ActionType>;
-}
-
-function readString(value: unknown): string | undefined {
-  return typeof value === 'string' ? value : undefined;
-}
-
-function readStringOr(value: unknown, fallback = ''): string {
-  return readString(value) ?? fallback;
-}
-
-function formatConsoleArg(entry: Record<string, unknown>): string {
-  return readString(entry['value']) ?? readString(entry['description']) ?? '';
 }
 
 function loadExistingRecording(manifestPath: string): {
@@ -197,6 +187,35 @@ function getSuggestion(reason: FailureReason): string {
 // Exported for testing
 export { classifyFailure, getSuggestion };
 
+/** Check if a step has any outcome conditions */
+function hasOutcomeConditions(step: Step): boolean {
+  return (
+    (step.expectAny !== undefined && step.expectAny.length > 0) ||
+    (step.expectAll !== undefined && step.expectAll.length > 0) ||
+    (step.failIf !== undefined && step.failIf.length > 0)
+  );
+}
+
+/** Check if any conditions need network tracking */
+function needsNetworkTracking(step: Step): boolean {
+  const allConditions: Condition[] = [
+    ...(step.expectAny ?? []),
+    ...(step.expectAll ?? []),
+    ...(step.failIf ?? []),
+  ];
+  return allConditions.some((c) => c.kind === 'networkResponse');
+}
+
+/** Check if any conditions need state signature */
+function needsStateSignature(step: Step): boolean {
+  const allConditions: Condition[] = [
+    ...(step.expectAny ?? []),
+    ...(step.expectAll ?? []),
+    ...(step.failIf ?? []),
+  ];
+  return allConditions.some((c) => c.kind === 'stateSignatureChanges');
+}
+
 export class BatchExecutor {
   private page: Page;
 
@@ -248,9 +267,29 @@ export class BatchExecutor {
         );
       }
 
+      // Pre-step: set up outcome tracking if conditions are present
+      const hasOutcome = hasOutcomeConditions(step);
+      let networkTracker: NetworkResponseTracker | undefined;
+      let beforeSignature: string | undefined;
+
+      if (hasOutcome) {
+        if (needsNetworkTracking(step)) {
+          networkTracker = new NetworkResponseTracker();
+          networkTracker.start(this.page.cdpClient);
+        }
+        if (needsStateSignature(step)) {
+          beforeSignature = await captureStateSignature(this.page);
+        }
+      }
+
       for (let attempt = 0; attempt < maxAttempts; attempt++) {
         if (attempt > 0) {
           await new Promise((resolve) => setTimeout(resolve, retryDelay));
+          // Reset network tracker for retry
+          if (networkTracker) networkTracker.reset();
+          if (hasOutcome && needsStateSignature(step)) {
+            beforeSignature = await captureStateSignature(this.page);
+          }
         }
 
         try {
@@ -271,6 +310,35 @@ export class BatchExecutor {
             boundingBox: this.page.getLastActionBoundingBox() ?? undefined,
           };
 
+          // Post-step: evaluate outcome conditions
+          if (hasOutcome) {
+            if (networkTracker) networkTracker.stop(this.page.cdpClient);
+            const outcome = await evaluateOutcome(this.page, {
+              expectAny: step.expectAny,
+              expectAll: step.expectAll,
+              failIf: step.failIf,
+              dangerous: step.dangerous,
+              networkTracker,
+              beforeSignature,
+            });
+            stepResult.outcomeStatus = outcome.outcomeStatus;
+            stepResult.matchedConditions = outcome.matchedConditions;
+            stepResult.retrySafe = outcome.retrySafe;
+
+            // If outcome is 'failed' or 'ambiguous'/'unsafe_to_retry', mark step as failed
+            if (outcome.outcomeStatus !== 'success') {
+              stepResult.success = false;
+              stepResult.error = `Outcome: ${outcome.outcomeStatus}`;
+              const failedDetails = outcome.matchedConditions
+                .filter((mc) => (outcome.outcomeStatus === 'failed' ? mc.matched : !mc.matched))
+                .map((mc) => mc.detail)
+                .filter(Boolean);
+              if (failedDetails.length > 0) {
+                stepResult.suggestion = failedDetails.join('; ');
+              }
+            }
+          }
+
           if (recording && !recording.skipActions.has(step.action)) {
             await this.captureRecordingFrame(step, stepResult, recording);
           }
@@ -280,13 +348,16 @@ export class BatchExecutor {
                 traceId: createTraceId('action'),
                 elapsedMs: Date.now() - startTime,
                 channel: 'action',
-                event: 'action.succeeded',
-                summary: `${step.action} succeeded`,
+                event: stepResult.success ? 'action.succeeded' : 'action.outcome_failed',
+                summary: stepResult.success
+                  ? `${step.action} succeeded`
+                  : `${step.action} outcome: ${stepResult.outcomeStatus}`,
                 data: {
                   action: step.action,
                   selector: step.selector ?? null,
                   selectorUsed: result.selectorUsed ?? null,
                   durationMs: Date.now() - stepStart,
+                  outcomeStatus: stepResult.outcomeStatus ?? null,
                 },
                 actionId: `action-${i + 1}`,
                 stepIndex: i,
@@ -297,6 +368,23 @@ export class BatchExecutor {
             );
           }
 
+          // If step mechanically succeeded but outcome conditions failed
+          if (hasOutcome && !stepResult.success) {
+            // Dangerous steps: never retry, result is final
+            if (step.dangerous) {
+              results.push(stepResult);
+              break; // succeeded stays false, but result is already in array
+            }
+            // Non-dangerous: retry if attempts remain
+            if (attempt < maxAttempts - 1) {
+              lastError = new Error(stepResult.error ?? 'Outcome failed');
+              continue;
+            }
+            // Last attempt: keep result with outcome details
+            results.push(stepResult);
+            break;
+          }
+
           results.push(stepResult);
           succeeded = true;
           break;
@@ -305,69 +393,77 @@ export class BatchExecutor {
         }
       }
 
+      // Clean up network tracker if still active
+      if (networkTracker) networkTracker.stop(this.page.cdpClient);
+
       if (!succeeded) {
-        const errorMessage = lastError?.message ?? 'Unknown error';
-        let hints = lastError instanceof ElementNotFoundError ? lastError.hints : undefined;
-        const { reason, coveringElement } = classifyFailure(lastError);
+        // Check if result was already pushed by outcome evaluation
+        const resultAlreadyPushed = results.length > 0 && results[results.length - 1]!.index === i;
 
-        // Auto-generate hints on element-related failures
-        if (
-          step.selector &&
-          !step.optional &&
-          ['missing', 'hidden', 'covered', 'disabled', 'detached', 'replaced'].includes(reason)
-        ) {
-          try {
-            const selectors = Array.isArray(step.selector) ? step.selector : [step.selector];
-            const autoHints = await generateHints(this.page, selectors, step.action, 3);
-            if (autoHints.length > 0) {
-              hints = autoHints;
+        if (!resultAlreadyPushed) {
+          const errorMessage = lastError?.message ?? 'Unknown error';
+          let hints = lastError instanceof ElementNotFoundError ? lastError.hints : undefined;
+          const { reason, coveringElement } = classifyFailure(lastError);
+
+          // Auto-generate hints on element-related failures
+          if (
+            step.selector &&
+            !step.optional &&
+            ['missing', 'hidden', 'covered', 'disabled', 'detached', 'replaced'].includes(reason)
+          ) {
+            try {
+              const selectors = Array.isArray(step.selector) ? step.selector : [step.selector];
+              const autoHints = await generateHints(this.page, selectors, step.action, 3);
+              if (autoHints.length > 0) {
+                hints = autoHints;
+              }
+            } catch {
+              // Hint generation is best-effort
             }
-          } catch {
-            // Hint generation is best-effort
           }
-        }
 
-        const failedResult: StepResult = {
-          index: i,
-          action: step.action,
-          selector: step.selector,
-          success: false,
-          durationMs: Date.now() - stepStart,
-          error: errorMessage,
-          hints,
-          failureReason: reason,
-          coveringElement,
-          suggestion: getSuggestion(reason),
-          timestamp: Date.now(),
-        };
+          const failedResult: StepResult = {
+            index: i,
+            action: step.action,
+            selector: step.selector,
+            success: false,
+            durationMs: Date.now() - stepStart,
+            error: errorMessage,
+            hints,
+            failureReason: reason,
+            coveringElement,
+            suggestion: getSuggestion(reason),
+            timestamp: Date.now(),
+          };
 
-        if (recording && !recording.skipActions.has(step.action)) {
-          await this.captureRecordingFrame(step, failedResult, recording);
-        }
-        if (recording) {
-          recording.traceEvents.push(
-            normalizeTraceEvent({
-              traceId: createTraceId('action'),
-              elapsedMs: Date.now() - startTime,
-              channel: 'action',
-              event: 'action.failed',
-              severity: 'error',
-              summary: `${step.action} failed: ${errorMessage}`,
-              data: {
-                action: step.action,
-                selector: step.selector ?? null,
-                error: errorMessage,
-                reason,
-              },
-              actionId: `action-${i + 1}`,
-              stepIndex: i,
-              selector: step.selector,
-              url: step.url,
-            })
-          );
-        }
+          if (recording && !recording.skipActions.has(step.action)) {
+            await this.captureRecordingFrame(step, failedResult, recording);
+          }
+          if (recording) {
+            recording.traceEvents.push(
+              normalizeTraceEvent({
+                traceId: createTraceId('action'),
+                elapsedMs: Date.now() - startTime,
+                channel: 'action',
+                event: 'action.failed',
+                severity: 'error',
+                summary: `${step.action} failed: ${errorMessage}`,
+                data: {
+                  action: step.action,
+                  selector: step.selector ?? null,
+                  error: errorMessage,
+                  reason,
+                },
+                actionId: `action-${i + 1}`,
+                stepIndex: i,
+                selector: step.selector,
+                url: step.url,
+              })
+            );
+          }
 
-        results.push(failedResult);
+          results.push(failedResult);
+        }
 
         if (onFail === 'stop' && !step.optional) {
           stoppedAtIndex = i;
@@ -745,6 +841,16 @@ export class BatchExecutor {
         return { value: await this.page.forms() };
       }
 
+      case 'delta': {
+        const review = await this.page.review();
+        return { value: review };
+      }
+
+      case 'review': {
+        const review = await this.page.review();
+        return { value: review };
+      }
+
       case 'screenshot': {
         const data = await this.page.screenshot({
           format: step.format,
@@ -911,6 +1017,41 @@ export class BatchExecutor {
         }
         const media = await this.assertMediaTrackLive(step.kind);
         return { value: media };
+      }
+
+      case 'chooseOption': {
+        const { chooseOption } = await import('../browser/combobox.ts');
+        if (!step.value) throw new Error('chooseOption requires value');
+        const result = await chooseOption(this.page, {
+          trigger: step.trigger ?? step.selector ?? '',
+          listbox: step.option
+            ? Array.isArray(step.option)
+              ? step.option
+              : [step.option]
+            : undefined,
+          value: typeof step.value === 'string' ? step.value : (step.value[0] ?? ''),
+          match: step.match as 'exact' | 'contains' | 'startsWith' | undefined,
+          timeout: step.timeout ?? timeout,
+        });
+        if (!result.success) {
+          throw new Error(result.error ?? `chooseOption failed at ${result.failedAt}`);
+        }
+        return { value: result };
+      }
+
+      case 'upload': {
+        const { uploadFiles } = await import('../browser/upload.ts');
+        if (!step.selector) throw new Error('upload requires selector');
+        if (!step.files || step.files.length === 0) throw new Error('upload requires files');
+        const result = await uploadFiles(this.page, {
+          selector: step.selector,
+          files: step.files,
+          timeout: step.timeout ?? timeout,
+        });
+        if (!result.accepted) {
+          throw new Error(result.error ?? 'Upload was not accepted');
+        }
+        return { value: result };
       }
 
       default: {

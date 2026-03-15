@@ -31,6 +31,7 @@ Primary commands:
 - `bp text`
 - `bp targets`
 - `bp diagnose`
+- `bp review`
 
 Canonical flow:
 
@@ -39,6 +40,7 @@ bp connect --name dev
 bp snapshot -i -s dev
 bp page -s dev
 bp diagnose -s dev "submit"
+bp review -s dev --json
 ```
 
 Rules:
@@ -95,6 +97,28 @@ bp exec -s dev '[
   {"action":"assertNoConsoleErrors","windowMs":500}
 ]'
 ```
+
+Outcome conditions available on any action step:
+
+- `expectAny`, `expectAll`, `failIf` — verify the action's effect
+- `dangerous` — prevent auto-retry on ambiguous outcomes
+
+Example:
+
+```bash
+bp exec -s dev '[
+  {"action":"click","selector":"#save",
+   "expectAny":[{"kind":"textAppears","text":"Saved"}],
+   "dangerous":true}
+]'
+```
+
+New widget actions:
+
+- `chooseOption` — custom combobox interaction
+- `upload` — file upload with verification
+- `review` — structured page state extraction
+- `delta` — page change detection
 
 Likely next steps:
 
@@ -290,3 +314,4 @@ bp daemon status
 - Need to explain behavior over time: `trace`
 - Need voice/media control: `audio`
 - Need browser-state manipulation: `env`
+- Need structured business state: `review`

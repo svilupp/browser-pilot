@@ -10,8 +10,15 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { withRetry } from '../utils/retry';
-import { generateSessionName, getBaseUrl, getWebSocketUrl, runCLI, setup, teardown } from './setup';
+import { withRetry } from '../utils/retry.ts';
+import {
+  generateSessionName,
+  getBaseUrl,
+  getWebSocketUrl,
+  runCLI,
+  setup,
+  teardown,
+} from './setup.ts';
 
 describe.skipIf(!!process.env['CI'])('CLI Snapshot Output', () => {
   beforeAll(setup);

@@ -2,9 +2,9 @@ import { describe, expect, test } from 'bun:test';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { connect, resolveBrowserEndpoint } from '../../src';
-import { generateSessionName, runCLI } from '../cli/setup';
-import { createAutoConnectHarness, destroyHarness } from '../utils/harness';
+import { connect, resolveBrowserEndpoint } from '../../src/index.ts';
+import { generateSessionName, runCLI } from '../cli/setup.ts';
+import { createAutoConnectHarness, destroyHarness } from '../utils/harness.ts';
 
 describe('Local discovery integration', () => {
   test('library connect can attach through DevToolsActivePort and interact with a page', async () => {

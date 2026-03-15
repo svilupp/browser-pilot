@@ -11,9 +11,16 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import type { PageSnapshot } from '../../src/browser/types';
-import { withRetry } from '../utils/retry';
-import { generateSessionName, getBaseUrl, getWebSocketUrl, runCLI, setup, teardown } from './setup';
+import type { PageSnapshot } from '../../src/browser/types.ts';
+import { withRetry } from '../utils/retry.ts';
+import {
+  generateSessionName,
+  getBaseUrl,
+  getWebSocketUrl,
+  runCLI,
+  setup,
+  teardown,
+} from './setup.ts';
 
 describe.skipIf(!!process.env['CI'])('CLI Snapshot Diff', () => {
   beforeAll(setup);

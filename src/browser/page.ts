@@ -31,6 +31,7 @@ import {
   waitForNavigation as waitForNav,
 } from '../wait/index.ts';
 import { ActionabilityError, ensureActionable } from './actionability.ts';
+import { computeDelta, type DeltaResult, extractPageState, type PageState } from './delta.ts';
 import { generateHints } from './hint-generator.ts';
 import {
   computeModifierBitmask,
@@ -41,6 +42,7 @@ import {
   parseShortcut,
   US_KEYBOARD,
 } from './keyboard.ts';
+import { extractReview, type ReviewResult } from './review.ts';
 import { buildSpecialSelectorLookupExpression } from './special-selectors.ts';
 import {
   type ActionOptions,
@@ -2494,6 +2496,49 @@ export class Page {
         this.refMap.set(ref, backendNodeId);
       }
     }
+  }
+
+  // ============ Delta & Review ============
+
+  /**
+   * Capture current page state for delta comparison.
+   * Call before an action, then call delta() again after and use computeDelta().
+   */
+  async captureState(): Promise<PageState> {
+    const [url, title, snapshot, forms, text] = await Promise.all([
+      this.url(),
+      this.title(),
+      this.snapshot(),
+      this.forms(),
+      this.text(),
+    ]);
+    return extractPageState(url, title, snapshot, forms, text);
+  }
+
+  /**
+   * Compute what changed between two page states.
+   * If no arguments: captures current state and returns it (for use as "before").
+   * If one argument (before state): captures current state and computes delta.
+   */
+  async delta(before?: PageState): Promise<DeltaResult | PageState> {
+    const currentState = await this.captureState();
+    if (!before) return currentState;
+    return computeDelta(before, currentState);
+  }
+
+  /**
+   * Extract structured review surface from the current page.
+   * Returns headings, form values, alerts, key-value pairs, tables, and status labels.
+   */
+  async review(): Promise<ReviewResult> {
+    const [url, title, snapshot, forms, text] = await Promise.all([
+      this.url(),
+      this.title(),
+      this.snapshot(),
+      this.forms(),
+      this.text(),
+    ]);
+    return extractReview(url, title, snapshot, forms, text);
   }
 
   // ============ Batch Execution ============

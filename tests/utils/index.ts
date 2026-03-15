@@ -2,7 +2,7 @@
  * Test utilities barrel export
  */
 
-export * from './assertions';
-export * from './harness';
-export * from './retry';
-export * from './screenshots';
+export * from './assertions.ts';
+export * from './harness.ts';
+export * from './retry.ts';
+export * from './screenshots.ts';

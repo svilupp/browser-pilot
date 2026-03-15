@@ -6,7 +6,7 @@
  */
 
 import { describe, expect, test } from 'bun:test';
-import { runCLI } from './setup';
+import { runCLI } from './setup.ts';
 
 describe('CLI Help Completeness', () => {
   test('bp --help lists all commands', async () => {

@@ -9,6 +9,7 @@ This reference is for command and action details. For workflow routing, see [SKI
 - Capture a manual demo: `record`
 - Analyze behavior over time: `trace`
 - Exercise voice/media: `audio`
+- Review structured state: `review`
 - Change browser conditions: `env`
 
 ## Action DSL reference
@@ -65,6 +66,51 @@ Prefer `bp eval 'document.title'` for ad hoc inspection instead of wrapping raw 
 ```
 
 Use these when the app is timing-sensitive, realtime, or voice-based.
+
+### Outcome conditions
+
+Any action step can verify the result using conditions:
+
+```json
+{"action":"click","selector":"#save",
+ "expectAny":[{"kind":"textAppears","text":"Saved"}],
+ "failIf":[{"kind":"textAppears","text":"Error"}]}
+
+{"action":"submit","selector":"form",
+ "expectAll":[
+   {"kind":"urlMatches","pattern":"*/dashboard*"},
+   {"kind":"elementHidden","selector":".spinner"}
+ ],
+ "dangerous":true}
+```
+
+Condition kinds:
+
+| Kind | Required fields | What it checks |
+|------|----------------|----------------|
+| `urlMatches` | `pattern` | Current URL matches glob pattern |
+| `elementVisible` | `selector` | Element is visible |
+| `elementHidden` | `selector` | Element is hidden or absent |
+| `textAppears` | `text`, optional `selector` | Text found on page/element |
+| `textChanges` | optional `to`, optional `selector` | Text content changed |
+| `networkResponse` | `urlPattern`, optional `status` | HTTP response seen |
+| `stateSignatureChanges` | (none) | Page state fingerprint changed |
+
+Result fields: `outcomeStatus`, `matchedConditions`, `retrySafe`.
+
+### Page review and delta
+
+```json
+{"action":"review"}
+{"action":"delta"}
+```
+
+### Widget actions
+
+```json
+{"action":"chooseOption","trigger":"#combo-trigger","value":"United States","match":"contains"}
+{"action":"upload","selector":"#file-input","files":["/path/to/doc.pdf"]}
+```
 
 ### Retry
 
@@ -136,6 +182,28 @@ bp record -s demo --profile automation -f ./artifacts/demo.recording.json
 bp record summary ./artifacts/demo.recording.json
 bp record derive ./artifacts/demo.recording.json -o workflow.json
 bp run workflow.json
+```
+
+### Outcome-aware submit
+
+```bash
+bp exec -s dev '[
+  {"action":"fill","selector":"#email","value":"user@example.com"},
+  {"action":"submit","selector":"form",
+   "expectAny":[
+     {"kind":"urlMatches","pattern":"*/dashboard*"},
+     {"kind":"textAppears","text":"Welcome"}
+   ],
+   "failIf":[{"kind":"textAppears","text":"Invalid"}],
+   "dangerous":true}
+]'
+```
+
+### Review after action
+
+```bash
+bp exec -s dev '[{"action":"click","selector":"#save"}]'
+bp review -s dev --json
 ```
 
 ## Troubleshooting

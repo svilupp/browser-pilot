@@ -9,6 +9,7 @@
 import type { CDPClient } from '../cdp/client.ts';
 import { type CanonicalTraceEvent, createTraceId, normalizeTraceEvent } from '../trace/model.ts';
 import { TRACE_BINDING_NAME, TRACE_SCRIPT } from '../trace/script.ts';
+import { formatConsoleArg, globToRegex, readString, readStringOr } from '../utils/strings.ts';
 import { aggregateEvents } from './aggregator.ts';
 import { RECORDER_BINDING_NAME, RECORDER_SCRIPT } from './script.ts';
 import type {
@@ -38,18 +39,6 @@ export interface RecorderOptions {
   listen?: boolean | RecorderListenOptions;
   /** Called after each captured event. Use for live screenshot capture. */
   onEvent?: (event: RawRecordedEvent) => void | Promise<void>;
-}
-
-function readString(value: unknown): string | undefined {
-  return typeof value === 'string' ? value : undefined;
-}
-
-function readStringOr(value: unknown, fallback = ''): string {
-  return readString(value) ?? fallback;
-}
-
-function formatConsoleArg(entry: Record<string, unknown>): string {
-  return readString(entry['value']) ?? readString(entry['description']) ?? '';
 }
 
 /**
@@ -734,11 +723,4 @@ export class Recorder {
 
     return entries;
   }
-}
-
-/** Convert a simple glob pattern to a RegExp. Supports * only. */
-function globToRegex(pattern: string): RegExp {
-  const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&');
-  const withWildcards = escaped.replace(/\*/g, '.*');
-  return new RegExp(`^${withWildcards}$`);
 }

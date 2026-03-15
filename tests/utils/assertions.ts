@@ -3,7 +3,7 @@
  */
 
 import { expect } from 'bun:test';
-import type { Page } from '../../src';
+import type { Page } from '../../src/index.ts';
 
 /**
  * Assert page URL contains or matches expected value

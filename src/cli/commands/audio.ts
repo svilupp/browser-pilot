@@ -629,7 +629,7 @@ export async function audioCommand(
           event: checkJson.ready ? 'voice.pipeline.ready' : 'voice.pipeline.notReady',
           severity: checkJson.ready ? 'info' : 'error',
           summary: checkJson.ready ? 'Audio pipeline ready' : 'Audio pipeline not ready',
-          data: checkJson as unknown as Record<string, unknown>,
+          data: { ...checkJson },
         });
         if (checkJson.agentDetected) {
           logger.logTrace({

@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'bun:test';
-import { fuzzyMatchElements, jaroWinkler, stringSimilarity } from '../../src/browser/fuzzy-match';
-import type { InteractiveElement } from '../../src/browser/types';
+import {
+  fuzzyMatchElements,
+  jaroWinkler,
+  stringSimilarity,
+} from '../../src/browser/fuzzy-match.ts';
+import type { InteractiveElement } from '../../src/browser/types.ts';
 
 describe('jaroWinkler', () => {
   it('returns 1.0 for identical strings', () => {

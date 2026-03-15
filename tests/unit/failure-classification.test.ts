@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'bun:test';
-import { classifyFailure, getSuggestion } from '../../src/actions/executor';
-import type { FailureReason } from '../../src/actions/types';
-import { ActionabilityError } from '../../src/browser/actionability';
-import { ElementNotFoundError, NavigationError, TimeoutError } from '../../src/browser/types';
-import { CDPError } from '../../src/cdp/protocol';
+import { classifyFailure, getSuggestion } from '../../src/actions/executor.ts';
+import type { FailureReason } from '../../src/actions/types.ts';
+import { ActionabilityError } from '../../src/browser/actionability.ts';
+import { ElementNotFoundError, NavigationError, TimeoutError } from '../../src/browser/types.ts';
+import { CDPError } from '../../src/cdp/protocol.ts';
 
 describe('classifyFailure', () => {
   it('ElementNotFoundError -> missing', () => {
