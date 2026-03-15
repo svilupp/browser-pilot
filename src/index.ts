@@ -125,6 +125,7 @@ export {
   type ProviderSession,
   parseDevToolsActivePortFile,
   type ResolvedBrowserEndpoint,
+  type ResolvedBrowserSource,
   resolveBrowserEndpoint,
   resolveChromeUserDataDirs,
 } from './providers/index.ts';

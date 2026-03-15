@@ -94,7 +94,7 @@ function summarizeWs(events: CanonicalTraceEvent[]) {
 
   const values = [...connections.values()];
   const reconnects = values.reduce((count, connection) => {
-    return connection.closedAt && !connection.createdAt ? count : count;
+    return connection.closedAt && !connection.createdAt ? count + 1 : count;
   }, 0);
 
   return {

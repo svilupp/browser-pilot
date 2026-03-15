@@ -19,6 +19,7 @@ export {
   discoverLocalBrowsers,
   parseDevToolsActivePortFile,
   type ResolvedBrowserEndpoint,
+  type ResolvedBrowserSource,
   resolveBrowserEndpoint,
   resolveChromeUserDataDirs,
 } from './local-discovery.ts';

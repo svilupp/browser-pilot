@@ -119,7 +119,6 @@ export class Browser {
 
     if (options.provider === 'generic' && !options.wsUrl) {
       const endpoint = await resolveBrowserEndpoint({
-        explicitWsUrl: options.wsUrl,
         channel: options.channel,
         userDataDir: options.userDataDir,
         allowLocalDiscovery: true,

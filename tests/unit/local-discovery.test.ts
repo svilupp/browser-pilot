@@ -162,6 +162,7 @@ describe('discoverLocalBrowsers', () => {
       {
         platform: 'linux',
         homeDir: '/home/tester',
+        env: {},
       },
       {
         async readTextFile(path) {
@@ -273,6 +274,7 @@ describe('resolveBrowserEndpoint', () => {
         platform: 'linux',
         homeDir: '/home/tester',
         channel: 'beta',
+        env: {},
       },
       {
         async readTextFile() {
@@ -300,6 +302,7 @@ describe('resolveBrowserEndpoint', () => {
       {
         platform: 'linux',
         homeDir: '/home/tester',
+        env: {},
       },
       {
         async readTextFile(path) {

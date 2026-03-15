@@ -514,6 +514,7 @@ export class Recorder {
         const requestId = params['requestId'] as string;
         if (!this.wsUrls.has(requestId)) return;
 
+        const url = this.wsUrls.get(requestId);
         this.wsUrls.delete(requestId);
         const now = Date.now();
         this.wsEvents.push({
@@ -531,10 +532,10 @@ export class Recorder {
             event: 'ws.connection.closed',
             severity: 'warn',
             summary: `WebSocket closed ${requestId}`,
-            data: { url: this.wsUrls.get(requestId) ?? null },
+            data: { url: url ?? null },
             connectionId: requestId,
             requestId,
-            url: this.wsUrls.get(requestId),
+            url,
           })
         );
       });
