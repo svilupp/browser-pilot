@@ -2,12 +2,14 @@
 
 Use this guide to choose the right Browser Pilot workflow quickly.
 
+For local Chrome on Chrome 144+, try plain `bp connect` first after enabling remote debugging in `chrome://inspect/#remote-debugging`. Only add `--channel` or `--user-data-dir` when needed to disambiguate local profiles.
+
 ## Workflow 1: inspect then act
 
 Use when you know the app but need current targets.
 
 ```bash
-bp connect --provider generic --name dev
+bp connect --name dev
 bp snapshot -i -s dev
 bp exec -s dev '[
   {"action":"click","selector":"ref:e4"},
@@ -76,7 +78,7 @@ bp diagnose -s dev '<selector>'
 Use when you want screenshots and an artifact while validating a saved flow.
 
 ```bash
-bp connect --provider generic --name validation --record
+bp connect --name validation --record
 bp exec -s validation -f workflow.json
 ```
 

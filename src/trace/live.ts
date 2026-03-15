@@ -1,7 +1,7 @@
 import type { CDPClient } from '../cdp/client.ts';
-import { TRACE_BINDING_NAME, TRACE_SCRIPT } from './script.ts';
 import type { CanonicalTraceEvent } from './model.ts';
 import { createTraceId, normalizeTraceEvent } from './model.ts';
+import { TRACE_BINDING_NAME, TRACE_SCRIPT } from './script.ts';
 
 export type ListenMode = 'ws' | 'http' | 'all';
 
@@ -20,6 +20,18 @@ export function globToRegex(pattern: string): RegExp {
   const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&');
   const withWildcards = escaped.replace(/\*/g, '.*');
   return new RegExp(`^${withWildcards}$`);
+}
+
+function readString(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined;
+}
+
+function readStringOr(value: unknown, fallback = ''): string {
+  return readString(value) ?? fallback;
+}
+
+function formatConsoleArg(entry: Record<string, unknown>): string {
+  return readString(entry['value']) ?? readString(entry['description']) ?? '';
 }
 
 export class LiveTraceCollector {
@@ -48,8 +60,8 @@ export class LiveTraceCollector {
 
     if ((this.options.mode ?? 'all') !== 'http') {
       this.subscribe('Network.webSocketCreated', (params) => {
-        const requestId = String(params['requestId'] ?? '');
-        const url = String(params['url'] ?? '');
+        const requestId = readStringOr(params['requestId']);
+        const url = readStringOr(params['url']);
         if (!this.matchesUrl(url)) {
           return;
         }
@@ -67,8 +79,10 @@ export class LiveTraceCollector {
       });
 
       this.subscribe('Network.webSocketFrameSent', (params) => {
-        const requestId = String(params['requestId'] ?? '');
-        const response = params['response'] as { opcode?: number; payloadData?: string } | undefined;
+        const requestId = readStringOr(params['requestId']);
+        const response = params['response'] as
+          | { opcode?: number; payloadData?: string }
+          | undefined;
         const payload = this.formatPayload(response?.payloadData, response?.opcode ?? 1);
         const url = this.wsUrls.get(requestId);
         if (this.matchRegex && !this.matchRegex.test(url ?? '') && !this.matchRegex.test(payload)) {
@@ -90,8 +104,10 @@ export class LiveTraceCollector {
       });
 
       this.subscribe('Network.webSocketFrameReceived', (params) => {
-        const requestId = String(params['requestId'] ?? '');
-        const response = params['response'] as { opcode?: number; payloadData?: string } | undefined;
+        const requestId = readStringOr(params['requestId']);
+        const response = params['response'] as
+          | { opcode?: number; payloadData?: string }
+          | undefined;
         const payload = this.formatPayload(response?.payloadData, response?.opcode ?? 1);
         const url = this.wsUrls.get(requestId);
         if (this.matchRegex && !this.matchRegex.test(url ?? '') && !this.matchRegex.test(payload)) {
@@ -113,7 +129,7 @@ export class LiveTraceCollector {
       });
 
       this.subscribe('Network.webSocketClosed', (params) => {
-        const requestId = String(params['requestId'] ?? '');
+        const requestId = readStringOr(params['requestId']);
         const url = this.wsUrls.get(requestId);
         this.wsUrls.delete(requestId);
         void this.emit({
@@ -131,9 +147,11 @@ export class LiveTraceCollector {
 
     if ((this.options.mode ?? 'all') !== 'ws') {
       this.subscribe('Network.requestWillBeSent', (params) => {
-        const request = params['request'] as { url?: string; method?: string; headers?: unknown; postData?: string } | undefined;
-        const requestId = String(params['requestId'] ?? '');
-        const url = String(request?.url ?? '');
+        const request = params['request'] as
+          | { url?: string; method?: string; headers?: unknown; postData?: string }
+          | undefined;
+        const requestId = readStringOr(params['requestId']);
+        const url = request?.url ?? '';
         if (!this.matchesUrl(url)) {
           return;
         }
@@ -154,12 +172,14 @@ export class LiveTraceCollector {
       });
 
       this.subscribe('Network.responseReceived', (params) => {
-        const requestId = String(params['requestId'] ?? '');
+        const requestId = readStringOr(params['requestId']);
         if (!this.httpUrls.has(requestId)) {
           return;
         }
 
-        const response = params['response'] as { status?: number; headers?: unknown; mimeType?: string; url?: string } | undefined;
+        const response = params['response'] as
+          | { status?: number; headers?: unknown; mimeType?: string; url?: string }
+          | undefined;
         void this.emit({
           channel: 'http',
           event: 'http.response.received',
@@ -175,8 +195,8 @@ export class LiveTraceCollector {
       });
 
       this.subscribe('Network.loadingFailed', (params) => {
-        const requestId = String(params['requestId'] ?? '');
-        const url = String(params['blockedReason'] ?? this.httpUrls.get(requestId) ?? '');
+        const requestId = readStringOr(params['requestId']);
+        const url = readString(params['blockedReason']) ?? this.httpUrls.get(requestId) ?? '';
         void this.emit({
           channel: 'http',
           event: 'http.response.failed',
@@ -194,16 +214,15 @@ export class LiveTraceCollector {
     }
 
     this.subscribe('Runtime.consoleAPICalled', (params) => {
-      const type = String(params['type'] ?? 'log');
+      const type = readStringOr(params['type'], 'log');
       if (type !== 'log' && type !== 'warn' && type !== 'error') {
         return;
       }
 
-      const args = Array.isArray(params['args']) ? (params['args'] as Array<Record<string, unknown>>) : [];
-      const text = args
-        .map((entry) => String(entry['value'] ?? entry['description'] ?? ''))
-        .filter(Boolean)
-        .join(' ');
+      const args = Array.isArray(params['args'])
+        ? (params['args'] as Array<Record<string, unknown>>)
+        : [];
+      const text = args.map(formatConsoleArg).filter(Boolean).join(' ');
 
       void this.emit({
         channel: 'console',
@@ -216,7 +235,7 @@ export class LiveTraceCollector {
 
     this.subscribe('Runtime.exceptionThrown', (params) => {
       const details = (params['exceptionDetails'] ?? {}) as Record<string, unknown>;
-      const text = String(details['text'] ?? 'Runtime exception');
+      const text = readString(details['text']) ?? 'Runtime exception';
       void this.emit({
         channel: 'runtime',
         event: 'runtime.exception',
@@ -231,7 +250,7 @@ export class LiveTraceCollector {
         return;
       }
 
-      const raw = String(params['payload'] ?? '');
+      const raw = readStringOr(params['payload']);
       try {
         const payload = JSON.parse(raw) as {
           event: string;
@@ -249,8 +268,7 @@ export class LiveTraceCollector {
           summary: payload.summary ?? payload.event,
           ts: payload.ts ? new Date(payload.ts).toISOString() : undefined,
           data: payload.data ?? {},
-          url:
-            typeof payload.data?.['url'] === 'string' ? (payload.data['url'] as string) : undefined,
+          url: readString(payload.data?.['url']),
         });
       } catch {
         // ignore malformed payloads

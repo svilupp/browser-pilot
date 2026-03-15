@@ -2,8 +2,8 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { homedir, networkInterfaces } from 'node:os';
 import { join } from 'node:path';
-import { generateSessionName, getWebSocketUrl, runCLI, setup, teardown } from './setup';
 import { withRetry } from '../utils/retry';
+import { generateSessionName, getWebSocketUrl, runCLI, setup, teardown } from './setup';
 
 const SESSION_DIR = join(homedir(), '.browser-pilot', 'sessions');
 
@@ -225,8 +225,12 @@ describe('CLI env and trace regression coverage', () => {
         ]);
         expectExecSuccess(gotoResult);
 
-        expect((await runCLI(['env', 'permissions', 'grant', 'geolocation', '-s', sessionName])).exitCode).toBe(0);
-        expect((await runCLI(['env', 'permissions', 'grant', 'microphone', '-s', sessionName])).exitCode).toBe(0);
+        expect(
+          (await runCLI(['env', 'permissions', 'grant', 'geolocation', '-s', sessionName])).exitCode
+        ).toBe(0);
+        expect(
+          (await runCLI(['env', 'permissions', 'grant', 'microphone', '-s', sessionName])).exitCode
+        ).toBe(0);
         const geolocationSet = await runCLI([
           'env',
           'geolocation',
@@ -256,13 +260,7 @@ describe('CLI env and trace regression coverage', () => {
         const permissionJson = expectExecSuccess(permissionResult);
         expect(permissionJson.steps).toHaveLength(2);
 
-        const originResult = await runCLI([
-          'eval',
-          '-s',
-          sessionName,
-          '--json',
-          'location.origin',
-        ]);
+        const originResult = await runCLI(['eval', '-s', sessionName, '--json', 'location.origin']);
         expect(expectEvalResult(originResult)).toBe(new URL(loopbackBaseUrl).origin);
 
         expect((await runCLI(['env', 'visibility', 'hidden', '-s', sessionName])).exitCode).toBe(0);
@@ -281,10 +279,18 @@ describe('CLI env and trace regression coverage', () => {
         ]);
         expectExecSuccess(hiddenResult);
 
-        const hiddenState = await runCLI(['eval', '-s', sessionName, '--json', 'document.visibilityState']);
+        const hiddenState = await runCLI([
+          'eval',
+          '-s',
+          sessionName,
+          '--json',
+          'document.visibilityState',
+        ]);
         expect(expectEvalResult(hiddenState)).toBe('hidden');
 
-        expect((await runCLI(['env', 'visibility', 'visible', '-s', sessionName])).exitCode).toBe(0);
+        expect((await runCLI(['env', 'visibility', 'visible', '-s', sessionName])).exitCode).toBe(
+          0
+        );
         const visibleResult = await runCLI([
           'exec',
           '-s',
@@ -300,7 +306,13 @@ describe('CLI env and trace regression coverage', () => {
         ]);
         expectExecSuccess(visibleResult);
 
-        const visibleState = await runCLI(['eval', '-s', sessionName, '--json', 'document.visibilityState']);
+        const visibleState = await runCLI([
+          'eval',
+          '-s',
+          sessionName,
+          '--json',
+          'document.visibilityState',
+        ]);
         expect(expectEvalResult(visibleState)).toBe('visible');
       } finally {
         await cleanupSession(sessionName);
@@ -379,94 +391,103 @@ describe('CLI env and trace regression coverage', () => {
   }, 90000);
 
   test('captures websocket traffic from an already-live session in trace output', async () => {
-    await withRetry(async () => {
-      const sessionName = generateSessionName();
-      const wsMatch = `*${new URL(lanBaseUrl).host}/ws*`;
-      const tracePath = join(
-        SESSION_DIR,
-        sessionName,
-        `trace-reconnect-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jsonl`
-      );
-
-      try {
-        await connectDaemonSession(sessionName);
-
-        const initialResult = await runCLI([
-          'exec',
-          '-s',
+    await withRetry(
+      async () => {
+        const sessionName = generateSessionName();
+        const wsMatch = `*${new URL(lanBaseUrl).host}/ws*`;
+        const tracePath = join(
+          SESSION_DIR,
           sessionName,
-          '--json',
-          JSON.stringify([
-            { action: 'goto', url: lanBaseUrl },
-            {
-              action: 'waitForWsMessage',
-              match: wsMatch,
-              where: { type: 'session.ready' },
-              timeout: 5000,
-            },
-            {
-              action: 'assertTextChanged',
-              selector: '#status',
-              from: 'Connecting',
-              to: 'Live',
-              timeout: 5000,
-            },
-          ]),
-        ]);
-        const initialJson = expectExecSuccess(initialResult);
-        expect(String(initialJson.steps[1]?.result?.requestId ?? '').length).toBeGreaterThan(0);
+          `trace-reconnect-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jsonl`
+        );
 
-        const traceProc = spawnCLI([
-          'trace',
-          'start',
-          '-s',
-          sessionName,
-          '--timeout',
-          '2500',
-          '-o',
-          tracePath,
-          '--json',
-        ]);
+        try {
+          await connectDaemonSession(sessionName);
 
-        await Bun.sleep(1000);
+          const initialResult = await runCLI([
+            'exec',
+            '-s',
+            sessionName,
+            '--json',
+            JSON.stringify([
+              { action: 'goto', url: lanBaseUrl },
+              {
+                action: 'waitForWsMessage',
+                match: wsMatch,
+                where: { type: 'session.ready' },
+                timeout: 5000,
+              },
+              {
+                action: 'assertTextChanged',
+                selector: '#status',
+                from: 'Connecting',
+                to: 'Live',
+                timeout: 5000,
+              },
+            ]),
+          ]);
+          const initialJson = expectExecSuccess(initialResult);
+          expect(String(initialJson.steps[1]?.result?.requestId ?? '').length).toBeGreaterThan(0);
 
-        const traceResult = await collectProcess(traceProc);
-        expect(traceResult.exitCode).toBe(0);
-        expect(existsSync(tracePath)).toBe(true);
+          const traceProc = spawnCLI([
+            'trace',
+            'start',
+            '-s',
+            sessionName,
+            '--timeout',
+            '2500',
+            '-o',
+            tracePath,
+            '--json',
+          ]);
 
-        const traceSummaryResult = await runCLI([
-          'trace',
-          'summary',
-          tracePath,
-          '--view',
-          'ws',
-          '--json',
-        ]);
-        expect(traceSummaryResult.exitCode).toBe(0);
-        const traceSummaryJson = traceSummaryResult.json as {
-          summary?: { totalEvents?: number; connections?: unknown[] };
-        };
-        expect(Number(traceSummaryJson.summary?.totalEvents ?? 0)).toBeGreaterThan(0);
-        expect(Array.isArray(traceSummaryJson.summary?.connections)).toBe(true);
+          await Bun.sleep(1000);
 
-        const analysis = analyzeTraceWindow(tracePath);
-        expect(analysis.receivedCount).toBeGreaterThan(0);
-      } finally {
-        await cleanupSession(sessionName);
-      }
-    }, { retries: 1 });
+          const traceResult = await collectProcess(traceProc);
+          expect(traceResult.exitCode).toBe(0);
+          expect(existsSync(tracePath)).toBe(true);
+
+          const traceSummaryResult = await runCLI([
+            'trace',
+            'summary',
+            tracePath,
+            '--view',
+            'ws',
+            '--json',
+          ]);
+          expect(traceSummaryResult.exitCode).toBe(0);
+          const traceSummaryJson = traceSummaryResult.json as {
+            summary?: { totalEvents?: number; connections?: unknown[] };
+          };
+          expect(Number(traceSummaryJson.summary?.totalEvents ?? 0)).toBeGreaterThan(0);
+          expect(Array.isArray(traceSummaryJson.summary?.connections)).toBe(true);
+
+          const analysis = analyzeTraceWindow(tracePath);
+          expect(analysis.receivedCount).toBeGreaterThan(0);
+        } finally {
+          await cleanupSession(sessionName);
+        }
+      },
+      { retries: 1 }
+    );
   }, 90000);
 });
 
 async function resolveReachableHost(port: number): Promise<string> {
-  const candidates = [...new Set(
-    Object.values(networkInterfaces())
-      .flat()
-      .filter((entry): entry is NonNullable<(ReturnType<typeof networkInterfaces>[string] | undefined)>[number] =>
-        Boolean(entry && entry.family === 'IPv4' && !entry.internal)
-      )
-      .map((entry) => entry.address)
-  )];
+  const candidates = [
+    ...new Set(
+      Object.values(networkInterfaces())
+        .flat()
+        .filter(
+          (
+            entry
+          ): entry is NonNullable<
+            ReturnType<typeof networkInterfaces>[string] | undefined
+          >[number] => Boolean(entry && entry.family === 'IPv4' && !entry.internal)
+        )
+        .map((entry) => entry.address)
+    ),
+  ];
 
   for (const host of candidates) {
     try {

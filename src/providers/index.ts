@@ -10,6 +10,19 @@ export {
   type GenericProviderOptions,
   getBrowserWebSocketUrl,
 } from './generic.ts';
+export {
+  BrowserEndpointResolutionError,
+  buildLocalBrowserScanTargets,
+  type ChromeChannel,
+  type ChromeUserDataDirOptions,
+  type DiscoverLocalBrowsersOptions,
+  discoverLocalBrowsers,
+  parseDevToolsActivePortFile,
+  type ResolvedBrowserEndpoint,
+  type ResolvedBrowserSource,
+  resolveBrowserEndpoint,
+  resolveChromeUserDataDirs,
+} from './local-discovery.ts';
 export * from './types.ts';
 
 import { BrowserBaseProvider } from './browserbase.ts';

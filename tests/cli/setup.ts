@@ -14,6 +14,10 @@ export interface CLIResult {
   json?: unknown;
 }
 
+interface RunCLIOptions {
+  env?: Record<string, string | undefined>;
+}
+
 // Each CLI test file gets its own isolated harness
 let fileHarness: TestHarness | null = null;
 
@@ -23,8 +27,9 @@ let fileHarness: TestHarness | null = null;
  * Uses Bun.spawn() instead of shell template ($`...`) for reliable behavior
  * in CI environments. The shell syntax can hang in GitHub Actions.
  */
-export async function runCLI(args: string[]): Promise<CLIResult> {
+export async function runCLI(args: string[], options: RunCLIOptions = {}): Promise<CLIResult> {
   const proc = Bun.spawn(['bun', './src/cli/index.ts', ...args], {
+    env: { ...process.env, ...options.env },
     stdout: 'pipe',
     stderr: 'pipe',
     stdin: 'ignore', // Critical: don't wait for stdin in CI

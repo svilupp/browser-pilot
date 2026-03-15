@@ -124,13 +124,7 @@ const PROPERTY_ALIASES: Record<string, string> = {
 
 // --- Action rules ---
 
-type FieldType =
-  | 'string'
-  | 'string|string[]'
-  | 'number'
-  | 'boolean'
-  | 'boolean|auto'
-  | 'object';
+type FieldType = 'string' | 'string|string[]' | 'number' | 'boolean' | 'boolean|auto' | 'object';
 
 interface FieldRule {
   type: FieldType;

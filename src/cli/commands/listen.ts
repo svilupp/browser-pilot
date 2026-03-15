@@ -6,7 +6,8 @@
  */
 
 import type { CDPClient } from '../../cdp/client.ts';
-import { connect, getBrowserWebSocketUrl } from '../../index.ts';
+import { connect } from '../../index.ts';
+import { formatBrowserDiscoveryError, resolveCLIEndpoint } from '../browser-endpoint.ts';
 import {
   generateSessionId,
   getDefaultSession,
@@ -336,14 +337,14 @@ async function resolveConnection(
   // Auto-connect to local browser
   let wsUrl: string;
   try {
-    wsUrl = await getBrowserWebSocketUrl('localhost:9222');
-  } catch {
+    wsUrl = (await resolveCLIEndpoint()).wsUrl;
+  } catch (error) {
     throw new Error(
-      'Could not auto-discover browser.\n' +
-        'Either:\n' +
-        '  1. Start Chrome with: --remote-debugging-port=9222\n' +
-        '  2. Use an existing session: bp listen -s <session-id>\n' +
-        '  3. Use latest session: bp listen -s'
+      formatBrowserDiscoveryError(error, {
+        explicitHint: '  - Create a session first: bp connect --browser-url <ws-url>',
+        reuseSessionHint: 'bp listen -s <session-id>',
+        latestSessionHint: 'bp listen -s',
+      })
     );
   }
 

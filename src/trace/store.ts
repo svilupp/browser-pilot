@@ -28,11 +28,7 @@ export function appendTraceEvents(path: string, events: CanonicalTraceEvent[]): 
   }
 
   ensureTraceFile(path);
-  fs.appendFileSync(
-    path,
-    `${events.map((event) => JSON.stringify(event)).join('\n')}\n`,
-    'utf-8'
-  );
+  fs.appendFileSync(path, `${events.map((event) => JSON.stringify(event)).join('\n')}\n`, 'utf-8');
 }
 
 export function writeTraceEvents(path: string, events: CanonicalTraceEvent[]): void {

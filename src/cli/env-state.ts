@@ -1,14 +1,15 @@
 import type { CDPClient } from '../cdp/client.ts';
 
-export type StoredPermissionName =
-  | 'microphone'
-  | 'camera'
-  | 'notifications'
-  | 'geolocation';
+export type StoredPermissionName = 'microphone' | 'camera' | 'notifications' | 'geolocation';
 
 export function normalizeStoredPermission(name: string): StoredPermissionName | null {
   const value = String(name).trim().toLowerCase();
-  if (value === 'microphone' || value === 'audio' || value === 'audiocapture' || value === 'audio-capture') {
+  if (
+    value === 'microphone' ||
+    value === 'audio' ||
+    value === 'audiocapture' ||
+    value === 'audio-capture'
+  ) {
     return 'microphone';
   }
   if (value === 'camera' || value === 'videocapture' || value === 'video-capture') {
@@ -45,7 +46,9 @@ export function originFromUrl(url: string | undefined): string | undefined {
 }
 
 export function buildPermissionOverrideScript(granted: string[]): string {
-  const normalized = [...new Set(granted.map((value) => normalizeStoredPermission(value)).filter(Boolean))];
+  const normalized = [
+    ...new Set(granted.map((value) => normalizeStoredPermission(value)).filter(Boolean)),
+  ];
   return `
 (() => {
   const granted = ${JSON.stringify(normalized)};
@@ -292,7 +295,9 @@ export async function applyPermissionState(
   origin: string | undefined,
   granted: string[]
 ): Promise<void> {
-  const protocolPermissions = [...new Set(granted.map((value) => toProtocolPermission(value)).filter(Boolean))];
+  const protocolPermissions = [
+    ...new Set(granted.map((value) => toProtocolPermission(value)).filter(Boolean)),
+  ];
 
   if (protocolPermissions.length > 0) {
     await cdp.send('Browser.grantPermissions', {

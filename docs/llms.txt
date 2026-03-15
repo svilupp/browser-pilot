@@ -16,7 +16,7 @@ Automation-first browser control for agents.
 Inspect and act:
 
 ```bash
-bp connect --provider generic --name dev
+bp connect --name dev
 bp snapshot -i -s dev
 bp exec -s dev '[{"action":"click","selector":"ref:e4"}]'
 ```

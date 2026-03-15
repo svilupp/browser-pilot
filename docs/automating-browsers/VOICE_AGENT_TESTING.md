@@ -9,10 +9,12 @@ Use the surfaces by job:
 - `record --profile voice` for reusable evidence
 - `env` for permissions, network, and visibility tests
 
+For local Chrome on Chrome 144+, try plain `bp connect` first after enabling remote debugging in `chrome://inspect/#remote-debugging`. Only add `--channel` or `--user-data-dir` if auto-discovery is ambiguous.
+
 ## Minimal working flow
 
 ```bash
-bp connect --provider generic --name vt
+bp connect --name vt
 bp audio setup -s vt
 bp exec -s vt '{"action":"goto","url":"https://my-voice-app.com"}'
 bp audio check -s vt

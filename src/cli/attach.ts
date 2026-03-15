@@ -20,10 +20,10 @@ import {
 } from './env-state.ts';
 import {
   deleteSession,
+  type EnvSettings,
   getDefaultSession,
   getSessionFilePath,
   loadSession,
-  type EnvSettings,
   type SessionData,
 } from './session.ts';
 

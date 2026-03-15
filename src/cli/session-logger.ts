@@ -91,7 +91,9 @@ export class SessionLogger {
     this.logTrace(this.compatibilityEntryToTrace(fullEntry));
   }
 
-  logTrace(event: Partial<CanonicalTraceEvent> & Pick<CanonicalTraceEvent, 'channel' | 'event' | 'summary'>): void {
+  logTrace(
+    event: Partial<CanonicalTraceEvent> & Pick<CanonicalTraceEvent, 'channel' | 'event' | 'summary'>
+  ): void {
     const normalized = normalizeTraceEvent({
       traceId: event.traceId ?? createTraceId(event.channel),
       sessionId: this.sessionId,

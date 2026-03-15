@@ -2,10 +2,12 @@
 
 Use this guide for websocket apps, voice apps, dashboards, and any session where timing and causality matter.
 
+For local Chrome on Chrome 144+, try plain `bp connect` first after enabling remote debugging in `chrome://inspect/#remote-debugging`. Only add `--channel` or `--user-data-dir` if auto-discovery is ambiguous.
+
 ## Baseline capture
 
 ```bash
-bp connect --provider generic --name realtime
+bp connect --name realtime
 bp trace start -s realtime --timeout 30000
 # reproduce the issue
 bp trace summary -s realtime --view session

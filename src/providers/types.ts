@@ -2,6 +2,8 @@
  * Provider type definitions
  */
 
+import type { ChromeChannel } from './local-discovery.ts';
+
 export interface ProviderSession {
   /** WebSocket URL to connect to CDP */
   wsUrl: string;
@@ -50,6 +52,10 @@ export interface ConnectOptions {
   projectId?: string;
   /** Direct WebSocket URL (for generic provider) */
   wsUrl?: string;
+  /** Preferred local Chrome channel for auto-discovery (generic provider) */
+  channel?: ChromeChannel;
+  /** Explicit local Chrome user data dir for auto-discovery (generic provider) */
+  userDataDir?: string;
   /** Session creation options */
   session?: CreateSessionOptions;
   /** Enable debug logging */

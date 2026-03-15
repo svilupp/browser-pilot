@@ -56,14 +56,20 @@ jobs:
         run: bun install
 
       - name: Install Chrome
-        uses: browser-actions/setup-chrome@v1
+        id: setup-chrome
+        uses: browser-actions/setup-chrome@v2
         with:
-          chrome-version: stable
+          chrome-version: 147
 
       - name: Verify Chrome installation
         run: |
-          which google-chrome || which chromium-browser || echo "Chrome not found in PATH"
-          google-chrome --version || chromium-browser --version || echo "Could not get version"
+          echo "Chrome path: $CHROME_PATH"
+          echo "Chrome version (action): $CHROME_VERSION_UNDER_TEST"
+          "$CHROME_PATH" --version
+          test "$("$CHROME_PATH" --version | grep -o '[0-9]\+' | head -1)" = "147"
+        env:
+          CHROME_PATH: ${{ steps.setup-chrome.outputs.chrome-path }}
+          CHROME_VERSION_UNDER_TEST: ${{ steps.setup-chrome.outputs.chrome-version }}
 
       - name: Run integration tests
         run: bun test:integration
@@ -71,6 +77,8 @@ jobs:
           CI: true
           # Increase timeout for CI environment
           TEST_TIMEOUT: 60000
+          CHROME_PATH: ${{ steps.setup-chrome.outputs.chrome-path }}
+          BROWSER_PILOT_CHROME_PATH: ${{ steps.setup-chrome.outputs.chrome-path }}
 
       - name: Upload screenshots on failure
         if: failure()
@@ -96,15 +104,28 @@ jobs:
         run: bun install
 
       - name: Install Chrome
-        uses: browser-actions/setup-chrome@v1
+        id: setup-chrome
+        uses: browser-actions/setup-chrome@v2
         with:
-          chrome-version: stable
+          chrome-version: 147
+
+      - name: Verify Chrome installation
+        run: |
+          echo "Chrome path: $CHROME_PATH"
+          echo "Chrome version (action): $CHROME_VERSION_UNDER_TEST"
+          "$CHROME_PATH" --version
+          test "$("$CHROME_PATH" --version | grep -o '[0-9]\+' | head -1)" = "147"
+        env:
+          CHROME_PATH: ${{ steps.setup-chrome.outputs.chrome-path }}
+          CHROME_VERSION_UNDER_TEST: ${{ steps.setup-chrome.outputs.chrome-version }}
 
       - name: Run CLI tests
         run: bun test:cli
         env:
           CI: true
           TEST_TIMEOUT: 60000
+          CHROME_PATH: ${{ steps.setup-chrome.outputs.chrome-path }}
+          BROWSER_PILOT_CHROME_PATH: ${{ steps.setup-chrome.outputs.chrome-path }}
 
       - name: Upload screenshots on failure
         if: failure()

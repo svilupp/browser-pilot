@@ -106,7 +106,7 @@ export interface Step {
   option?: string | string[];
 
   /** Custom select: match type */
-  match?: 'text' | 'value' | 'contains' | string;
+  match?: string;
 
   /** Structured matcher for trace-backed waits */
   where?: Record<string, unknown>;

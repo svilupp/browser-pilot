@@ -6,6 +6,7 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { DaemonInfo } from '../daemon/types.ts';
+import type { ChromeChannel, ResolvedBrowserSource } from '../providers/local-discovery.ts';
 
 export type ProviderType = 'browserbase' | 'browserless' | 'generic';
 
@@ -73,6 +74,9 @@ export interface EnvSettings {
 export interface SessionMetadata {
   refCache?: RefCache;
   logStats?: LogStats;
+  connectionSource?: ResolvedBrowserSource;
+  resolvedChannel?: ChromeChannel | 'custom';
+  resolvedUserDataDir?: string;
   /** Session-level recording settings (set via `bp connect --record`) */
   record?: RecordSettings;
   env?: EnvSettings;

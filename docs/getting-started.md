@@ -34,18 +34,15 @@ await browser.close();
 
 ### Option 2: Using Local Chrome
 
-Start Chrome with remote debugging enabled:
+Preferred on Chrome 144+:
 
 ```bash
-# macOS
-/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --remote-debugging-port=9222
-
-# Linux
-google-chrome --remote-debugging-port=9222
-
-# Windows
-"C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222
+# Start Chrome normally, then enable remote debugging in:
+# chrome://inspect/#remote-debugging
+bp connect
 ```
+
+Tip: try plain `bp connect` first. Only add `--channel` or `--user-data-dir` if more than one local Chrome profile is eligible.
 
 Then connect:
 
@@ -54,13 +51,28 @@ import { connect } from 'browser-pilot';
 
 const browser = await connect({
   provider: 'generic',
-  // Auto-discovers the WebSocket URL from localhost:9222
+  // Auto-discovers a local Chrome endpoint
 });
 
 const page = await browser.page();
 await page.goto('https://example.com');
 
 await browser.close();
+```
+
+If more than one Chrome profile is eligible, pass `channel: 'beta'` / `--channel beta` or set `userDataDir` / `--user-data-dir`.
+
+Legacy/manual fallback still works with a separate debug profile:
+
+```bash
+# macOS
+/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --remote-debugging-port=9222 --user-data-dir=/tmp/browser-pilot-profile
+
+# Linux
+google-chrome --remote-debugging-port=9222 --user-data-dir=/tmp/browser-pilot-profile
+
+# Windows
+"C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222 --user-data-dir=%TEMP%\browser-pilot-profile
 ```
 
 ## Your First Automation
@@ -104,7 +116,7 @@ The CLI is great for quick testing and AI agent integrations:
 
 ```bash
 # Connect to a browser and create a session (spawns daemon for fast subsequent commands)
-bp connect --provider generic --name my-session
+bp connect --name my-session
 
 # Navigate to a page
 bp exec -s my-session '{"action":"goto","url":"https://example.com"}'

@@ -117,7 +117,7 @@ Use `trace` when the question is temporal or causal. Use `record derive` when th
 If you already have a workflow and want evidence of replay, use `exec --record`:
 
 ```bash
-bp connect --provider generic --name validation --record
+bp connect --name validation --record
 bp exec -s validation -f workflow.json
 bp exec -s validation '[{"action":"assertUrl","expect":"/dashboard"}]'
 ```

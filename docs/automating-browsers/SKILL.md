@@ -1,12 +1,14 @@
 ---
 name: automate-browser-actions-and-testing
 description: Browser automation skill using browser-pilot CLI. Use this when you need to control a web browser, inspect a page, capture a workflow, trace a realtime issue, or exercise voice and environment conditions.
-compatibility: Requires browser-pilot CLI (bp). For local Chrome, start Chrome with --remote-debugging-port=9222.
+compatibility: Requires browser-pilot CLI (bp). For local Chrome on Chrome 144+, enable remote debugging in chrome://inspect/#remote-debugging before running bp connect.
 ---
 
 # Browser Automation with browser-pilot
 
 Route the task before choosing commands.
+
+For local Chrome on Chrome 144+, try plain `bp connect` first after enabling remote debugging in `chrome://inspect/#remote-debugging`. Only narrow with `--channel` or `--user-data-dir` if auto-discovery is ambiguous.
 
 ## Routing tree
 
@@ -19,13 +21,15 @@ Route the task before choosing commands.
 ## Default automation workflow
 
 ```bash
-bp connect --provider generic --name dev
+bp connect --name dev
 bp snapshot -i -s dev
 bp exec -s dev '[
   {"action":"fill","selector":"ref:e5","value":"user@example.com"},
   {"action":"click","selector":"ref:e7"}
 ]'
 ```
+
+If multiple Chrome profiles are eligible, use `bp connect --channel beta` or `bp connect --user-data-dir <path>`.
 
 Rules:
 

@@ -7,10 +7,12 @@ Browser Pilot separates voice work into four jobs:
 - `trace summary --view voice` for explanation
 - `env` for permissions, visibility, and network failure modes
 
+For local Chrome on Chrome 144+, try plain `bp connect` first after enabling remote debugging in `chrome://inspect/#remote-debugging`. Only add `--channel` or `--user-data-dir` if local auto-discovery is ambiguous.
+
 ## Baseline workflow
 
 ```bash
-bp connect --provider generic --name voice-test
+bp connect --name voice-test
 bp audio setup -s voice-test
 bp exec -s voice-test '{"action":"goto","url":"https://my-voice-app.com"}'
 bp audio check -s voice-test
@@ -23,7 +25,7 @@ Use `bp audio check` as the first diagnostic command.
 ## Click-to-start apps
 
 ```bash
-bp connect --provider generic --name vt
+bp connect --name vt
 bp audio setup -s vt
 bp exec -s vt '{"action":"goto","url":"https://my-voice-app.com"}'
 bp snapshot -i -s vt
@@ -35,7 +37,7 @@ bp audio roundtrip -s vt -i prompt.wav --transcribe -o response.wav
 ## Auto-start apps
 
 ```bash
-bp connect --provider generic --name vt
+bp connect --name vt
 bp audio setup -s vt
 bp exec -s vt '{"action":"goto","url":"https://my-voice-app.com"}'
 bp audio check -s vt
