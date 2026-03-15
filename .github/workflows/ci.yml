@@ -11,8 +11,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  pre-commit:
-    name: Pre-commit checks
+  lint:
+    name: Lint & Type Check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -21,13 +21,11 @@ jobs:
         with:
           bun-version: latest
       - run: bun install
-      - name: Run pre-commit hooks
-        run: bun run harden:quick
+      - run: bun run harden:quick
 
   unit:
-    name: Unit & Fitness tests
+    name: Unit & Fitness Tests
     runs-on: ubuntu-latest
-    needs: pre-commit
     steps:
       - uses: actions/checkout@v4
       - uses: j178/prek-action@v1
@@ -35,15 +33,12 @@ jobs:
         with:
           bun-version: latest
       - run: bun install
-      - name: Unit tests
-        run: bun test tests/unit
-      - name: Fitness tests
-        run: bun test tests/fitness
+      - run: bun test tests/unit
+      - run: bun test tests/fitness
 
   browser:
-    name: Integration & CLI tests
+    name: Integration & CLI Tests
     runs-on: ubuntu-latest
-    needs: pre-commit
     steps:
       - uses: actions/checkout@v4
       - uses: j178/prek-action@v1
@@ -51,34 +46,21 @@ jobs:
         with:
           bun-version: latest
       - run: bun install
-
       - name: Install Chrome
         id: setup-chrome
         uses: browser-actions/setup-chrome@v2
         with:
           chrome-version: 147
-
-      - name: Verify Chrome
-        run: |
-          echo "Chrome path: $CHROME_PATH"
-          "$CHROME_PATH" --version
-        env:
-          CHROME_PATH: ${{ steps.setup-chrome.outputs.chrome-path }}
-
-      - name: Integration tests
-        run: bun test tests/integration --timeout 30000
+      - run: bun test tests/integration --timeout 30000
         env:
           CI: true
           CHROME_PATH: ${{ steps.setup-chrome.outputs.chrome-path }}
           BROWSER_PILOT_CHROME_PATH: ${{ steps.setup-chrome.outputs.chrome-path }}
-
-      - name: CLI tests
-        run: bun test tests/cli --timeout 30000
+      - run: bun test tests/cli --timeout 30000
         env:
           CI: true
           CHROME_PATH: ${{ steps.setup-chrome.outputs.chrome-path }}
           BROWSER_PILOT_CHROME_PATH: ${{ steps.setup-chrome.outputs.chrome-path }}
-
       - name: Upload failure artifacts
         if: failure()
         uses: actions/upload-artifact@v4
@@ -92,9 +74,8 @@ jobs:
           if-no-files-found: ignore
 
   build:
-    name: Build & API check
+    name: Build & API Check
     runs-on: ubuntu-latest
-    needs: pre-commit
     steps:
       - uses: actions/checkout@v4
       - uses: j178/prek-action@v1
