@@ -3,7 +3,7 @@
 ## [0.0.16] - 2026-03-14
 
 - Added Chrome 147 `DevToolsActivePort` auto-discovery for plain `bp connect`, pinned CI/harness coverage to Chrome 147, and updated docs/skills to recommend trying auto-discovery first.
-- Added outcome-based execution, delta/review surfaces, semantic fingerprints, smart widget primitives (combobox, upload, overlay detection), safe submit, target pinning, workflow summaries, and safety fitness tests — completing all 8 phases of the improvement plan.
+- Added outcome-based execution, delta/review surfaces, semantic fingerprints, smart widget primitives (combobox, upload, overlay detection), safe submit, target pinning, workflow summaries, and safety fitness tests
 
 ## [0.0.15] - 2026-03-12
 
