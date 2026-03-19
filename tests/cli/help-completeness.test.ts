@@ -6,7 +6,12 @@
  */
 
 import { describe, expect, test } from 'bun:test';
+import { ROOT_HELP_COMMANDS } from '../../src/cli/command-registry.ts';
 import { runCLI } from './setup.ts';
+
+function countOccurrences(text: string, needle: string): number {
+  return text.split(needle).length - 1;
+}
 
 describe('CLI Help Completeness', () => {
   test('bp --help lists all commands', async () => {
@@ -15,29 +20,8 @@ describe('CLI Help Completeness', () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('bp - automation-first browser CLI for agents');
 
-    // All commands should be listed
-    const requiredCommands = [
-      'quickstart',
-      'connect',
-      'exec',
-      'snapshot',
-      'record',
-      'trace',
-      'audio',
-      'env',
-      'run',
-      'page',
-      'forms',
-      'targets',
-      'daemon',
-      'list',
-      'close',
-      'clean',
-      'actions',
-    ];
-
-    for (const cmd of requiredCommands) {
-      expect(result.stdout).toContain(cmd);
+    for (const command of ROOT_HELP_COMMANDS) {
+      expect(result.stdout).toContain(command.name);
     }
   });
 
@@ -48,15 +32,15 @@ describe('CLI Help Completeness', () => {
     expect(result.stdout).toContain('--session');
     expect(result.stdout).toContain('-f');
     expect(result.stdout).toContain('--format');
+    expect(result.stdout).toContain('--pretty');
     expect(result.stdout).toContain('--trace');
+    expect(result.stdout).toContain('--version');
   });
 
-  test('bp --help shows --dialog option under Exec Options', async () => {
+  test('bp --help excludes command-local exec options', async () => {
     const result = await runCLI(['--help']);
 
-    expect(result.stdout).toContain('--dialog');
-    expect(result.stdout).toContain('accept');
-    expect(result.stdout).toContain('dismiss');
+    expect(result.stdout).not.toContain('--dialog');
   });
 
   test('bp --help shows examples', async () => {
@@ -65,12 +49,25 @@ describe('CLI Help Completeness', () => {
     expect(result.stdout).toContain('Golden paths:');
     expect(result.stdout).toContain('bp connect');
     expect(result.stdout).toContain('bp exec');
+    expect(result.stdout).toContain('bp text');
+    expect(result.stdout).toContain('bp review');
   });
 
   test('bp --help mentions bp actions for reference', async () => {
     const result = await runCLI(['--help']);
 
     expect(result.stdout).toContain('actions     Complete action reference');
+  });
+
+  test('bp --version prints only version and exits 0', async () => {
+    const expected = (await Bun.file(new URL('../../package.json', import.meta.url)).json()) as {
+      version: string;
+    };
+    const result = await runCLI(['--version']);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe(`${expected.version}\n`);
+    expect(result.stderr).toBe('');
   });
 });
 
@@ -240,10 +237,20 @@ describe('Error Messages', () => {
 });
 
 describe('Command Help', () => {
+  test('bp snapshot --help prefers --view and avoids duplicate -f meaning', async () => {
+    const result = await runCLI(['snapshot', '--help']);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('--view <type>');
+    expect(countOccurrences(result.stdout, '-f, --format')).toBe(1);
+    expect(result.stdout).not.toContain('Output format: json | pretty');
+  });
+
   test('bp exec --help documents replay recording options', async () => {
     const result = await runCLI(['exec', '--help']);
 
     expect(result.exitCode).toBe(0);
+    expect(countOccurrences(result.stdout, '-f, --format')).toBe(0);
     expect(result.stdout).toContain('--record');
     expect(result.stdout).toContain('--record-dir');
     expect(result.stdout).toContain('--record-format');
@@ -256,6 +263,8 @@ describe('Command Help', () => {
     const result = await runCLI(['connect', '--help']);
 
     expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('--browser-url');
+    expect(result.stdout).toContain('--page-url');
     expect(result.stdout).toContain('--channel');
     expect(result.stdout).toContain('--user-data-dir');
     expect(result.stdout).toContain('Auto-connect to local Chrome');
@@ -263,6 +272,33 @@ describe('Command Help', () => {
     expect(result.stdout).toContain('--record-format');
     expect(result.stdout).toContain('--record-quality');
     expect(result.stdout).toContain('--no-highlights');
+    expect(result.stdout).not.toContain('--new-tab --url');
+  });
+
+  test('bp eval --help keeps file input and treats formatting as global long-form only', async () => {
+    const result = await runCLI(['eval', '--help']);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('-f, --file <path>');
+    expect(countOccurrences(result.stdout, '-f, --format')).toBe(0);
+    expect(result.stdout).toContain('--debug');
+  });
+
+  test('bp screenshot --help documents image format without global -f collision', async () => {
+    const result = await runCLI(['screenshot', '--help']);
+
+    expect(result.exitCode).toBe(0);
+    expect(countOccurrences(result.stdout, '-f, --format')).toBe(1);
+    expect(result.stdout).toContain('Image format: png | jpeg | webp');
+    expect(result.stdout).not.toContain('Output format: json | pretty');
+  });
+
+  test('bp text --help documents --selector only', async () => {
+    const result = await runCLI(['text', '--help']);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('--selector <selector>');
+    expect(result.stdout).not.toContain('-s, --selector');
   });
 
   test('bp clean --help documents size-based cleanup', async () => {

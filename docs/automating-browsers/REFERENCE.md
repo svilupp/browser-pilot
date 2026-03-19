@@ -12,6 +12,14 @@ This reference is for command and action details. For workflow routing, see [SKI
 - Review structured state: `review`
 - Change browser conditions: `env`
 
+## If the task is...
+
+- Find what to click: `bp snapshot -i`
+- Read long-form copy: `bp text`
+- Review structured business state: `bp review`
+- Debug selector failure: `bp diagnose`
+- Drop to raw JavaScript only as an escape hatch: `bp eval`
+
 ## Action DSL reference
 
 ### Navigation and interaction
@@ -43,7 +51,9 @@ This reference is for command and action details. For workflow routing, see [SKI
 {"action":"evaluate","value":"document.title"}
 ```
 
-Prefer `bp eval 'document.title'` for ad hoc inspection instead of wrapping raw JS in action JSON.
+`waitFor: "networkIdle"` only means transport quiet. On hydrated apps, follow navigation with `bp snapshot -i`, `bp text`, `bp review`, or explicit assertions before trusting the page state.
+
+Prefer `bp eval 'document.title'` only as an escape hatch for ad hoc inspection instead of wrapping raw JS in action JSON.
 
 ### Assertions
 
@@ -156,6 +166,15 @@ bp snapshot -i -s dev
 bp exec -s dev '[{"action":"click","selector":"ref:e4"}]'
 ```
 
+### Scope noisy pages before reading
+
+```bash
+bp text -s dev --selector main
+bp page -s dev
+```
+
+Use `bp text --selector ...` when storefront nav, drawers, or footer controls swamp the page-level output.
+
 ### Realtime validation
 
 ```bash
@@ -164,6 +183,14 @@ bp exec -s dev '[
   {"action":"assertTextChanged","selector":"#status","from":"Connecting","to":"Live"},
   {"action":"assertNoConsoleErrors","windowMs":500}
 ]'
+```
+
+### Start trace analysis wide, then narrow
+
+```bash
+bp trace start -s dev --timeout 20000
+bp trace summary -s dev --view session
+bp trace summary -s dev --view console
 ```
 
 ### Voice validation

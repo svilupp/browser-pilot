@@ -28,10 +28,12 @@ Subcommands:
   logs      Show daemon log output
 
 Options:
-  -s, --session <id>   Target session (default: most recent)
-  -f, --format <fmt>   Output format: json | pretty (default: pretty)
-  --json               Alias for -f json
   -n, --lines <n>      Number of log lines to show (default: 50)
+
+Global options:
+  -s, --session <id>   Target session (default: most recent)
+  --json               Output JSON
+  --pretty             Output readable text (default)
   -h, --help           Show this help
 
 Examples:

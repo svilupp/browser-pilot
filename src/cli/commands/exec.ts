@@ -30,14 +30,10 @@ Usage:
   bp exec -f <file>             Execute action(s) from a JSON file
   echo '<json>' | bp exec       Execute action(s) from stdin
 
-Options:
-  -f, --file <path>    Read actions from a JSON file
-  -o, --output <path>  Write command output to a file instead of stdout
-  --dialog <mode>      Handle native dialogs: accept | dismiss
-  -s, --session <id>   Session to use (default: most recent)
-  -f, --format <fmt>   Output format: json | pretty (default: pretty)
-  --json               Alias for -f json
-  --debug              Enable CDP transport debugging (global option)
+Local options:
+  -f, --file <path>     Read actions from a JSON file
+  -o, --output <path>   Write command output to a file instead of stdout
+  --dialog <mode>       Handle native dialogs: accept | dismiss
 
 Recording:
   --record                    Enable screenshot recording
@@ -47,6 +43,11 @@ Recording:
   --no-highlights             Disable visual highlights on screenshots
                               Sensitive fields (passwords, OTPs, card inputs) are redacted
 
+Global options:
+  -s, --session <id>   Session to use (default: most recent)
+  --json               Output JSON
+  --pretty             Output readable text (default)
+  --debug              Enable CDP transport debugging
   -h, --help           Show this help
 
 Examples:

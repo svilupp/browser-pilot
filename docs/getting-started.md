@@ -121,12 +121,18 @@ bp connect --name my-session
 # Navigate to a page
 bp exec -s my-session '{"action":"goto","url":"https://example.com"}'
 
-# Get the page content
-bp snapshot -s my-session --format text
+# Find actionable refs
+bp snapshot -i -s my-session
+
+# Read page copy or verify business state
+bp text -s my-session --selector main
+bp review -s my-session --json
 
 # Clean up
 bp close -s my-session
 ```
+
+Use `bp diagnose -s my-session '<selector>'` when targeting fails, and keep `bp eval` as a last-resort escape hatch.
 
 ## Next Steps
 

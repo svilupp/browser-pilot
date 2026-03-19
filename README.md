@@ -12,6 +12,7 @@ Browser Pilot now teaches one workflow model:
 
 - inspect the page
 - act in the browser
+- review structured business state
 - record a manual workflow
 - trace behavior over time
 - exercise voice/media and browser conditions
@@ -52,16 +53,22 @@ Legacy/manual fallback still works with a separate debug profile:
 | Job | Primary commands |
 | --- | --- |
 | Inspect page state | `snapshot`, `page`, `forms`, `text`, `targets`, `diagnose` |
+| Review structured state | `review` |
 | Act in the browser | `exec`, `run` |
 | Capture a human demo | `record` |
 | Investigate behavior over time | `trace` |
 | Exercise voice/media | `audio` |
 | Change browser conditions | `env` |
 
+Start with `bp --help` to see the routed command tree and `bp --version` to confirm the CLI build.
+
+Use `bp snapshot -i` to find clickable/fillable refs, `bp text` for long-form copy, `bp review` for structured business outcomes, and `bp diagnose` when targeting fails. Use `bp eval` only as an escape hatch.
+
 ## Golden path 1: automate a page
 
 ```bash
 bp connect --name dev
+bp exec -s dev '{"action":"goto","url":"https://example.com"}'
 bp snapshot -i -s dev
 bp exec -s dev '[
   {"action":"fill","selector":"ref:e5","value":"user@example.com"},
@@ -71,6 +78,21 @@ bp exec -s dev '[
 ```
 
 Use `bp snapshot -i` first. Refs are the default targeting strategy.
+
+For reading or verification after actions:
+
+```bash
+bp text -s dev --selector main
+bp review -s dev --json
+bp diagnose -s dev 'submit'
+```
+
+Best practices from real usage:
+
+- `bp page` is a compact overview. It caches the refs it shows, but use `bp snapshot -i` when you need the full actionable list.
+- On commerce and content-heavy sites, scope reading with `bp text --selector main` to avoid nav, drawers, and footer noise.
+- `bp review` works best on confirmations, detail pages, tables, alerts, and key-value layouts. It is usually the wrong first read on catalog grids.
+- After `bp trace start`, begin with `bp trace summary --view session` before narrower views like `console` or `ws`.
 
 ## Golden path 2: capture a manual workflow and derive automation
 

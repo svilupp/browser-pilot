@@ -27,7 +27,7 @@ describe.skipIf(!!process.env['CI'])('CLI Page Tools', () => {
         '--browser-url',
         wsUrl,
         '--new-tab',
-        '--url',
+        '--page-url',
         `${baseUrl}/basic.html`,
         '--name',
         sessionName,
@@ -37,6 +37,95 @@ describe.skipIf(!!process.env['CI'])('CLI Page Tools', () => {
 
       expect(connectResult.exitCode).toBe(0);
       expect((connectResult.json as { currentUrl?: string }).currentUrl).toContain('basic.html');
+
+      await runCLI(['close', '-s', sessionName]).catch(() => {});
+    });
+  }, 60000);
+
+  test('bp page caches refs so they are reusable in later exec calls', async () => {
+    const sessionName = generateSessionName();
+
+    await withRetry(async () => {
+      const wsUrl = await getWebSocketUrl();
+      const baseUrl = getBaseUrl();
+
+      await runCLI(['connect', '--provider', 'generic', '--url', wsUrl, '--name', sessionName]);
+      await runCLI([
+        'exec',
+        '-s',
+        sessionName,
+        JSON.stringify({ action: 'goto', url: `${baseUrl}/form.html` }),
+      ]);
+
+      const pageResult = await runCLI(['page', '-s', sessionName, '--json']);
+      expect(pageResult.exitCode).toBe(0);
+
+      const summary = pageResult.json as {
+        interactiveElements: Array<{ ref: string; role: string; name: string }>;
+      };
+      const nameField = summary.interactiveElements.find(
+        (element) => element.role === 'textbox' && element.name.includes('Name')
+      );
+      expect(nameField).toBeDefined();
+
+      const execResult = await runCLI([
+        'exec',
+        '-s',
+        sessionName,
+        '--json',
+        JSON.stringify({
+          action: 'fill',
+          selector: `ref:${nameField!.ref}`,
+          value: 'Alice',
+        }),
+      ]);
+
+      expect(execResult.exitCode).toBe(0);
+      expect(execResult.json).toMatchObject({
+        success: true,
+        steps: [expect.objectContaining({ success: true, selectorUsed: `ref:${nameField!.ref}` })],
+      });
+
+      await runCLI(['close', '-s', sessionName]).catch(() => {});
+    });
+  }, 60000);
+
+  test('bp page preserves unchecked state as booleans', async () => {
+    const sessionName = generateSessionName();
+
+    await withRetry(async () => {
+      const wsUrl = await getWebSocketUrl();
+      const baseUrl = getBaseUrl();
+
+      await runCLI(['connect', '--provider', 'generic', '--url', wsUrl, '--name', sessionName]);
+      await runCLI([
+        'exec',
+        '-s',
+        sessionName,
+        JSON.stringify({ action: 'goto', url: `${baseUrl}/checkboxes.html` }),
+      ]);
+
+      const result = await runCLI(['page', '-s', sessionName, '--json']);
+      expect(result.exitCode).toBe(0);
+
+      const summary = result.json as {
+        interactiveElements: Array<{ name: string; role: string; checked?: boolean }>;
+      };
+
+      expect(summary.interactiveElements).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            role: 'checkbox',
+            name: 'Subscribe to newsletter',
+            checked: false,
+          }),
+          expect.objectContaining({
+            role: 'radio',
+            name: 'Email',
+            checked: false,
+          }),
+        ])
+      );
 
       await runCLI(['close', '-s', sessionName]).catch(() => {});
     });

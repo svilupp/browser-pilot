@@ -21,21 +21,24 @@ Common mistake:
 Usage:
   bp text [options]
 
-Options:
-  --selector <sel>     Extract text from a specific element (default: entire page)
-  -s, --session <id>   Session to use (default: most recent)
-  -f, --format <fmt>   Output format: json | pretty (default: pretty)
-  --json               Alias for -f json
-  --debug              Enable CDP transport debugging (global option)
-  -h, --help           Show this help
+Local options:
+  --selector <selector>  Extract text from a specific element (default: entire page)
+
+Global options:
+  -s, --session <id>     Session to use (default: most recent)
+  --json                 Output JSON with text, URL, and selector
+  --pretty               Output readable text only (default)
+  --debug                Enable CDP transport debugging
+  -h, --help             Show this help
 
 Examples:
   bp text                          # Extract all text from the page
   bp text --selector '#main'       # Extract text from #main element only
-  bp text --json                   # Output as JSON with URL and selector info
+  bp text -s dev --json            # Output JSON with URL and selector info
 
 Likely next commands:
   bp snapshot -i
+  bp review --json
   bp exec '[{"action":"assertText","expect":"..."}]'
 `.trimEnd();
 
@@ -50,7 +53,7 @@ function parseTextArgs(args: string[]): TextOptions {
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]!;
 
-    if (arg === '--selector' || arg === '-s') {
+    if (arg === '--selector') {
       options.selector = args[++i];
     } else if (arg === '-h' || arg === '--help') {
       options.help = true;
@@ -58,6 +61,17 @@ function parseTextArgs(args: string[]): TextOptions {
   }
 
   return options;
+}
+
+function looksLikeSelector(value: string): boolean {
+  return (
+    value.startsWith('#') ||
+    value.startsWith('.') ||
+    value.startsWith('[') ||
+    value.startsWith('/') ||
+    value.startsWith('ref:') ||
+    value.includes('>')
+  );
 }
 
 export async function textCommand(
@@ -74,7 +88,16 @@ export async function textCommand(
   // Get session
   let session: SessionData | null;
   if (globalOptions.session) {
-    session = await loadSession(globalOptions.session);
+    try {
+      session = await loadSession(globalOptions.session);
+    } catch (error) {
+      if (!options.selector && looksLikeSelector(globalOptions.session)) {
+        throw new Error(
+          `bp text uses --selector for element targeting. "-s" is reserved for sessions.\n\nTry: bp text --selector ${JSON.stringify(globalOptions.session)}`
+        );
+      }
+      throw error;
+    }
   } else {
     session = await getDefaultSession();
     if (!session) {

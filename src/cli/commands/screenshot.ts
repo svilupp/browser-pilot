@@ -9,17 +9,26 @@ import { getDefaultSession, loadSession, type SessionData } from '../session.ts'
 const SCREENSHOT_HELP = `
 bp screenshot - Take a screenshot of the current page
 
+When to use:
+  You need a visual artifact, regression evidence, or a screenshot to attach elsewhere.
+
+When not to use:
+  You need readable copy or structured business data. Use \`bp text\`, \`bp page\`, or \`bp review\`.
+
 Usage:
   bp screenshot [options]
 
-Options:
+Local options:
   -o, --output <path>    Save screenshot to file (default: print base64 to stdout)
   -f, --format <type>    Image format: png | jpeg | webp (default: png)
   -q, --quality <n>      Image quality 0-100 (jpeg/webp only)
   --full-page            Capture the full scrollable page
+
+Global options:
   -s, --session <id>     Session to use (default: most recent)
-  --json                 Output as JSON (base64 data + metadata)
-  --trace                Enable debug tracing
+  --json                 Output JSON (base64 data + metadata)
+  --pretty               Output readable text for file writes (default)
+  --debug                Enable CDP transport debugging
   -h, --help             Show this help
 
 Examples:

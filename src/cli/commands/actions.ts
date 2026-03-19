@@ -201,7 +201,7 @@ EXAMPLES
   ]'
 
   # Use ref from snapshot
-  bp snapshot --format text  # Note the refs
+  bp snapshot -i  # Note the refs
   bp exec '{"action":"click","selector":"ref:e4"}'
 
   # Scroll and wait

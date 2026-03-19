@@ -23,18 +23,30 @@ import {
 const CONNECT_HELP = `
 bp connect - Create or resume a browser session
 
+When to use:
+  Create a session before running inspect, exec, record, trace, audio, or env commands.
+
+When not to use:
+  You already have a session and only need to open a page. Use \`bp exec '{"action":"goto","url":"..."}'\`.
+
+Browser and page URL guidance:
+  Use \`--browser-url\` for a DevTools WebSocket endpoint.
+  Use \`--page-url\` to open a page in the attached tab or a new tab.
+  \`--url\` remains for compatibility and is ambiguous when paired with \`--new-tab\`.
+
 Usage:
   bp connect [options]
 
-Options:
+Local options:
   -p, --provider <type>   Provider: generic | browserbase | browserless (default: generic)
-  --url <value>           Browser WebSocket URL, or page URL when used with --new-tab
-  --browser-url <ws-url>  Explicit browser WebSocket URL
+  --browser-url <ws-url>  Explicit browser WebSocket URL (preferred)
+  --page-url <url>        Page URL to open in the attached tab/new tab (preferred)
+  --url <value>           Compatibility shorthand; browser URL, or page URL with --new-tab
   --channel <name>        Local Chrome channel: stable | beta | dev | canary
   --user-data-dir <path>  Explicit local Chrome user data dir for auto-discovery
-  --page-url <url>        URL to open in the attached page/new tab
   -n, --name <id>         Custom session name (default: auto-generated)
   -r, --resume <id>       Resume an existing session by ID
+  -s, --session <id>      Alias for --resume
   --new-tab               Create and attach to a fresh tab instead of reusing an existing one
   --target-url <str>      Filter targets to those whose URL contains this string
   --api-key <key>         API key for cloud providers
@@ -46,21 +58,29 @@ Options:
   --no-highlights         Disable visual highlights on screenshots
   --no-daemon             Skip daemon creation (direct WebSocket only)
   --daemon-idle <mins>    Daemon idle timeout in minutes (default: 60)
-  -s, --session <id>      Alias for --resume
-  --trace                 Enable debug tracing
+
+Global options:
+  --json                  Output JSON
+  --pretty                Output readable text (default)
+  --debug                 Enable CDP transport debugging
   -h, --help              Show this help
 
 Examples:
-  bp connect                                    # Auto-connect to local Chrome
-  bp connect --channel beta                     # Narrow auto-discovery to Chrome Beta
-  bp connect --user-data-dir ~/tmp/chrome-dev   # Use a specific Chrome profile
-  bp connect --record                           # Connect with session-level recording
-  bp connect --name dev                         # Auto-connect with a custom session name
-  bp connect --url ws://localhost:9222/devtools/browser/abc123  # Explicit WebSocket URL
-  bp connect --resume dev                       # Resume a previous session
+  bp connect                                     # Auto-connect to local Chrome
+  bp connect --name dev                          # Auto-connect with a custom session name
+  bp connect --resume dev                        # Resume a previous session
+  bp connect --browser-url ws://localhost:9222/devtools/browser/abc123
+  bp connect --channel beta                      # Narrow auto-discovery to Chrome Beta
+  bp connect --user-data-dir ~/tmp/chrome-dev    # Use a specific Chrome profile
   bp connect --target-url localhost:3000         # Attach to tab matching URL
-  bp connect --new-tab --url https://example.com # Create and attach to a fresh tab
-  bp connect --no-daemon                        # Connect without daemon (file-based only)
+  bp connect --record                            # Connect with session-level recording
+  bp connect --new-tab --page-url https://example.com
+  bp connect --no-daemon                         # Connect without daemon (file-based only)
+
+Likely next commands:
+  bp exec -s dev '{"action":"goto","url":"https://example.com"}'
+  bp snapshot -i -s dev
+  bp text -s dev
 `.trimEnd();
 
 interface ConnectOptions {
@@ -83,6 +103,28 @@ interface ConnectOptions {
   recordFormat?: 'png' | 'jpeg' | 'webp';
   recordQuality?: number;
   noHighlights?: boolean;
+}
+
+async function resolveInitialPageUrl(
+  page: { url(): Promise<string> },
+  requestedUrl?: string
+): Promise<string> {
+  const initialUrl = await page.url();
+
+  if (!requestedUrl || requestedUrl === 'about:blank' || initialUrl !== 'about:blank') {
+    return initialUrl;
+  }
+
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    await Bun.sleep(100);
+    const currentUrl = await page.url();
+    if (currentUrl !== 'about:blank') {
+      return currentUrl;
+    }
+  }
+
+  return initialUrl;
 }
 
 function parseConnectArgs(args: string[]): ConnectOptions {
@@ -259,7 +301,7 @@ export async function connectCommand(
         undefined,
         options.targetUrl ? { targetUrl: options.targetUrl } : undefined
       );
-  const currentUrl = await page.url();
+  const currentUrl = await resolveInitialPageUrl(page, pageUrl);
 
   // Generate session ID
   const sessionId = options.name ?? generateSessionId();

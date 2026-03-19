@@ -15,25 +15,29 @@ bp eval - Evaluate JavaScript in the browser
 
 Convenience wrapper around exec's evaluate action.
 No JSON escaping needed -- just pass a JS expression directly.
+Use this as an escape hatch after higher-level commands like snapshot, text, review, and exec.
 
 Usage:
   bp eval '<expression>'        Evaluate inline JavaScript
   bp eval -f <file>             Evaluate JavaScript from a file
   echo '<expr>' | bp eval       Evaluate from stdin
 
-Options:
-  -f, --file <path>    Read JavaScript from a file
-  --wrap               Wrap the expression in an async IIFE
-  -s, --session <id>   Session to use (default: most recent)
-  -f, --format <fmt>   Output format: json | pretty (default: pretty)
-  --json               Alias for -f json
-  --trace              Enable debug tracing
-  -h, --help           Show this help
+Local options:
+  -f, --file <path>     Read JavaScript from a file
+  --wrap                Wrap the expression in an async IIFE
+
+Global options:
+  -s, --session <id>    Session to use (default: most recent)
+  --json                Output JSON
+  --pretty              Output readable text (default)
+  --debug               Enable CDP transport debugging
+  -h, --help            Show this help
 
 Examples:
   bp eval 'document.title'
   bp eval 'document.querySelectorAll("a").length'
   bp eval -f scrape.js
+  bp eval --wrap 'await fetch("/health").then((r) => r.status)'
 `.trimEnd();
 
 interface EvalOptions {

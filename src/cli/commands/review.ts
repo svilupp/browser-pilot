@@ -8,11 +8,12 @@ bp review - Extract structured business state from the current page
 When to use:
   You want a structured summary of the page: headings, forms, alerts, tables,
   key-value pairs, and status labels. Useful for verifying business state after
-  an action sequence.
+  an action sequence, especially on detail, checkout, and confirmation pages.
 
 When not to use:
   You need the full accessibility tree with refs. Use \`bp snapshot\`.
   You want a compact overview. Use \`bp page\`.
+  You are on a dense catalog or marketing page with lots of nav chrome. Use \`bp text\` or \`bp page\`.
 
 Likely next commands:
   bp snapshot -i
@@ -21,11 +22,11 @@ Likely next commands:
 Usage:
   bp review [options]
 
-Options:
+Global options:
   -s, --session <id>   Session to use (default: most recent)
-  -f, --format <fmt>   json | pretty (default: pretty)
-  --json               Alias for -f json
-  --trace              Enable debug tracing
+  --json               Output JSON
+  --pretty             Output readable text (default)
+  --debug              Enable CDP transport debugging
   -h, --help           Show this help
 
 Examples:

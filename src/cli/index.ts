@@ -3,6 +3,7 @@
  * browser-pilot CLI - automation-first browser workflows for agents
  */
 
+import { CLI_ROUTE_GROUPS, ROOT_HELP_COMMANDS } from './command-registry.ts';
 import { actionsCommand } from './commands/actions.ts';
 import { audioCommand } from './commands/audio.ts';
 import { cleanCommand } from './commands/clean.ts';
@@ -25,75 +26,70 @@ import { snapshotCommand } from './commands/snapshot.ts';
 import { targetsCommand } from './commands/targets.ts';
 import { textCommand } from './commands/text.ts';
 import { traceCommand } from './commands/trace.ts';
+import { getCliVersion } from './version.ts';
 
-const HELP = `
+function buildRootHelp(): string {
+  const routeLabelWidth = Math.max(...CLI_ROUTE_GROUPS.map((group) => group.label.length)) + 2;
+  const routeLines = CLI_ROUTE_GROUPS.map((group) => {
+    const note = group.note ? `  ${group.note}` : '';
+    return `  ${group.label.padEnd(routeLabelWidth)}${group.commands.join(', ')}${note}`;
+  });
+
+  const commandLabelWidth =
+    Math.max(...ROOT_HELP_COMMANDS.map((command) => command.name.length)) + 2;
+  const commandLines = ROOT_HELP_COMMANDS.map((command) => {
+    return `  ${command.name.padEnd(commandLabelWidth)}${command.description}`;
+  });
+
+  return `
 bp - automation-first browser CLI for agents
 
 Route the job first:
-  Inspect page state              snapshot, page, forms, review, text, targets, diagnose
-  Act in the browser              exec, run
-  Capture a human demo            record
-  Analyze behavior over time      trace   (listen is a compatibility alias)
-  Exercise voice/media            audio
-  Change browser conditions       env
+${routeLines.join('\n')}
 
 Usage:
   bp <command> [options]
 
 Commands:
-  quickstart  Getting started guide
-  connect     Create a browser session
-  exec        Execute high-level actions
-  snapshot    Inspect current page with refs
-  record      Record a human workflow and derive replayable output
-  trace       Inspect and analyze behavior over time (listen alias for live stream)
-  audio       Set up/validate/inject/capture voice pipelines
-  env         Session and browser-environment controls
-  run         Run a workflow file
-  page        Compact page overview
-  forms       List form controls
-  targets     List available browser tabs
-  daemon      Manage session daemon
-  list        List sessions
-  close       Close session
-  review      Structured business state (headings, tables, alerts, key-values)
-  clean       Clean old sessions and artifacts
-  actions     Complete action reference
+${commandLines.join('\n')}
 
 Golden paths:
-  1. Automate a page
-     bp connect --provider generic --name dev
+  1. Connect, open a page, inspect it, then act
+     bp connect --name dev
+     bp exec -s dev '{"action":"goto","url":"https://example.com"}'
      bp snapshot -i -s dev
      bp exec -s dev '[{"action":"click","selector":"ref:e4"}]'
 
-  2. Capture a manual workflow and derive automation
+  2. Read content or verify business state
+     bp text -s dev --selector main
+     bp review -s dev --json
+
+  3. Capture a manual workflow and derive automation
      bp record -s demo --profile automation
      bp record summary demo/recording.json
      bp record derive demo/recording.json -o workflow.json
      bp run workflow.json
 
-  3. Debug a realtime or voice session
+  4. Debug a realtime or voice session
      bp trace start -s dev
      bp trace summary -s dev --view ws
      bp audio check -s dev
      bp trace summary -s dev --view voice
 
-  4. Exercise failure modes
-     bp env network offline -s dev --duration 10000
-     bp trace watch -s dev --view ws --assert profile:reconnect --timeout 15000
-
 Options:
   -s, --session <id>    Session ID
   -f, --format <fmt>    json | pretty (default: pretty)
   --json                Alias for -f json
+  --pretty              Alias for -f pretty
   --debug               Enable debug logs for CDP transport
   --trace               Legacy alias for --debug
-  --dialog <mode>       Handle dialogs: accept | dismiss
   -h, --help            Show help
+  --version             Print CLI version
 
 Notes:
   Start with "record summary" or "trace summary" before opening raw artifacts.
-`;
+`.trim();
+}
 
 interface GlobalOptions {
   session?: string;
@@ -200,16 +196,36 @@ function prettyPrint(
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
 
-  if (args.length === 0) {
-    console.log(HELP);
+  if (
+    args.length === 0 ||
+    (args.length === 1 && (args[0] === '--help' || args[0] === '-h' || args[0] === 'help'))
+  ) {
+    console.log(buildRootHelp());
     process.exit(0);
   }
 
-  const command = args[0];
-  const { options, remaining } = parseGlobalOptions(args.slice(1));
+  if (args.length === 1 && (args[0] === '--version' || args[0] === 'version')) {
+    process.stdout.write(`${getCliVersion()}\n`);
+    process.exit(0);
+  }
+
+  let command = args[0]!;
+  let commandArgs = args.slice(1);
+
+  if (command === 'help') {
+    if (commandArgs.length === 0) {
+      console.log(buildRootHelp());
+      process.exit(0);
+    }
+
+    command = commandArgs[0]!;
+    commandArgs = [...commandArgs.slice(1), '--help'];
+  }
+
+  const { options, remaining } = parseGlobalOptions(commandArgs);
 
   if (options.help && !command) {
-    console.log(HELP);
+    console.log(buildRootHelp());
     process.exit(0);
   }
 
@@ -311,12 +327,13 @@ async function main(): Promise<void> {
       case 'help':
       case '--help':
       case '-h':
-        console.log(HELP);
+        console.log(buildRootHelp());
         break;
 
       default:
         console.error(`Unknown command: ${command}`);
-        console.log(HELP);
+        console.error('Run "bp --help" to see the available command tree.');
+        console.log(buildRootHelp());
         process.exit(1);
     }
   } catch (error) {

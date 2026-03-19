@@ -6,14 +6,14 @@ const QUICKSTART = `
 browser-pilot CLI - Quick Start Guide
 
 STEP 1: CONNECT TO A BROWSER
-  bp connect --provider generic --name mysite
+  bp connect --name mysite
 
   This creates a session. The CLI remembers it for subsequent commands.
 
 STEP 2: NAVIGATE
-  bp exec '{"action":"goto","url":"https://example.com"}'
+  bp exec -s mysite '{"action":"goto","url":"https://example.com"}'
 
-STEP 3: GET PAGE SNAPSHOT
+STEP 3: CHOOSE THE RIGHT INSPECTION COMMAND
   bp snapshot -i
 
   Shows only interactive elements (buttons, inputs, links) with refs:
@@ -21,39 +21,48 @@ STEP 3: GET PAGE SNAPSHOT
     textbox "Email" ref:e3
     link "Forgot password?" ref:e6
 
-  Other formats:
-    bp snapshot --format text    # Full accessibility tree (all elements)
-    bp snapshot --json           # Full snapshot as JSON
+  Other inspection commands:
+    bp page                # Compact overview: URL, title, headings, forms, actions
+    bp text                # Readable page copy or policy text
+    bp review --json       # Structured business state after actions
+    bp diagnose 'submit'   # Debug selector or targeting failures
 
 STEP 4: INTERACT USING REFS
-  bp exec '{"action":"fill","selector":"ref:e3","value":"test@example.com"}'
-  bp exec '{"action":"click","selector":"ref:e2"}'
+  bp exec -s mysite '{"action":"fill","selector":"ref:e3","value":"test@example.com"}'
+  bp exec -s mysite '{"action":"click","selector":"ref:e2"}'
 
 STEP 5: BATCH MULTIPLE ACTIONS
-  bp exec '[
+  bp exec -s mysite '[
     {"action":"fill","selector":"ref:e3","value":"user@test.com"},
     {"action":"click","selector":"ref:e2"},
     {"action":"snapshot"}
   ]'
 
 FOR AI AGENTS
-  Use bp snapshot -i for most workflows - shows only actionable elements.
+  Start with:
+    bp --help
+    bp --version
+
+  Use bp snapshot -i for most workflows - it shows actionable elements.
   Add --json for machine-readable output:
-    bp snapshot -i --json
-    bp exec '{"action":"click","selector":"ref:e3"}' --json
+    bp snapshot -i -s mysite --json
+    bp exec -s mysite '{"action":"click","selector":"ref:e3"}' --json
 
 PAGE DISCOVERY SHORTCUTS
-  bp page              # URL, title, headings, forms, and interactive controls
-  bp forms             # Structured list of form fields only
-  bp targets           # All available browser tabs
-  bp connect --new-tab --url https://example.com
-                      # Start from a fresh tab instead of reusing one
+  bp page                           # URL, title, headings, forms, and interactive controls
+  bp forms                          # Structured list of form fields only
+  bp text --selector '#main'        # Focused readable text extraction
+  bp review --json                  # Structured business state
+  bp targets                        # All available browser tabs
+  bp connect --new-tab --page-url https://example.com
+                                   # Convenience: start from a fresh tab
 
 TIPS
-  • Refs (e1, e2...) are stable within a page - prefer them over CSS selectors
-  • After navigation, take a new snapshot to get updated refs
-  • Use multi-selectors for resilience: ["ref:e3", "#email", "input[type=email]"]
-  • Add "optional":true to skip elements that may not exist
+  - Refs (e1, e2...) are stable within the current page state
+  - After navigation or major DOM changes, take a new snapshot to refresh refs
+  - Use multi-selectors for resilience: ["ref:e3", "#email", "input[type=email]"]
+  - Add "optional":true to skip elements that may not exist
+  - Use bp eval only as an escape hatch when higher-level commands are insufficient
 
 SELECTOR PRIORITY
   1. ref:e5         From snapshot - most reliable
