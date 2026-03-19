@@ -9,11 +9,11 @@ bp targets - List page tabs available in the connected browser
 Usage:
   bp targets [options]
 
-Options:
+Global options:
   -s, --session <id>   Session to use (default: most recent)
-  -f, --format <fmt>   json | pretty (default: pretty)
-  --json               Alias for -f json
-  --trace              Enable debug tracing
+  --json               Output JSON
+  --pretty             Output readable text (default)
+  --debug              Enable CDP transport debugging
   -h, --help           Show this help
 
 Examples:

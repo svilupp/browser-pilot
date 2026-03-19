@@ -1,4 +1,11 @@
+import { readFileSync } from 'node:fs';
 import { defineConfig } from 'tsup';
+
+const packageJson = JSON.parse(
+  readFileSync(new URL('./package.json', import.meta.url), 'utf8')
+) as {
+  version: string;
+};
 
 export default defineConfig([
   // Library entries — dual ESM + CJS
@@ -28,6 +35,9 @@ export default defineConfig([
     format: ['esm'],
     dts: true,
     target: 'node18',
+    define: {
+      __BP_CLI_VERSION__: JSON.stringify(packageJson.version),
+    },
     outExtension() {
       return { js: '.mjs' };
     },

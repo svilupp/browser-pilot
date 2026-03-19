@@ -6,19 +6,29 @@ import { formatFormFieldsPretty } from './form-utils.ts';
 const FORMS_HELP = `
 bp forms - List form controls on the current page
 
+When to use:
+  You need field names, types, values, or disabled state without the rest of the page.
+
+When not to use:
+  You need clickable refs or a broader page summary. Use \`bp snapshot -i\` or \`bp page\`.
+
 Usage:
   bp forms [options]
 
-Options:
+Global options:
   -s, --session <id>   Session to use (default: most recent)
-  -f, --format <fmt>   json | pretty (default: pretty)
-  --json               Alias for -f json
-  --trace              Enable debug tracing
+  --json               Output JSON
+  --pretty             Output readable text (default)
+  --debug              Enable CDP transport debugging
   -h, --help           Show this help
 
 Examples:
   bp forms
   bp forms --json
+
+Likely next commands:
+  bp exec '[{"action":"fill","selector":"ref:e4","value":"..."}]'
+  bp review --json
 `.trimEnd();
 
 export async function formsCommand(

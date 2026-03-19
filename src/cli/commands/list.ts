@@ -28,11 +28,14 @@ Usage:
   bp list -s <id> --log-path       Print path to session log file (for analysis)
 
 Options:
-  -s, --session <id>    Target session (or uses default session)
   --info                Show session details and log statistics
   --log-tail [n]        Show last n action log entries (default: 20)
   --log-path            Print absolute path to log.jsonl file
-  -f json, --json       Machine-readable JSON output
+
+Global options:
+  -s, --session <id>    Target session (or uses default session)
+  --json                Machine-readable JSON output
+  --pretty              Output readable text (default)
   -h, --help            Show this help
 
 Examples:

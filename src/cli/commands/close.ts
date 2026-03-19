@@ -16,11 +16,11 @@ bp close - Close a browser session
 Usage:
   bp close [session-id]
 
-Options:
+Global options:
   -s, --session <id>   Session to close (default: most recent)
-  -f, --format <fmt>   Output format: json | pretty (default: pretty)
-  --json               Alias for -f json
-  --trace              Enable debug tracing
+  --json               Output JSON
+  --pretty             Output readable text (default)
+  --debug              Enable CDP transport debugging
   -h, --help           Show this help
 
 Examples:

@@ -77,6 +77,20 @@ import {
 } from './types.ts';
 
 const DEFAULT_TIMEOUT = 30000;
+
+function normalizeAXCheckedValue(value: unknown): boolean | undefined {
+  if (typeof value === 'boolean') {
+    return value;
+  }
+
+  if (typeof value === 'string') {
+    if (value === 'true') return true;
+    if (value === 'false') return false;
+  }
+
+  return undefined;
+}
+
 const EVENT_LISTENER_TRACKER_SCRIPT = `(() => {
   if (globalThis.__bpEventListenerTrackerInstalled) return;
   Object.defineProperty(globalThis, '__bpEventListenerTrackerInstalled', {
@@ -2339,9 +2353,9 @@ export class Page {
       const disabled = node.properties?.find((p) => p.name === 'disabled')?.value.value as
         | boolean
         | undefined;
-      const checked = node.properties?.find((p) => p.name === 'checked')?.value.value as
-        | boolean
-        | undefined;
+      const checked = normalizeAXCheckedValue(
+        node.properties?.find((p) => p.name === 'checked')?.value.value
+      );
 
       return {
         role,
@@ -2412,9 +2426,9 @@ export class Page {
         const disabled = node.properties?.find((p) => p.name === 'disabled')?.value.value as
           | boolean
           | undefined;
-        const checked = node.properties?.find((p) => p.name === 'checked')?.value.value as
-          | boolean
-          | undefined;
+        const checked = normalizeAXCheckedValue(
+          node.properties?.find((p) => p.name === 'checked')?.value.value
+        );
         const value = node.value?.value;
 
         // Generate a selector based on backendDOMNodeId

@@ -28,11 +28,15 @@ Examples:
   bp diagnose "submit"             Find elements matching "submit"
   bp diagnose "ref:e4"             Diagnose by element ref
 
-Options:
-  --json               Output as JSON
+Local options:
   --max <n>            Max candidates for fuzzy match (default: 5)
-  -s, --session <id>   Use specific session
-  --help               Show this help
+
+Global options:
+  -s, --session <id>   Session to use (default: most recent)
+  --json               Output JSON
+  --pretty             Output readable text (default)
+  --debug              Enable CDP transport debugging
+  -h, --help           Show this help
 
 Likely next commands:
   bp exec '[{"action":"click","selector":"<suggested-selector>"}]'

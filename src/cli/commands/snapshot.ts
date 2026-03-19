@@ -29,23 +29,27 @@ Common mistake:
 Usage:
   bp snapshot [options]
 
-Options:
-  -i, --interactive      Show only interactive elements (buttons, inputs, links)
-  -f, --format <type>    Output format: full | interactive | text (default: text)
-  --role <roles>         Filter snapshot to accessibility roles (for example: radio,checkbox)
-  -o, --output <path>    Write command output to a file instead of stdout
-  -d, --diff <file>      Compare current page against a saved snapshot JSON
-  --inspect              Inject visual ref labels onto the page (auto-removes after 10s)
-  --keep                 Keep visual ref labels visible (use with --inspect)
-  -s, --session <id>     Session to use (default: most recent)
-  -f, --format <fmt>     Output format: json | pretty (default: pretty)
-  --json                 Alias for -f json
-  --debug                Enable CDP transport debugging (global option)
-  -h, --help             Show this help
+Local options:
+  -i, --interactive       Shortcut for --view interactive
+  --view <type>           Snapshot view: full | interactive | text (default: text)
+  -f, --format <type>     Backward-compatible alias for --view
+  --role <roles>          Filter snapshot to accessibility roles (for example: radio,checkbox)
+  -o, --output <path>     Write command output to a file instead of stdout
+  -d, --diff <file>       Compare current page against a saved snapshot JSON
+  --inspect               Inject visual ref labels onto the page (auto-removes after 10s)
+  --keep                  Keep visual ref labels visible (use with --inspect)
+
+Global options:
+  -s, --session <id>      Session to use (default: most recent)
+  --json                  Output JSON; without --view this returns the full snapshot payload
+  --pretty                Output readable text (default)
+  --debug                 Enable CDP transport debugging
+  -h, --help              Show this help
 
 Examples:
   bp snapshot                       # Full accessibility tree as readable text
   bp snapshot -i                    # Interactive elements only; best default for automation
+  bp snapshot --view full           # Full structured snapshot
   bp snapshot --role radio,checkbox # Focus on specific control roles
   bp snapshot --json > page.json    # Save full snapshot to file
   bp snapshot --diff before.json    # Show what changed since before.json
@@ -76,7 +80,7 @@ function parseSnapshotArgs(args: string[]): SnapshotOptions {
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]!;
 
-    if (arg === '--format' || arg === '-f') {
+    if (arg === '--view' || arg === '--format' || arg === '-f') {
       options.format = args[++i] as SnapshotOptions['format'];
       options.formatExplicit = true;
     } else if (arg === '--diff' || arg === '-d') {

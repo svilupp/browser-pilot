@@ -17,13 +17,15 @@ bp clean - Remove stale browser sessions
 Usage:
   bp clean [options]
 
-Options:
+Local options:
   --max-age <hours>    Remove sessions older than N hours (default: 24)
   --max-size <size>    Remove oldest sessions until total size < limit (e.g. "100MB", "1GB")
   --dry-run            Show what would be removed without deleting
   --all                Remove all sessions regardless of age
-  -f, --format <fmt>   Output format: json | pretty (default: pretty)
-  --json               Alias for -f json
+
+Global options:
+  --json               Output JSON
+  --pretty             Output readable text (default)
   -h, --help           Show this help
 
 Examples:

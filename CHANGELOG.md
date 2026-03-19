@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.0.17] - 2026-03-19
+
+- Tightened the CLI discovery contract and docs: registry-driven root help, `bp --version`, clearer command routing, and a more explicit connect -> goto -> inspect workflow across README, CLI docs, `llms.txt`, and browser automation skills.
+- Fixed real-world CLI UX gaps found in live Chrome usage: `connect --new-tab --page-url` now reports the opened URL more reliably, `bp page` now caches the refs it shows for later `bp exec` use, and compact page output preserves unchecked checkbox/radio state correctly.
+
 ## [0.0.16] - 2026-03-14
 
 - Added Chrome 147 `DevToolsActivePort` auto-discovery for plain `bp connect`, pinned CI/harness coverage to Chrome 147, and updated docs/skills to recommend trying auto-discovery first.

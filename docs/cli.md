@@ -4,6 +4,11 @@ The `bp` CLI is organized around jobs, not alphabetical commands.
 
 For local Chrome on Chrome 144+, try plain `bp connect` first after enabling remote debugging in `chrome://inspect/#remote-debugging`. Only add `--channel` or `--user-data-dir` when auto-discovery finds multiple eligible profiles.
 
+Get oriented first:
+
+- `bp --help` shows the routed command tree
+- `bp --version` prints the CLI version
+
 ## Install
 
 ```bash
@@ -16,8 +21,20 @@ Global options:
 
 - `-s, --session <id>` select a session
 - `--json` emit machine-readable output
+- `--pretty` emit readable text output
 - `--debug` enable CDP transport logs
 - `--trace` legacy alias for `--debug`
+
+## Command chooser
+
+- `bp snapshot -i`: choose clickable/fillable targets and get refs
+- `bp page`: compact page overview
+- `bp forms`: enumerate form controls
+- `bp text`: read long-form copy or policy content
+- `bp review`: inspect structured business state after actions
+- `bp diagnose`: debug missing selectors or targeting failures
+- `bp exec` / `bp run`: act in the browser
+- `bp trace`: inspect time-based behavior
 
 ## Inspect
 
@@ -37,8 +54,10 @@ Canonical flow:
 
 ```bash
 bp connect --name dev
+bp exec -s dev '{"action":"goto","url":"https://example.com"}'
 bp snapshot -i -s dev
 bp page -s dev
+bp text -s dev --selector main
 bp diagnose -s dev "submit"
 bp review -s dev --json
 ```
@@ -48,6 +67,12 @@ Rules:
 - Start with `bp snapshot -i` for most automation tasks.
 - Use refs like `ref:e4` in later `bp exec` calls.
 - Take a new snapshot after navigation or major DOM changes.
+- `bp page` caches the refs it shows in its Actions section, but it is still a compact subset rather than a full target dump.
+- Use `bp text` for readable copy.
+- On noisy pages, scope `bp text` with `--selector main` or another container.
+- Use `bp review` after form submits, checkouts, or other business-state transitions.
+- Do not expect `bp review` to be a great first read on dense catalog, search, or marketing pages with lots of nav chrome.
+- Use `bp eval` only as an escape hatch after higher-level commands are insufficient.
 
 Likely next steps:
 
@@ -126,6 +151,11 @@ Likely next steps:
 - `bp trace summary -s dev --view console`
 - `bp diagnose -s dev '<selector>'`
 
+Hydration caveat:
+
+- `waitFor: "networkIdle"` only means the page went transport-quiet.
+- On hydrated apps, follow navigation with `bp snapshot -i`, `bp text`, `bp review`, or an explicit assertion before you trust the state.
+
 ## Record
 
 Choose this when a human is demonstrating the workflow and you want automation later.
@@ -195,6 +225,7 @@ Live workflow:
 ```bash
 bp trace start -s realtime --timeout 20000
 # reproduce the issue
+bp trace summary -s realtime --view session
 bp trace summary -s realtime --view ws
 bp trace summary -s realtime --view console
 ```
@@ -216,6 +247,7 @@ bp trace watch -s realtime --view console --assert no-console-errors --timeout 5
 Compatibility:
 
 - `bp listen ws ...` still works, but prefer `bp trace tail ws ...`.
+- Start with `--view session` when you are not yet sure which narrower channel matters.
 
 Likely next steps:
 

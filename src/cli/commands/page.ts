@@ -11,7 +11,11 @@ When to use:
   You want a quick summary of URL, title, headings, forms, and interactive controls.
 
 When not to use:
-  You need the full accessibility tree or reusable refs for precise automation. Use \`bp snapshot\`.
+  You need the full accessibility tree or the full ref inventory for precise automation. Use \`bp snapshot\`.
+
+Common mistake:
+  Treating \`bp page\` as exhaustive. It is a compact overview; the Actions section caches reusable refs,
+  but use \`bp snapshot -i\` when you need the full actionable surface.
 
 Likely next commands:
   bp snapshot -i
@@ -21,11 +25,11 @@ Likely next commands:
 Usage:
   bp page [options]
 
-Options:
+Global options:
   -s, --session <id>   Session to use (default: most recent)
-  -f, --format <fmt>   json | pretty (default: pretty)
-  --json               Alias for -f json
-  --trace              Enable debug tracing
+  --json               Output JSON
+  --pretty             Output readable text (default)
+  --debug              Enable CDP transport debugging
   -h, --help           Show this help
 
 Examples:
@@ -122,7 +126,16 @@ export async function pageCommand(
       globalOptions.format
     );
 
-    await updateSession(session.id, { currentUrl: url });
+    await updateSession(session.id, {
+      currentUrl: url,
+      metadata: {
+        refCache: {
+          url,
+          savedAt: new Date().toISOString(),
+          refMap: page.exportRefMap(),
+        },
+      },
+    });
   } finally {
     await browser.disconnect();
   }

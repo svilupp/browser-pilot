@@ -8,6 +8,15 @@ Lightweight CDP-based browser automation for AI agents.
 - [Providers](./providers.md) - BrowserBase, Browserless, and local Chrome
 - [CLI Reference](./cli.md) - Command-line interface
 
+## Command chooser
+
+- `bp snapshot -i` for actionable refs
+- `bp page` for a compact overview
+- `bp text` for readable copy
+- `bp review` for structured business state
+- `bp diagnose` for selector failures
+- `bp exec` / `bp run` to act in the browser
+
 ## Guides
 
 - [Action Recording](./guides/action-recording.md) - Record workflows and capture replay screenshot trails
@@ -81,12 +90,11 @@ await browser.close();
 # Connect and create session
 bp connect --provider browserbase --name my-session
 
-# Execute actions
-bp exec -s my-session '[
-  {"action":"goto","url":"https://example.com"},
-  {"action":"snapshot"}
-]'
+# Open the page
+bp exec -s my-session '{"action":"goto","url":"https://example.com"}'
 
-# Get page state
-bp snapshot -s my-session --format text
+# Inspect and verify
+bp snapshot -i -s my-session
+bp text -s my-session --selector main
+bp review -s my-session --json
 ```

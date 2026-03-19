@@ -2,6 +2,12 @@
 
 Automation-first browser control for agents.
 
+## Getting oriented
+
+- Run `bp --help` to see the routed command tree.
+- Run `bp --version` to confirm the CLI build.
+- Route by job before picking a command.
+
 ## Route by job
 
 - Inspect page state: `bp snapshot`, `bp page`, `bp forms`, `bp text`, `bp targets`, `bp diagnose`
@@ -18,7 +24,10 @@ Inspect and act:
 
 ```bash
 bp connect --name dev
+bp exec -s dev '{"action":"goto","url":"https://example.com"}'
 bp snapshot -i -s dev
+bp text -s dev --selector main
+bp review -s dev --json
 bp exec -s dev '[{"action":"click","selector":"ref:e4"}]'
 ```
 
@@ -52,6 +61,8 @@ bp trace summary -s vt --view voice
 ## Stable expectations
 
 - `bp snapshot -i` returns actionable elements with refs like `ref:e4`
+- `bp page` is compact and caches the refs it shows, but it is not an exhaustive action inventory
+- `bp text` is the primary command for readable long-form page copy
 - `bp exec --json` returns `success`, `totalDurationMs`, and per-step results including `selectorUsed`, `error`, `suggestion`, and `hints` when available
 - `bp record summary <artifact>` returns counts, trace summaries, and next-command tips
 - `bp trace summary <source> --view <view>` returns a view-specific summary over canonical trace events
@@ -104,3 +115,8 @@ bp exec -s dev '[
 - Prefer `bp trace tail ...`; `bp listen ...` is compatibility only
 - Prefer `--debug`; `--trace` is a legacy alias
 - Do not use `bp snapshot` when you need structured business data. Use `bp review`
+- Do not use `bp eval` as a first choice. It is an escape hatch for raw JS.
+- `waitFor: "networkIdle"` only means transport quiet; follow it with `bp snapshot -i`, `bp text`, `bp review`, or explicit assertions on hydrated apps
+- On noisy commerce pages, scope reading with `bp text --selector main` or another container
+- `bp review` is strongest on confirmations, detail pages, tables, alerts, and key-values; it is often weak on catalog grids
+- After `bp trace start`, begin with `bp trace summary --view session` before you narrow to `console`, `ws`, or `voice`

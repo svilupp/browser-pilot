@@ -19,10 +19,20 @@ For local Chrome on Chrome 144+, try plain `bp connect` first after enabling rem
 5. Analyze time-based behavior: `bp trace`
 6. Exercise voice/media or browser conditions: `bp audio`, `bp env`
 
+## If the task is...
+
+- Find what to click or fill: `bp snapshot -i`
+- Read the page copy: `bp text`
+- Get a compact overview: `bp page`
+- Review structured business state: `bp review`
+- Debug a missing selector: `bp diagnose`
+- Use raw JavaScript as a last resort: `bp eval`
+
 ## Default automation workflow
 
 ```bash
 bp connect --name dev
+bp exec -s dev '{"action":"goto","url":"https://example.com"}'
 bp snapshot -i -s dev
 bp exec -s dev '[
   {"action":"fill","selector":"ref:e5","value":"user@example.com"},
@@ -63,9 +73,14 @@ Returns headings, forms, alerts, tables, key-value pairs, and status labels. Use
 Rules:
 
 - Prefer refs from `bp snapshot -i`
+- `bp page` caches the refs it shows, but it is a compact overview, not a full target inventory
+- On noisy pages, scope reading with `bp text --selector main` or another container
+- Prefer `bp review` for confirmations, detail pages, tables, alerts, and key-values, not dense catalog grids
+- Prefer `bp text` for readable copy and `bp review` for structured verification
 - Prefer high-level actions over `bp eval`
-- After navigation, take a fresh snapshot
+- After navigation or major DOM changes, take a fresh snapshot
 - If a selector fails, use `bp diagnose` before dropping to raw JS
+- `waitFor: "networkIdle"` only means transport quiet; on hydrated apps follow it with `bp snapshot -i`, `bp text`, `bp review`, or an explicit assertion
 
 ## When to use record
 
@@ -86,6 +101,7 @@ Use `trace` when the question spans time, websocket traffic, console failures, p
 
 ```bash
 bp trace start -s dev --timeout 20000
+bp trace summary -s dev --view session
 bp trace summary -s dev --view ws
 bp trace watch -s dev --view console --assert no-console-errors --timeout 5000
 ```
