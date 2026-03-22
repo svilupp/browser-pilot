@@ -13,7 +13,8 @@ browser-pilot is designed to work in Cloudflare Workers. This guide covers deplo
 
 1. A Cloudflare Workers account
 2. A browser provider that supports external connections:
-   - [BrowserBase](https://browserbase.com) (recommended)
+   - [Browser Use](https://browser-use.com) (recommended — CAPTCHA solving, anti-detect, residential proxies)
+   - [BrowserBase](https://browserbase.com)
    - [Browserless](https://browserless.io)
 
 **Note:** You cannot run Chrome in Workers directly. You must connect to an external browser service.
@@ -41,13 +42,13 @@ compatibility_date = "2024-01-01"
 # Non-sensitive config here
 
 # Add secrets via wrangler
-# wrangler secret put BROWSERBASE_API_KEY
+# wrangler secret put BROWSER_USE_API_KEY
 ```
 
 Set secrets:
 
 ```bash
-wrangler secret put BROWSERBASE_API_KEY
+wrangler secret put BROWSER_USE_API_KEY
 ```
 
 ### 3. Write Your Worker
@@ -57,7 +58,7 @@ wrangler secret put BROWSERBASE_API_KEY
 import { connect } from 'browser-pilot';
 
 interface Env {
-  BROWSERBASE_API_KEY: string;
+  BROWSER_USE_API_KEY: string;
 }
 
 export default {
@@ -76,8 +77,8 @@ async function handleScrape(request: Request, env: Env): Promise<Response> {
   const { targetUrl } = await request.json();
 
   const browser = await connect({
-    provider: 'browserbase',
-    apiKey: env.BROWSERBASE_API_KEY,
+    provider: 'browser-use',
+    apiKey: env.BROWSER_USE_API_KEY,
   });
 
   try {
@@ -110,8 +111,8 @@ wrangler deploy
 ```typescript
 async function submitForm(env: Env, formData: Record<string, string>): Promise<Response> {
   const browser = await connect({
-    provider: 'browserbase',
-    apiKey: env.BROWSERBASE_API_KEY,
+    provider: 'browser-use',
+    apiKey: env.BROWSER_USE_API_KEY,
   });
 
   try {
@@ -158,8 +159,8 @@ export default {
 
 async function scrapeAndStore(env: Env): Promise<void> {
   const browser = await connect({
-    provider: 'browserbase',
-    apiKey: env.BROWSERBASE_API_KEY,
+    provider: 'browser-use',
+    apiKey: env.BROWSER_USE_API_KEY,
   });
 
   try {
@@ -200,8 +201,8 @@ export default {
     let wsUrl = sessionId ? await env.SESSIONS.get(sessionId) : null;
 
     const browser = await connect({
-      provider: 'browserbase',
-      apiKey: env.BROWSERBASE_API_KEY,
+      provider: 'browser-use',
+      apiKey: env.BROWSER_USE_API_KEY,
       wsUrl: wsUrl ?? undefined,
     });
 
@@ -247,8 +248,8 @@ Workers have a 30-second limit (or longer on paid plans):
 
 ```typescript
 const browser = await connect({
-  provider: 'browserbase',
-  apiKey: env.BROWSERBASE_API_KEY,
+  provider: 'browser-use',
+  apiKey: env.BROWSER_USE_API_KEY,
   timeout: 25000, // Leave buffer for cleanup
 });
 
@@ -286,9 +287,9 @@ await env.SESSIONS.put(userId, browser.wsUrl, {
 const wsUrl = await env.SESSIONS.get(userId);
 if (wsUrl) {
   const browser = await connect({
-    provider: 'browserbase',
+    provider: 'browser-use',
     wsUrl,
-    apiKey: env.BROWSERBASE_API_KEY,
+    apiKey: env.BROWSER_USE_API_KEY,
   });
 }
 ```
@@ -347,9 +348,9 @@ enableTracing({
 });
 ```
 
-### View BrowserBase Debug URL
+### View Live Viewer URL
 
 ```typescript
-const browser = await connect({ provider: 'browserbase', apiKey });
-console.log('Debug URL:', browser.metadata?.debugUrl);
+const browser = await connect({ provider: 'browser-use', apiKey });
+console.log('Live viewer:', browser.metadata?.['liveUrl']);
 ```

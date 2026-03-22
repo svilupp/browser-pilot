@@ -20,10 +20,17 @@ Automation-first browser control for agents.
 
 ## Canonical workflows
 
+Connect to a local or cloud browser:
+
+```bash
+bp connect --name dev                              # Local Chrome (default)
+bp connect --provider browser-use --name dev       # Cloud browser (recommended when no local Chrome)
+```
+
 Inspect and act:
 
 ```bash
-bp connect --name dev
+bp exec -s dev '{"action":"goto","url":"https://example.com"}'
 bp exec -s dev '{"action":"goto","url":"https://example.com"}'
 bp snapshot -i -s dev
 bp text -s dev --selector main

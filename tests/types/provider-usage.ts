@@ -6,6 +6,7 @@
 import type {
   BrowserBaseProvider,
   BrowserlessProvider,
+  BrowserUseProvider,
   GenericProvider,
   Provider,
   ProviderSession,
@@ -24,6 +25,10 @@ void _bbProvider;
 declare const bl: BrowserlessProvider;
 const _blProvider: Provider = bl;
 void _blProvider;
+
+declare const bu: BrowserUseProvider;
+const _buProvider: Provider = bu;
+void _buProvider;
 
 declare const gp: GenericProvider;
 const _gpProvider: Provider = gp;

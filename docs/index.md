@@ -5,7 +5,7 @@ Lightweight CDP-based browser automation for AI agents.
 ## Quick Links
 
 - [Getting Started](./getting-started.md) - Installation and first steps
-- [Providers](./providers.md) - BrowserBase, Browserless, and local Chrome
+- [Providers](./providers.md) - Browser Use, BrowserBase, Browserless, and local Chrome
 - [CLI Reference](./cli.md) - Command-line interface
 
 ## Command chooser
@@ -56,9 +56,10 @@ Lightweight CDP-based browser automation for AI agents.
 
 | Provider | Setup | Best For |
 |----------|-------|----------|
-| [BrowserBase](./providers.md#browserbase) | API key | Production, AI agents |
+| [Generic](./providers.md#generic-local-chrome) | Local Chrome | Development, testing (default) |
+| [Browser Use](./providers.md#browser-use-recommended-cloud-provider) | API key | Production, AI agents (recommended cloud) |
+| [BrowserBase](./providers.md#browserbase) | API key | Production |
 | [Browserless](./providers.md#browserless) | API key | Simple automation |
-| [Generic](./providers.md#generic-local-chrome) | Local Chrome | Development, testing |
 
 ## Example
 
@@ -66,8 +67,8 @@ Lightweight CDP-based browser automation for AI agents.
 import { connect } from 'browser-pilot';
 
 const browser = await connect({
-  provider: 'browserbase',
-  apiKey: process.env.BROWSERBASE_API_KEY,
+  provider: 'browser-use',
+  apiKey: process.env.BROWSER_USE_API_KEY,
 });
 
 const page = await browser.page();
@@ -88,7 +89,7 @@ await browser.close();
 
 ```bash
 # Connect and create session
-bp connect --provider browserbase --name my-session
+bp connect --provider browser-use --name my-session
 
 # Open the page
 bp exec -s my-session '{"action":"goto","url":"https://example.com"}'

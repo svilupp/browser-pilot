@@ -155,6 +155,8 @@ export {
   BrowserBaseProvider,
   BrowserEndpointResolutionError,
   BrowserlessProvider,
+  type BrowserUseOptions,
+  BrowserUseProvider,
   buildLocalBrowserScanTargets,
   type ChromeChannel,
   type ConnectOptions,

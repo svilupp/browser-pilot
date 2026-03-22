@@ -2,6 +2,7 @@
  * Provider module exports
  */
 
+export { type BrowserUseOptions, BrowserUseProvider } from './browser-use.ts';
 export { type BrowserBaseOptions, BrowserBaseProvider } from './browserbase.ts';
 export { type BrowserlessOptions, BrowserlessProvider } from './browserless.ts';
 export {
@@ -25,6 +26,8 @@ export {
 } from './local-discovery.ts';
 export * from './types.ts';
 
+import { getEnv } from '../runtime/env.ts';
+import { BrowserUseProvider } from './browser-use.ts';
 import { BrowserBaseProvider } from './browserbase.ts';
 import { BrowserlessProvider } from './browserless.ts';
 import { GenericProvider } from './generic.ts';
@@ -54,6 +57,19 @@ export function createProvider(options: ConnectOptions): Provider {
       return new BrowserlessProvider({
         token: options.apiKey,
       });
+
+    case 'browser-use': {
+      const apiKey = options.apiKey ?? getEnv('BROWSER_USE_API_KEY');
+      if (!apiKey) {
+        throw new Error('Browser Use provider requires apiKey or BROWSER_USE_API_KEY env var');
+      }
+      return new BrowserUseProvider({
+        apiKey,
+        proxyCountryCode: options.proxyCountryCode === undefined ? 'uk' : options.proxyCountryCode,
+        profileId: options.profileId,
+        timeout: options.cloudTimeout,
+      });
+    }
 
     case 'generic':
       if (!options.wsUrl) {

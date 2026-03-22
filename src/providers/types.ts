@@ -45,7 +45,7 @@ export interface ProxyConfig {
 
 export interface ConnectOptions {
   /** Provider type */
-  provider: 'browserbase' | 'browserless' | 'generic';
+  provider: 'browserbase' | 'browserless' | 'browser-use' | 'generic';
   /** API key for hosted providers */
   apiKey?: string;
   /** Project ID (for BrowserBase) */
@@ -62,4 +62,10 @@ export interface ConnectOptions {
   debug?: boolean;
   /** Connection timeout in ms */
   timeout?: number;
+  /** Proxy country code for Browser Use provider (default: 'uk'). Set null to disable. */
+  proxyCountryCode?: string | null;
+  /** Browser profile ID for Browser Use provider */
+  profileId?: string;
+  /** Session timeout in minutes for Browser Use provider (max 240) */
+  cloudTimeout?: number;
 }

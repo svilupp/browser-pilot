@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.0.18] - 2026-03-22
+
+- Add Browser Use cloud provider with built-in CAPTCHA solving, anti-detect fingerprinting, and residential proxies in 195+ countries. Recommended cloud provider when local Chrome CDP is unavailable.
+
 ## [0.0.17] - 2026-03-19
 
 - Tightened the CLI discovery contract and docs: registry-driven root help, `bp --version`, clearer command routing, and a more explicit connect -> goto -> inspect workflow across README, CLI docs, `llms.txt`, and browser automation skills.

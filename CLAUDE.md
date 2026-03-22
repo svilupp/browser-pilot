@@ -98,6 +98,7 @@ Complex patterns (custom dropdowns, multi-step forms) are composed from primitiv
 | Step types + FailureReason | `src/actions/types.ts` |
 | Wait strategies | `src/wait/strategies.ts` |
 | Provider interface | `src/providers/types.ts:5-60` |
+| Browser Use provider | `src/providers/browser-use.ts` |
 | BrowserBase provider | `src/providers/browserbase.ts:23-99` |
 | Snapshot (accessibility tree) | `src/browser/page.ts:821-967` |
 | Device presets | `src/emulation/devices.ts` |
@@ -231,8 +232,9 @@ ws.send(JSON.stringify({ id, method, params, sessionId }));
 
 Providers implement `createSession()` and optional `resumeSession()`. Return `{ wsUrl, sessionId, close() }`.
 - Interface: `src/providers/types.ts`
+- Browser Use (recommended cloud): POST to browser-use.com API, get cdpUrl. Built-in CAPTCHA solving, anti-detect, residential proxies.
 - BrowserBase: POST to API, get connectUrl
-- Generic: Pass-through wsUrl
+- Generic: Pass-through wsUrl (default, local Chrome)
 
 ## Batch Execution
 

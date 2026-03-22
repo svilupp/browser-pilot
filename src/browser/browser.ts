@@ -133,6 +133,10 @@ export class Browser {
     const provider = createProvider(connectOptions);
     const session = await provider.createSession(connectOptions.session);
 
+    if (session.metadata?.['liveUrl']) {
+      console.error(`Live viewer: ${session.metadata['liveUrl']}`);
+    }
+
     const cdp = await createCDPClient(session.wsUrl, {
       debug: connectOptions.debug,
       timeout: connectOptions.timeout,
