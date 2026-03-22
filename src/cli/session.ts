@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import type { DaemonInfo } from '../daemon/types.ts';
 import type { ChromeChannel, ResolvedBrowserSource } from '../providers/local-discovery.ts';
 
-export type ProviderType = 'browserbase' | 'browserless' | 'generic';
+export type ProviderType = 'browserbase' | 'browserless' | 'browser-use' | 'generic';
 
 export interface SessionData {
   /** Session identifier */

@@ -143,6 +143,23 @@ bp env visibility hidden -s realtime
 - `listen` preserved as a compatibility alias to `trace tail`
 - `audio` for active control, `trace` for explanation, `env` for browser-state controls
 
+## Cloud provider
+
+When local Chrome is not available, [Browser Use](https://browser-use.com) is the recommended cloud provider:
+
+```bash
+BROWSER_USE_API_KEY=bu_... bp connect --provider browser-use
+```
+
+```typescript
+const browser = await connect({
+  provider: 'browser-use',
+  apiKey: process.env.BROWSER_USE_API_KEY,
+});
+```
+
+See [Providers](./docs/providers.md) for BrowserBase, Browserless, and other options.
+
 ## Programmatic example
 
 ```typescript

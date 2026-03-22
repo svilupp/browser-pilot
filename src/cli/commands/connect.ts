@@ -38,7 +38,7 @@ Usage:
   bp connect [options]
 
 Local options:
-  -p, --provider <type>   Provider: generic | browserbase | browserless (default: generic)
+  -p, --provider <type>   Provider: generic | browserbase | browserless | browser-use (default: generic)
   --browser-url <ws-url>  Explicit browser WebSocket URL (preferred)
   --page-url <url>        Page URL to open in the attached tab/new tab (preferred)
   --url <value>           Compatibility shorthand; browser URL, or page URL with --new-tab
@@ -51,6 +51,9 @@ Local options:
   --target-url <str>      Filter targets to those whose URL contains this string
   --api-key <key>         API key for cloud providers
   --project-id <id>       Project ID for BrowserBase provider
+  --proxy-country <code>  Proxy country code for browser-use (default: uk)
+  --profile-id <id>       Browser profile ID for browser-use
+  --cloud-timeout <mins>  Session timeout in minutes for browser-use (max 240)
   --export-log <path>     Export session log to file on close
   --record                Enable screenshot recording for all subsequent exec calls
   --record-format <fmt>   Screenshot format: webp (default), png, jpeg
@@ -76,6 +79,10 @@ Examples:
   bp connect --record                            # Connect with session-level recording
   bp connect --new-tab --page-url https://example.com
   bp connect --no-daemon                         # Connect without daemon (file-based only)
+  bp connect --provider browser-use                              # UK proxy (default)
+  bp connect --provider browser-use --proxy-country de           # German proxy
+  bp connect --provider browser-use --proxy-country null         # No proxy
+  bp connect --provider browser-use --cloud-timeout 30           # 30-min session
 
 Likely next commands:
   bp exec -s dev '{"action":"goto","url":"https://example.com"}'
@@ -97,6 +104,9 @@ interface ConnectOptions {
   apiKey?: string;
   projectId?: string;
   exportLog?: string;
+  proxyCountry?: string | null;
+  profileId?: string;
+  cloudTimeout?: number;
   noDaemon?: boolean;
   daemonIdleMins?: number;
   record?: boolean;
@@ -135,9 +145,9 @@ function parseConnectArgs(args: string[]): ConnectOptions {
 
     if (arg === '--provider' || arg === '-p') {
       const p = args[++i];
-      if (p !== 'browserbase' && p !== 'browserless' && p !== 'generic') {
+      if (p !== 'browserbase' && p !== 'browserless' && p !== 'browser-use' && p !== 'generic') {
         throw new Error(
-          `Invalid provider: ${p}. Must be one of: browserbase, browserless, generic`
+          `Invalid provider: ${p}. Must be one of: browserbase, browserless, browser-use, generic`
         );
       }
       options.provider = p;
@@ -191,6 +201,17 @@ function parseConnectArgs(args: string[]): ConnectOptions {
       options.noDaemon = true;
     } else if (arg === '--daemon-idle') {
       options.daemonIdleMins = parseInt(args[++i] ?? '60', 10);
+    } else if (arg === '--proxy-country') {
+      const val = args[++i];
+      options.proxyCountry = val === 'null' ? null : val;
+    } else if (arg === '--profile-id') {
+      options.profileId = args[++i];
+    } else if (arg === '--cloud-timeout') {
+      const mins = parseInt(args[++i] ?? '', 10);
+      if (Number.isNaN(mins) || mins < 1 || mins > 240) {
+        throw new Error('--cloud-timeout must be 1-240 minutes');
+      }
+      options.cloudTimeout = mins;
     }
   }
 
@@ -291,6 +312,9 @@ export async function connectCommand(
     userDataDir: options.userDataDir,
     apiKey: options.apiKey,
     projectId: options.projectId,
+    proxyCountryCode: options.proxyCountry,
+    profileId: options.profileId,
+    cloudTimeout: options.cloudTimeout,
   };
 
   // Connect to browser
@@ -302,6 +326,10 @@ export async function connectCommand(
         options.targetUrl ? { targetUrl: options.targetUrl } : undefined
       );
   const currentUrl = await resolveInitialPageUrl(page, pageUrl);
+
+  if (browser.metadata?.['liveUrl']) {
+    console.error(`\nLive viewer: ${browser.metadata['liveUrl']}\n`);
+  }
 
   // Generate session ID
   const sessionId = options.name ?? generateSessionId();

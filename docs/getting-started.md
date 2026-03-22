@@ -14,14 +14,14 @@ npm install browser-pilot
 
 ### Option 1: Using a Cloud Provider (Recommended)
 
-Cloud providers like BrowserBase handle browser infrastructure for you:
+[Browser Use](https://browser-use.com) is the recommended cloud provider, with built-in CAPTCHA solving and anti-detect fingerprinting:
 
 ```typescript
 import { connect } from 'browser-pilot';
 
 const browser = await connect({
-  provider: 'browserbase',
-  apiKey: process.env.BROWSERBASE_API_KEY,
+  provider: 'browser-use',
+  apiKey: process.env.BROWSER_USE_API_KEY,
 });
 
 const page = await browser.page();
@@ -84,8 +84,8 @@ import { connect } from 'browser-pilot';
 
 async function login() {
   const browser = await connect({
-    provider: 'browserbase',
-    apiKey: process.env.BROWSERBASE_API_KEY,
+    provider: 'browser-use',
+    apiKey: process.env.BROWSER_USE_API_KEY,
   });
 
   const page = await browser.page();
@@ -136,7 +136,7 @@ Use `bp diagnose -s my-session '<selector>'` when targeting fails, and keep `bp 
 
 ## Next Steps
 
-- [Providers](./providers.md) - Configure BrowserBase, Browserless, or local Chrome
+- [Providers](./providers.md) - Configure Browser Use, BrowserBase, Browserless, or local Chrome
 - [Multi-Selector Guide](./guides/multi-selector.md) - Build robust automations
 - [Batch Actions](./guides/batch-actions.md) - Execute action sequences efficiently
 - [API Reference](./api/page.md) - Full Page API documentation

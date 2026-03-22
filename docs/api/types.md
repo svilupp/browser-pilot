@@ -6,13 +6,16 @@ Complete TypeScript type definitions for browser-pilot.
 
 ```typescript
 interface ConnectOptions {
-  provider: 'browserbase' | 'browserless' | 'generic';
+  provider: 'browserbase' | 'browserless' | 'browser-use' | 'generic';
   apiKey?: string;
   projectId?: string;
   wsUrl?: string;
   session?: CreateSessionOptions;
   debug?: boolean;
   timeout?: number;
+  proxyCountryCode?: string | null;
+  profileId?: string;
+  cloudTimeout?: number;
 }
 
 interface CreateSessionOptions {

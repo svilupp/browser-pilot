@@ -12,8 +12,8 @@ Connect to a browser instance.
 import { connect } from 'browser-pilot';
 
 const browser = await connect({
-  provider: 'browserbase',
-  apiKey: process.env.BROWSERBASE_API_KEY,
+  provider: 'browser-use',
+  apiKey: process.env.BROWSER_USE_API_KEY,
 });
 ```
 
@@ -22,10 +22,10 @@ const browser = await connect({
 ```typescript
 interface ConnectOptions {
   // Required
-  provider: 'browserbase' | 'browserless' | 'generic';
+  provider: 'browserbase' | 'browserless' | 'browser-use' | 'generic';
 
   // Provider-specific
-  apiKey?: string;        // For browserbase, browserless
+  apiKey?: string;        // For browser-use, browserbase, browserless
   projectId?: string;     // For browserbase
   wsUrl?: string;         // For generic, or override others
 
@@ -44,6 +44,11 @@ interface ConnectOptions {
   // Connection options
   timeout?: number;       // Connection timeout in ms
   debug?: boolean;        // Enable debug logging
+
+  // Browser Use options
+  proxyCountryCode?: string | null;  // Proxy country (default: 'uk')
+  profileId?: string;                // Saved browser profile
+  cloudTimeout?: number;             // Session timeout in minutes
 }
 ```
 

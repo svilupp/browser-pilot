@@ -22,7 +22,7 @@ export interface ActionResult {
 }
 
 // @public (undocumented)
-export type ActionType = 'goto' | 'click' | 'fill' | 'type' | 'select' | 'check' | 'uncheck' | 'submit' | 'press' | 'shortcut' | 'focus' | 'hover' | 'scroll' | 'wait' | 'snapshot' | 'forms' | 'screenshot' | 'evaluate' | 'text' | 'newTab' | 'closeTab' | 'switchFrame' | 'switchToMain' | 'assertVisible' | 'assertExists' | 'assertText' | 'assertUrl' | 'assertValue' | 'waitForWsMessage' | 'assertNoConsoleErrors' | 'assertTextChanged' | 'assertPermission' | 'assertMediaTrackLive';
+export type ActionType = 'goto' | 'click' | 'fill' | 'type' | 'select' | 'check' | 'uncheck' | 'submit' | 'press' | 'shortcut' | 'focus' | 'hover' | 'scroll' | 'wait' | 'snapshot' | 'forms' | 'screenshot' | 'evaluate' | 'text' | 'newTab' | 'closeTab' | 'switchFrame' | 'switchToMain' | 'assertVisible' | 'assertExists' | 'assertText' | 'assertUrl' | 'assertValue' | 'waitForWsMessage' | 'assertNoConsoleErrors' | 'assertTextChanged' | 'assertPermission' | 'assertMediaTrackLive' | 'delta' | 'review' | 'chooseOption' | 'upload';
 
 // @public
 export function addBatchToPage(page: Page): Page & {
@@ -174,11 +174,17 @@ export interface BrowserOptions extends ConnectOptions {
 // @public
 export function bufferToBase64(data: ArrayBuffer | Uint8Array): string;
 
+// @public
+export function buildFingerprintMap(nodes: SnapshotNode[]): Map<string, SemanticFingerprint>;
+
 // Warning: (ae-forgotten-export) The symbol "DiscoverLocalBrowsersOptions" needs to be exported by the entry point index.d.ts
 // Warning: (ae-forgotten-export) The symbol "LocalBrowserScanTarget" needs to be exported by the entry point index.d.ts
 //
 // @public (undocumented)
 export function buildLocalBrowserScanTargets(options?: DiscoverLocalBrowsersOptions): LocalBrowserScanTarget[];
+
+// @public
+export function buildWorkflowSummary(result: BatchResult): WorkflowSummary;
 
 // @public
 export function calculateRMS(samples: Float32Array): number;
@@ -199,6 +205,9 @@ export interface CaptureResult {
     right: Float32Array;
     sampleRate: number;
 }
+
+// @public
+export function captureStateSignature(page: Page): Promise<string>;
 
 // @public (undocumented)
 export interface CDPClient {
@@ -231,6 +240,9 @@ export class CDPError extends Error {
     data?: string;
 }
 
+// @public
+export function chooseOption(page: Page, config: ComboboxConfig): Promise<ComboboxResult>;
+
 // @public (undocumented)
 export type ChromeChannel = 'stable' | 'beta' | 'dev' | 'canary';
 
@@ -238,6 +250,89 @@ export type ChromeChannel = 'stable' | 'beta' | 'dev' | 'canary';
 export interface ClearCookiesOptions {
     domain?: string;
 }
+
+// @public
+export interface CombinatorResult {
+    // (undocumented)
+    matched: boolean;
+    // (undocumented)
+    matchedConditions: MatchedCondition[];
+    winnerIndex?: number;
+}
+
+// @public
+export interface ComboboxConfig {
+    listbox?: string | string[];
+    match?: 'exact' | 'contains' | 'startsWith';
+    optionSelector?: string;
+    searchText?: string;
+    timeout?: number;
+    trigger: string | string[];
+    value: string;
+}
+
+// @public (undocumented)
+export interface ComboboxResult {
+    error?: string;
+    failedAt?: 'open' | 'search' | 'select' | 'verify';
+    selectedText?: string;
+    success: boolean;
+}
+
+// @public
+export function computeDelta(before: PageState, after: PageState): DeltaResult;
+
+// @public (undocumented)
+export type Condition = {
+    kind: 'urlMatches';
+    pattern: string;
+} | {
+    kind: 'elementVisible';
+    selector: string | string[];
+} | {
+    kind: 'elementHidden';
+    selector: string | string[];
+} | {
+    kind: 'textAppears';
+    selector?: string | string[];
+    text: string;
+} | {
+    kind: 'textChanges';
+    selector?: string | string[];
+    to?: string;
+} | {
+    kind: 'networkResponse';
+    urlPattern: string;
+    status?: number;
+} | {
+    kind: 'stateSignatureChanges';
+};
+
+// @public
+export function conditionAll(conditions: Condition[], page: Page, context?: {
+    networkTracker?: NetworkResponseTracker;
+    beforeSignature?: string;
+}): Promise<CombinatorResult>;
+
+// @public
+export function conditionAny(conditions: Condition[], page: Page, context?: {
+    networkTracker?: NetworkResponseTracker;
+    beforeSignature?: string;
+}): Promise<CombinatorResult>;
+
+// @public
+export function conditionNot(condition: Condition, page: Page, context?: {
+    networkTracker?: NetworkResponseTracker;
+    beforeSignature?: string;
+}): Promise<CombinatorResult>;
+
+// @public
+export function conditionRace(conditions: Condition[], page: Page, options?: {
+    timeout?: number;
+    pollInterval?: number;
+    networkTracker?: NetworkResponseTracker;
+    beforeSignature?: string;
+}): Promise<CombinatorResult>;
 
 // @public
 export function connect(options: BrowserOptions): Promise<Browser>;
@@ -301,6 +396,13 @@ export interface Cookie {
 export function createCDPClient(wsUrl: string, options?: CDPClientOptions): Promise<CDPClient>;
 
 // @public
+export function createFingerprint(node: SnapshotNode, context: {
+    headingTrail: string[];
+    siblingIndex: number;
+    nearestHeading: string;
+}): SemanticFingerprint;
+
+// @public
 export function createProvider(options: ConnectOptions): Provider;
 
 // @public (undocumented)
@@ -312,6 +414,9 @@ export interface CreateSessionOptions {
     recording?: boolean;
     width?: number;
 }
+
+// @public
+export function createTargetFingerprint(targetId: string, url: string, title: string): TargetFingerprint;
 
 // @public (undocumented)
 export interface CustomSelectConfig {
@@ -328,6 +433,33 @@ export interface DeleteCookieOptions {
     path?: string;
     url?: string;
 }
+
+// @public (undocumented)
+export interface DeltaChange {
+    // (undocumented)
+    after?: string;
+    // (undocumented)
+    before?: string;
+    // (undocumented)
+    detail?: string;
+    // (undocumented)
+    kind: 'url' | 'title' | 'heading_added' | 'heading_removed' | 'field_changed' | 'button_changed' | 'alert_added' | 'alert_removed' | 'text_changed';
+}
+
+// @public (undocumented)
+export interface DeltaResult {
+    // (undocumented)
+    after: PageState;
+    // (undocumented)
+    before: PageState;
+    // (undocumented)
+    changes: DeltaChange[];
+    // (undocumented)
+    hasChanges: boolean;
+}
+
+// @public
+export function detectOverlay(page: Page): Promise<OverlayInfo>;
 
 // @public
 export interface DeviceDescriptor {
@@ -423,6 +555,32 @@ export function enableTracing(options?: Partial<Omit<TracerOptions, 'enabled'>>)
 // @public (undocumented)
 export type ErrorHandler = (error: PageError) => void;
 
+// @public
+export function evaluateCondition(condition: Condition, page: Page, context?: {
+    networkTracker?: NetworkResponseTracker;
+    beforeSignature?: string;
+}): Promise<MatchedCondition>;
+
+// @public
+export function evaluateOutcome(page: Page, options: {
+    expectAny?: Condition[];
+    expectAll?: Condition[];
+    failIf?: Condition[];
+    dangerous?: boolean;
+    networkTracker?: NetworkResponseTracker;
+    beforeSignature?: string;
+}): Promise<{
+    outcomeStatus: OutcomeStatus;
+    matchedConditions: MatchedCondition[];
+    retrySafe: boolean;
+}>;
+
+// @public
+export function extractPageState(url: string, title: string, snapshot: PageSnapshot, forms: FormField[], pageText: string): PageState;
+
+// @public
+export function extractReview(url: string, title: string, snapshot: PageSnapshot, forms: FormField[], pageText: string): ReviewResult;
+
 // @public (undocumented)
 export interface FailRequestOptions {
     reason: 'Failed' | 'Aborted' | 'TimedOut' | 'AccessDenied' | 'ConnectionClosed' | 'ConnectionReset' | 'ConnectionRefused' | 'ConnectionAborted' | 'ConnectionFailed' | 'NameNotResolved' | 'InternetDisconnected' | 'AddressUnreachable' | 'BlockedByClient' | 'BlockedByResponse';
@@ -440,6 +598,15 @@ export interface FillOptions extends ActionOptions {
     blur?: boolean;
     verify?: boolean;
 }
+
+// @public
+export function fingerprintKey(fp: SemanticFingerprint): string;
+
+// @public
+export function fingerprintSimilarity(a: SemanticFingerprint, b: SemanticFingerprint): number;
+
+// @public
+export function formatWorkflowSummary(summary: WorkflowSummary): string;
 
 // @public (undocumented)
 export interface FormField {
@@ -550,6 +717,24 @@ export interface InterceptedRequest {
 // @public
 export function isTranscriptionAvailable(): boolean;
 
+// @public
+export interface KeyValuePair {
+    // (undocumented)
+    key: string;
+    // (undocumented)
+    value: string;
+}
+
+// @public (undocumented)
+export interface MatchedCondition {
+    // (undocumented)
+    condition: Condition;
+    // (undocumented)
+    detail?: string;
+    // (undocumented)
+    matched: boolean;
+}
+
 // @public (undocumented)
 export class NavigationError extends Error {
     constructor(message: string);
@@ -561,6 +746,31 @@ export interface NetworkIdleOptions extends ActionOptions {
 }
 
 // @public
+export class NetworkResponseTracker {
+    // (undocumented)
+    getResponses(): Array<{
+        url: string;
+        status: number;
+    }>;
+    // (undocumented)
+    reset(): void;
+    // (undocumented)
+    start(cdp: CDPClient): void;
+    // (undocumented)
+    stop(cdp: CDPClient): void;
+}
+
+// @public (undocumented)
+export type OutcomeStatus = 'success' | 'failed' | 'ambiguous' | 'unsafe_to_retry';
+
+// @public
+export interface OverlayInfo {
+    hasOverlay: boolean;
+    overlaySelector?: string;
+    overlayText?: string;
+}
+
+// @public
 export class Page {
     constructor(cdp: CDPClient, targetId: string);
     get audioInput(): AudioInput;
@@ -568,6 +778,7 @@ export class Page {
     audioRoundTrip(options: RoundTripOptions): Promise<RoundTripResult>;
     batch(steps: Step[], options?: BatchOptions): Promise<BatchResult>;
     blockResources(types: ResourceType[]): Promise<() => void>;
+    captureState(): Promise<PageState>;
     get cdpClient(): CDPClient;
     check(selector: string | string[], options?: ActionOptions): Promise<boolean>;
     clearCookies(options?: ClearCookiesOptions): Promise<void>;
@@ -588,6 +799,7 @@ export class Page {
     cookies(urls?: string[]): Promise<Cookie[]>;
     deleteCookie(options: DeleteCookieOptions): Promise<void>;
     deleteCookies(cookies: DeleteCookieOptions[]): Promise<void>;
+    delta(before?: PageState): Promise<DeltaResult | PageState>;
     disableInterception(): Promise<void>;
     emulate(device: DeviceDescriptor): Promise<void>;
     evaluate<T = unknown, Args extends unknown[] = unknown[]>(expression: string | ((...args: Args) => T), ...args: Args): Promise<T>;
@@ -634,6 +846,7 @@ export class Page {
     removeSessionStorage(key: string): Promise<void>;
     reset(): Promise<void>;
     resetLastActionPosition(): void;
+    review(): Promise<ReviewResult>;
     route(urlPattern: string, options: RouteOptions): Promise<() => void>;
     screenshot(options?: {
         format?: 'png' | 'jpeg' | 'webp';
@@ -705,6 +918,34 @@ export interface PageSnapshot {
     url: string;
 }
 
+// @public
+export interface PageState {
+    // (undocumented)
+    alerts: string[];
+    // (undocumented)
+    buttons: Array<{
+        text: string;
+        disabled: boolean;
+        ref?: string;
+    }>;
+    // (undocumented)
+    formFields: Array<{
+        label?: string;
+        name?: string;
+        id?: string;
+        value: unknown;
+        type: string;
+    }>;
+    // (undocumented)
+    headings: string[];
+    // (undocumented)
+    title: string;
+    // (undocumented)
+    url: string;
+    // (undocumented)
+    visibleText: string;
+}
+
 // Warning: (ae-forgotten-export) The symbol "ParsedDevToolsActivePort" needs to be exported by the entry point index.d.ts
 //
 // @public (undocumented)
@@ -725,6 +966,13 @@ export function pcmToWav(options: {
     right?: Float32Array;
     sampleRate: number;
 }): ArrayBuffer;
+
+// @public (undocumented)
+export interface PinRecoveryResult {
+    confidence: number;
+    method: 'exact' | 'url_match' | 'title_match' | 'best_guess';
+    targetId: string;
+}
 
 // @public
 export interface PlayOptions {
@@ -756,6 +1004,17 @@ export interface RecordOptions {
     sessionId?: string;
     skipActions?: ActionType[];
 }
+
+// Warning: (ae-forgotten-export) The symbol "TargetInfo_2" needs to be exported by the entry point index.d.ts
+//
+// @public
+export function recoverPinnedTarget(pin: TargetFingerprint, targets: TargetInfo_2[], threshold?: number): PinRecoveryResult | null;
+
+// @public
+export function recoverStaleRef(staleFingerprint: SemanticFingerprint, currentFingerprints: Map<string, SemanticFingerprint>, threshold?: number): {
+    ref: string;
+    confidence: number;
+} | null;
 
 // @public (undocumented)
 export interface RequestActions {
@@ -810,6 +1069,33 @@ export type ResolvedBrowserSource = 'explicit-ws' | 'devtools-active-port' | 'js
 // @public
 export type ResourceType = 'Document' | 'Stylesheet' | 'Image' | 'Media' | 'Font' | 'Script' | 'TextTrack' | 'XHR' | 'Fetch' | 'Prefetch' | 'EventSource' | 'WebSocket' | 'Manifest' | 'SignedExchange' | 'Ping' | 'CSPViolationReport' | 'Preflight' | 'Other';
 
+// @public (undocumented)
+export interface ReviewResult {
+    // (undocumented)
+    alerts: string[];
+    // (undocumented)
+    forms: Array<{
+        label?: string;
+        value: unknown;
+        type: string;
+        disabled: boolean;
+    }>;
+    // (undocumented)
+    headings: string[];
+    // (undocumented)
+    keyValues: KeyValuePair[];
+    // (undocumented)
+    statusLabels: string[];
+    // (undocumented)
+    summaryCards: SummaryCard[];
+    // (undocumented)
+    tables: TableData[];
+    // (undocumented)
+    title: string;
+    // (undocumented)
+    url: string;
+}
+
 // @public
 export interface RoundTripOptions {
     input: ArrayBuffer | Uint8Array;
@@ -833,6 +1119,18 @@ export interface RouteOptions {
     contentType?: string;
     headers?: Record<string, string>;
     status?: number;
+}
+
+// @public
+export interface SemanticFingerprint {
+    label: string;
+    name: string;
+    nearestHeading: string;
+    role: string;
+    sectionPath: string[];
+    siblingIndex: number;
+    stableAttrs: Record<string, string>;
+    valueShape: string;
 }
 
 // @public (undocumented)
@@ -871,9 +1169,14 @@ export interface Step {
     amount?: number;
     blur?: boolean;
     combo?: string;
+    dangerous?: boolean;
     delay?: number;
     direction?: 'up' | 'down' | 'left' | 'right';
     expect?: string;
+    expectAll?: Condition[];
+    expectAny?: Condition[];
+    failIf?: Condition[];
+    files?: string[];
     format?: 'png' | 'jpeg' | 'webp';
     from?: string;
     // (undocumented)
@@ -935,7 +1238,10 @@ export interface StepResult {
     failureReason?: FailureReason;
     hints?: FailureHint[];
     index: number;
+    matchedConditions?: MatchedCondition[];
+    outcomeStatus?: OutcomeStatus;
     result?: unknown;
+    retrySafe?: boolean;
     screenshotPath?: string;
     selector?: string | string[];
     selectorUsed?: string;
@@ -945,10 +1251,59 @@ export interface StepResult {
     timestamp?: number;
 }
 
+// @public
+export function submitAndVerify(page: Page, options: SubmitAndVerifyOptions): Promise<SubmitAndVerifyResult>;
+
+// @public
+export interface SubmitAndVerifyOptions {
+    dangerous?: boolean;
+    expectAll?: Condition[];
+    expectAny?: Condition[];
+    failIf?: Condition[];
+    method?: 'enter' | 'click' | 'enter+click';
+    selector: string | string[];
+    timeout?: number;
+    waitForNavigation?: boolean | 'auto';
+}
+
+// @public (undocumented)
+export interface SubmitAndVerifyResult {
+    durationMs: number;
+    error?: string;
+    matchedConditions: MatchedCondition[];
+    outcomeStatus: OutcomeStatus;
+    retrySafe: boolean;
+    submitted: boolean;
+}
+
 // @public (undocumented)
 export interface SubmitOptions extends ActionOptions {
     method?: 'enter' | 'click' | 'enter+click';
     waitForNavigation?: boolean | 'auto';
+}
+
+// @public (undocumented)
+export interface SummaryCard {
+    // (undocumented)
+    heading?: string;
+    // (undocumented)
+    items: KeyValuePair[];
+}
+
+// @public (undocumented)
+export interface TableData {
+    // (undocumented)
+    headers: string[];
+    // (undocumented)
+    rows: string[][];
+}
+
+// @public
+export interface TargetFingerprint {
+    originalTargetId: string;
+    pinnedAt: number;
+    title: string;
+    url: string;
 }
 
 // @public (undocumented)
@@ -1024,6 +1379,26 @@ export interface TranscribeResult {
 export interface TypeOptions extends ActionOptions {
     blur?: boolean;
     delay?: number;
+}
+
+// @public
+export interface UploadConfig {
+    files: string[];
+    selector: string | string[];
+    timeout?: number;
+}
+
+// @public
+export function uploadFiles(page: Page, config: UploadConfig): Promise<UploadResult>;
+
+// @public (undocumented)
+export interface UploadResult {
+    accepted: boolean;
+    error?: string;
+    fileCount: number;
+    fileNames: string[];
+    validationError?: string;
+    visibleInUI?: boolean;
 }
 
 // @public (undocumented)
@@ -1144,6 +1519,31 @@ export interface WaitResult {
 
 // @public
 export type WaitState = 'visible' | 'hidden' | 'attached' | 'detached';
+
+// @public
+export interface WorkflowStepSummary {
+    description: string;
+    durationMs: number;
+    error?: string;
+    outcomeEvidence?: string[];
+    outcomeStatus?: string;
+    retrySafe?: boolean;
+    step: number;
+    success: boolean;
+    suggestion?: string;
+}
+
+// @public (undocumented)
+export interface WorkflowSummary {
+    failedSteps: number;
+    steps: WorkflowStepSummary[];
+    succeededSteps: number;
+    success: boolean;
+    totalDurationMs: number;
+    totalSteps: number;
+    verdict: string;
+    workflowRetrySafe: boolean;
+}
 
 // Warnings were encountered during analysis:
 //

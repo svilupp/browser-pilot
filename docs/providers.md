@@ -4,9 +4,98 @@ browser-pilot supports multiple browser providers. Choose based on your use case
 
 | Provider | Best For | Pros | Cons |
 |----------|----------|------|------|
-| BrowserBase | Production, AI agents | Managed, scalable, session recording | Requires account |
-| Browserless | Production | Simple API, good free tier | Fewer features |
-| Generic | Development, testing | Free, works locally | Must manage Chrome |
+| Generic | Development, local testing | Free, works locally, fastest | Must manage Chrome |
+| Browser Use | Production, AI agents (recommended cloud) | CAPTCHA solving, anti-detect, residential proxies in 195+ countries, live viewer | Requires account |
+| BrowserBase | Production | Managed, scalable, session recording | Requires account |
+| Browserless | Simple automation | Simple API, good free tier | Fewer features |
+
+## Browser Use (Recommended Cloud Provider)
+
+[Browser Use](https://browser-use.com) provides cloud-hosted browsers with built-in CAPTCHA solving, anti-detect fingerprinting, and residential proxies in 195+ countries. Recommended when local Chrome is not available.
+
+### Setup
+
+1. Create an account at [browser-use.com](https://browser-use.com)
+2. Get your API key from the dashboard
+3. Set `BROWSER_USE_API_KEY` in your environment
+
+### Usage
+
+```typescript
+import { connect } from 'browser-pilot';
+
+const browser = await connect({
+  provider: 'browser-use',
+  apiKey: process.env.BROWSER_USE_API_KEY,
+});
+
+// Live viewer URL is logged to stderr and available in metadata
+console.log(browser.metadata?.['liveUrl']);
+```
+
+### Proxy Options
+
+```typescript
+// UK proxy (default)
+const browser = await connect({
+  provider: 'browser-use',
+  apiKey: process.env.BROWSER_USE_API_KEY,
+});
+
+// German proxy
+const browser = await connect({
+  provider: 'browser-use',
+  apiKey: process.env.BROWSER_USE_API_KEY,
+  proxyCountryCode: 'de',
+});
+
+// No proxy
+const browser = await connect({
+  provider: 'browser-use',
+  apiKey: process.env.BROWSER_USE_API_KEY,
+  proxyCountryCode: null,
+});
+```
+
+### Session Options
+
+```typescript
+const browser = await connect({
+  provider: 'browser-use',
+  apiKey: process.env.BROWSER_USE_API_KEY,
+  proxyCountryCode: 'us',
+  profileId: 'saved-profile-uuid',   // Reuse a saved browser profile
+  cloudTimeout: 30,                   // Session timeout in minutes (max 240)
+  session: {
+    width: 1920,
+    height: 1080,
+  },
+});
+```
+
+### Session Resumption
+
+```typescript
+const browser1 = await connect({
+  provider: 'browser-use',
+  apiKey: process.env.BROWSER_USE_API_KEY,
+});
+const sessionId = browser1.sessionId;
+await browser1.disconnect();
+
+// Later: resume
+// (resumeSession is called internally when session ID is available)
+```
+
+### CLI Usage
+
+```bash
+bp connect --provider browser-use                              # UK proxy (default)
+bp connect --provider browser-use --proxy-country de           # German proxy
+bp connect --provider browser-use --proxy-country null         # No proxy
+bp connect --provider browser-use --cloud-timeout 30           # 30-min session
+bp connect --provider browser-use --profile-id <uuid>          # Saved profile
+```
 
 ## BrowserBase
 
@@ -216,11 +305,14 @@ All providers support these common options:
 
 ```typescript
 interface ConnectOptions {
-  provider: 'browserbase' | 'browserless' | 'generic';
+  provider: 'browserbase' | 'browserless' | 'browser-use' | 'generic';
   apiKey?: string;
   wsUrl?: string;
-  timeout?: number;  // Connection timeout in ms (default: 30000)
-  debug?: boolean;   // Enable debug logging
+  timeout?: number;           // Connection timeout in ms (default: 30000)
+  debug?: boolean;            // Enable debug logging
+  proxyCountryCode?: string | null;  // Browser Use proxy (default: 'uk')
+  profileId?: string;                // Browser Use profile ID
+  cloudTimeout?: number;             // Browser Use timeout in minutes
 }
 ```
 
@@ -234,6 +326,16 @@ const browser = await connect({ provider: 'browserbase', apiKey });
 // Access provider metadata
 console.log(browser.metadata);
 // { debugUrl: 'https://...', liveUrl: 'https://...' }
+```
+
+### Browser Use Metadata
+
+```typescript
+const browser = await connect({ provider: 'browser-use', apiKey });
+
+// Access provider metadata
+console.log(browser.metadata);
+// { liveUrl: 'https://...', status: 'active', timeoutAt: '...', proxyCountryCode: 'uk' }
 ```
 
 ### Direct CDP Access
