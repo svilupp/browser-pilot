@@ -303,7 +303,7 @@ await page.waitForNetworkIdle({ idleTime: 1000 }); // Wait 1s of no requests
 
 ## Content
 
-### snapshot()
+### snapshot(options?)
 
 Get an accessibility tree snapshot of the page.
 
@@ -315,7 +315,14 @@ console.log(snapshot.title);
 console.log(snapshot.text);
 console.log(snapshot.accessibilityTree);
 console.log(snapshot.interactiveElements);
+
+// Opt-in: enrich each interactive element with real DOM attributes
+const enriched = await page.snapshot({ attributes: true });
+console.log(enriched.interactiveElements[0]?.attributes); // { id, 'data-testid', class, name, type, ... }
 ```
+
+**Options:**
+- `attributes?: boolean` - Populate `InteractiveElement.attributes` with real DOM attributes (`id`, `data-testid`/`data-test`/`data-qa`, stable `class`es, `name`, `type`) via a single batched `DOM.getDocument` pass (default: false).
 
 **Returns:** `PageSnapshot`
 
@@ -408,6 +415,42 @@ const sum = await page.evaluate((a, b) => a + b, 2, 3);
 ```
 
 **Returns:** The evaluated result (serialized)
+
+## Resolution & Diagnostics
+
+### resolveAll(intent, options?)
+
+Score every plausible target for an intent and return the ranked candidates. Read-only: it ranks only and executes nothing (no clicks, no navigation).
+
+```typescript
+const candidates = await page.resolveAll('create order', { limit: 5 });
+console.log(candidates[0]?.ref, candidates[0]?.score, candidates[0]?.strategy);
+```
+
+**Parameters:**
+- `intent: string` - Natural-language description of the target.
+- `options?: { snapshot?, action?, limit?, includeHidden?, strategies?, minConfidence? }` - When `snapshot` is omitted, an attribute-enriched snapshot is taken automatically.
+
+**Returns:** `RankedCandidate[]`
+
+### diagnose(selectorOrIntent, options?)
+
+Explain why a selector or intent does/doesn't resolve to an element.
+
+```typescript
+const result = await page.diagnose('#submit-btn');
+if (result.matched) {
+  console.log(result.visibility, result.interactivity, result.attributes);
+} else {
+  console.log(result.candidates); // ranked fuzzy suggestions
+}
+```
+
+**Parameters:**
+- `selectorOrIntent: string` - A CSS selector, `ref:` selector, or fuzzy intent.
+- `options?: DiagnoseOptions` - `{ maxCandidates?, includeHidden? }`.
+
+**Returns:** `DiagnoseResult` (`DiagnoseExactResult | DiagnoseFuzzyResult`)
 
 ## Files
 

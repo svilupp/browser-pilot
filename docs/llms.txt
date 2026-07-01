@@ -71,6 +71,7 @@ bp trace summary -s vt --view voice
 - `bp page` is compact and caches the refs it shows, but it is not an exhaustive action inventory
 - `bp text` is the primary command for readable long-form page copy
 - `bp exec --json` returns `success`, `totalDurationMs`, and per-step results including `selectorUsed`, `error`, `suggestion`, and `hints` when available
+- On a failed testid/id lookup, `bp exec --json` `hints[]` now normalizes dashed/underscored/camelCase intents: an intent like `create-order` (or `create_order` / `createOrder`) can now match an element labeled `Create Order`. Expect richer, sometimes different, testid/id hint suggestions than before 0.1.0
 - `bp record summary <artifact>` returns counts, trace summaries, and next-command tips
 - `bp trace summary <source> --view <view>` returns a view-specific summary over canonical trace events
 - `bp trace export ...` writes events plus derived summaries

@@ -32,6 +32,7 @@ import {
 } from '../wait/index.ts';
 import { ActionabilityError, ensureActionable } from './actionability.ts';
 import { computeDelta, type DeltaResult, extractPageState, type PageState } from './delta.ts';
+import { type DiagnoseOptions, type DiagnoseResult, diagnoseElement } from './diagnose.ts';
 import { generateHints } from './hint-generator.ts';
 import {
   computeModifierBitmask,
@@ -43,6 +44,7 @@ import {
   US_KEYBOARD,
 } from './keyboard.ts';
 import { extractReview, type ReviewResult } from './review.ts';
+import { type CandidateStrategy, type RankedCandidate, rankCandidates } from './selector-rank.ts';
 import { buildSpecialSelectorLookupExpression } from './special-selectors.ts';
 import {
   type ActionOptions,
@@ -89,6 +91,111 @@ function normalizeAXCheckedValue(value: unknown): boolean | undefined {
   }
 
   return undefined;
+}
+
+/**
+ * Minimal shape of a node in the flattened tree returned by CDP
+ * `DOM.getDocument({ depth: -1, pierce: true })`.
+ *
+ * Only the fields the attribute-enrichment pass needs are modeled; this is
+ * structurally compatible with the richer `DOMNode` from `../cdp/protocol.ts`,
+ * so the real CDP payload assigns cleanly. `attributes` is CDP's flat
+ * `[name, value, name, value, ...]` list.
+ */
+export interface FlatDomNode {
+  backendNodeId?: number;
+  nodeName?: string;
+  attributes?: string[];
+  children?: FlatDomNode[];
+  contentDocument?: FlatDomNode;
+  shadowRoots?: FlatDomNode[];
+}
+
+/**
+ * Heuristic: is `c` a durable, semantic class name worth handing to the ranker?
+ *
+ * Rejects generated/hashed/atomic tokens that change between builds or renders
+ * (CSS-modules hashes, styled-components/emotion suffixes, atomic gibberish,
+ * purely-numeric and over-long tokens) and keeps short human-authored names.
+ */
+export function isStableClassName(c: string): boolean {
+  const cls = c.trim();
+  if (cls.length === 0) return false;
+
+  // Over-long tokens are almost always generated/atomic.
+  if (cls.length > 24) return false;
+
+  // Purely-numeric tokens carry no semantic meaning.
+  if (/^\d+$/.test(cls)) return false;
+
+  // CSS-modules hashes: a semantic prefix glued to a hash via `_`/`__` where the
+  // tail contains a digit, e.g. `Button_abc123`, `Header__3xY7z`.
+  if (/_{1,2}[a-z0-9]*\d[a-z0-9]*$/i.test(cls)) return false;
+
+  // Hashed/atomic suffixes: `<prefix>-<6+ char hashy tail>` where the tail looks
+  // random (has a digit, or mixes letter case), e.g. `css-1a2b3c`, `sc-bdVaJa`.
+  // Plain semantic tails like `nav-container` are kept.
+  const dash = cls.indexOf('-');
+  if (dash > 0) {
+    const tail = cls.slice(dash + 1);
+    if (
+      tail.length >= 6 &&
+      /^[a-z0-9]+$/i.test(tail) &&
+      (/\d/.test(tail) || (/[a-z]/.test(tail) && /[A-Z]/.test(tail)))
+    ) {
+      return false;
+    }
+  }
+
+  // Separator-free alphanumeric gibberish with digits (atomic classes, e.g. `x1nrf0dw`).
+  if (cls.length >= 6 && !/[-_]/.test(cls) && /\d/.test(cls) && /[a-z]/i.test(cls)) {
+    return false;
+  }
+
+  return true;
+}
+
+/**
+ * Pure extraction pass over a flattened CDP DOM tree.
+ *
+ * Walks the tree (including iframe `contentDocument` and `shadowRoots`) and
+ * returns a `backendNodeId -> attributes` map. Attribute names in `wantedNames`
+ * are copied verbatim; `class` is filtered down to stable tokens only. Nodes
+ * with no relevant attributes are omitted. No browser required — fully testable.
+ */
+export function extractAttributesByBackendId(
+  root: FlatDomNode | undefined,
+  wantedNames: readonly string[]
+): Map<number, Record<string, string>> {
+  const wanted = new Set(wantedNames);
+  const byBackendId = new Map<number, Record<string, string>>();
+
+  const visit = (node: FlatDomNode | undefined): void => {
+    if (!node) return;
+    if (node.backendNodeId !== undefined && Array.isArray(node.attributes)) {
+      const attrs: Record<string, string> = {};
+      for (let i = 0; i < node.attributes.length; i += 2) {
+        const name = node.attributes[i];
+        const value = node.attributes[i + 1];
+        if (name === undefined || value === undefined) continue;
+        if (wanted.has(name)) {
+          attrs[name] = value;
+        } else if (name === 'class' && value.trim().length > 0) {
+          // Keep stable (non-utility-noise) classes only: drop tokens that
+          // look state/hash-like so the ranker gets durable hooks.
+          const stable = value.split(/\s+/).filter((c) => c.length > 0 && isStableClassName(c));
+          if (stable.length > 0) attrs['class'] = stable.join(' ');
+        }
+      }
+      if (Object.keys(attrs).length > 0) byBackendId.set(node.backendNodeId, attrs);
+    }
+    if (node.children) for (const child of node.children) visit(child);
+    if (node.contentDocument) visit(node.contentDocument);
+    if (node.shadowRoots) for (const sr of node.shadowRoots) visit(sr);
+  };
+
+  visit(root);
+  return byBackendId;
 }
 
 const EVENT_LISTENER_TRACKER_SCRIPT = `(() => {
@@ -2475,6 +2582,18 @@ export class Page {
         ? accessibilityTree.map((node) => formatNode(node)).join('\n')
         : formatTree(accessibilityTree);
 
+    // Opt-in: enrich interactive elements with real DOM attributes via a
+    // single batched pass (one DOM.getDocument flatten), NOT one CDP call
+    // per node. Default-off so the cheap AX-only path is byte-for-byte
+    // unchanged.
+    if (options.attributes && interactiveElements.length > 0) {
+      try {
+        await this.enrichSnapshotAttributes(interactiveElements, nodeRefs, nodeMap);
+      } catch {
+        // Enrichment is best-effort; never fail the snapshot over it.
+      }
+    }
+
     const result: PageSnapshot = {
       url,
       title,
@@ -2483,10 +2602,67 @@ export class Page {
       interactiveElements,
       text,
     };
-    if (roleFilter.size === 0) {
+    if (roleFilter.size === 0 && !options.attributes) {
       this.lastSnapshot = result; // Store for stale ref recovery
     }
     return result;
+  }
+
+  /** Attributes captured by the opt-in `snapshot({ attributes: true })` pass. */
+  private static readonly ENRICHED_ATTRIBUTE_NAMES = [
+    'id',
+    'data-testid',
+    'data-test',
+    'data-test-id',
+    'data-qa',
+    'name',
+    'type',
+    'placeholder',
+    'role',
+    'aria-label',
+  ];
+
+  /**
+   * Batched DOM-attribute enrichment for {@link snapshot} (opt-in).
+   *
+   * Performs ONE `DOM.getDocument` flatten (depth -1, pierce) to obtain every
+   * node's `backendNodeId` + inline `attributes`, builds a
+   * `backendNodeId -> Record<string,string>` map, and assigns the relevant
+   * attributes (`id`, `data-testid`/`data-test`/`data-qa`, stable `class`es,
+   * `name`, `type`, ...) onto each `InteractiveElement.attributes`.
+   *
+   * This is a single round-trip regardless of element count.
+   */
+  private async enrichSnapshotAttributes(
+    interactiveElements: InteractiveElement[],
+    nodeRefs: Map<string, string>,
+    nodeMap: Map<string, { backendDOMNodeId?: number }>
+  ): Promise<void> {
+    // Build ref -> backendNodeId from the AX node map (the snapshot's source of truth).
+    const refToBackendId = new Map<string, number>();
+    for (const [nodeId, ref] of nodeRefs.entries()) {
+      const backendId = nodeMap.get(nodeId)?.backendDOMNodeId;
+      if (backendId !== undefined) refToBackendId.set(ref, backendId);
+    }
+    if (refToBackendId.size === 0) return;
+
+    // ONE batched DOM read: full flattened document (incl. shadow/iframe piercing)
+    // with inline attributes. Single round-trip regardless of element count.
+    const doc = await this.cdp.send<{ root: FlatDomNode }>('DOM.getDocument', {
+      depth: -1,
+      pierce: true,
+    });
+
+    const byBackendId = extractAttributesByBackendId(doc.root, Page.ENRICHED_ATTRIBUTE_NAMES);
+
+    for (const el of interactiveElements) {
+      const backendId = refToBackendId.get(el.ref);
+      if (backendId === undefined) continue;
+      const attrs = byBackendId.get(backendId);
+      if (attrs && Object.keys(attrs).length > 0) {
+        el.attributes = attrs;
+      }
+    }
   }
 
   /**
@@ -3156,6 +3332,45 @@ export class Page {
   async close(): Promise<void> {
     // Page closing is managed by Browser.closePage()
     // This method exists for API convenience in tests
+  }
+
+  // ============ Resolution & Diagnostics ============
+
+  /**
+   * Score every plausible target for `intent` and return the ranked candidates.
+   *
+   * Takes ONE snapshot (reusing `opts.snapshot` when provided, otherwise an
+   * attribute-enriched snapshot so testid/css strategies have real DOM hooks),
+   * then delegates all scoring to {@link rankCandidates}. This is read-only:
+   * it EXECUTES NOTHING — no clicks, no navigation — it only ranks.
+   */
+  async resolveAll(
+    intent: string,
+    opts: {
+      snapshot?: PageSnapshot;
+      action?: string;
+      limit?: number;
+      includeHidden?: boolean;
+      strategies?: CandidateStrategy[];
+      minConfidence?: number;
+    } = {}
+  ): Promise<RankedCandidate[]> {
+    const snapshot = opts.snapshot ?? (await this.snapshot({ attributes: true }));
+    return rankCandidates(snapshot, intent, {
+      actionType: opts.action,
+      maxResults: opts.limit,
+      strategies: opts.strategies,
+      minConfidence: opts.minConfidence,
+      returnAll: true,
+    });
+  }
+
+  /**
+   * Diagnose why a selector or intent does/doesn't resolve to an element.
+   * Thin delegation to {@link diagnoseElement}.
+   */
+  async diagnose(selectorOrIntent: string, opts?: DiagnoseOptions): Promise<DiagnoseResult> {
+    return diagnoseElement(this, selectorOrIntent, opts);
   }
 
   // ============ Private Helpers ============

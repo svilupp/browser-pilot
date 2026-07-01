@@ -172,6 +172,40 @@ export interface BrowserOptions extends ConnectOptions {
 }
 
 // @public
+export interface BrowserUseOptions {
+    // (undocumented)
+    allowResizing?: boolean;
+    // (undocumented)
+    apiKey: string;
+    // (undocumented)
+    baseUrl?: string;
+    // (undocumented)
+    customProxy?: {
+        host: string;
+        port: number;
+        username?: string;
+        password?: string;
+    };
+    // (undocumented)
+    profileId?: string;
+    // (undocumented)
+    proxyCountryCode?: string | null;
+    // (undocumented)
+    timeout?: number;
+}
+
+// @public (undocumented)
+export class BrowserUseProvider implements Provider {
+    constructor(options: BrowserUseOptions);
+    // (undocumented)
+    createSession(options?: CreateSessionOptions): Promise<ProviderSession>;
+    // (undocumented)
+    readonly name = "browser-use";
+    // (undocumented)
+    resumeSession(sessionId: string): Promise<ProviderSession>;
+}
+
+// @public
 export function bufferToBase64(data: ArrayBuffer | Uint8Array): string;
 
 // @public
@@ -188,6 +222,9 @@ export function buildWorkflowSummary(result: BatchResult): WorkflowSummary;
 
 // @public
 export function calculateRMS(samples: Float32Array): number;
+
+// @public
+export type CandidateStrategy = 'testid' | 'role_name' | 'label' | 'scoped_text' | 'structural_fingerprint' | 'css';
 
 // @public
 export interface CaptureOptions {
@@ -208,6 +245,12 @@ export interface CaptureResult {
 
 // @public
 export function captureStateSignature(page: Page): Promise<string>;
+
+// @public
+export function captureStructureSignature(snapshot: PageSnapshot, opts?: StructureSignatureOptions): string;
+
+// @public (undocumented)
+export function captureStructureSignature(page: Page, opts?: StructureSignatureOptions): Promise<string>;
 
 // @public (undocumented)
 export interface CDPClient {
@@ -306,6 +349,7 @@ export type Condition = {
     status?: number;
 } | {
     kind: 'stateSignatureChanges';
+    mode?: 'text' | 'structure';
 };
 
 // @public
@@ -341,9 +385,12 @@ export function connect(options: BrowserOptions): Promise<Browser>;
 export interface ConnectOptions {
     apiKey?: string;
     channel?: ChromeChannel;
+    cloudTimeout?: number;
     debug?: boolean;
+    profileId?: string;
     projectId?: string;
-    provider: 'browserbase' | 'browserless' | 'generic';
+    provider: 'browserbase' | 'browserless' | 'browser-use' | 'generic';
+    proxyCountryCode?: string | null;
     session?: CreateSessionOptions;
     timeout?: number;
     userDataDir?: string;
@@ -426,6 +473,12 @@ export interface CustomSelectConfig {
     value: string;
 }
 
+// @public
+export const DEFAULT_FUZZY_THRESHOLD = 0.3;
+
+// @public
+export const DEFAULT_MASK_ROLES: readonly ["status", "alert", "log", "timer", "progressbar", "marquee"];
+
 // @public (undocumented)
 export interface DeleteCookieOptions {
     domain?: string;
@@ -476,6 +529,71 @@ export type DeviceName = keyof typeof devices;
 
 // @public (undocumented)
 export const devices: Record<string, DeviceDescriptor>;
+
+// @public
+export function diagnoseElement(page: Page, selector: string, options?: DiagnoseOptions): Promise<DiagnoseResult>;
+
+// @public
+export interface DiagnoseExactResult {
+    // (undocumented)
+    attributes: Record<string, string>;
+    // (undocumented)
+    element: {
+        role: string;
+        name: string;
+        nodeId: number;
+        backendNodeId: number;
+    };
+    // (undocumented)
+    interactivity: {
+        disabled: boolean;
+        readonly: boolean;
+        covered: boolean;
+        coveringElement?: CoveringElement;
+        clickable: boolean;
+        reason?: string;
+    };
+    // (undocumented)
+    matched: true;
+    // (undocumented)
+    ref: string;
+    // (undocumented)
+    selector: string;
+    // (undocumented)
+    suggestedSelectors: string[];
+    // Warning: (ae-forgotten-export) The symbol "VisibilityState" needs to be exported by the entry point index.d.ts
+    //
+    // (undocumented)
+    visibility: VisibilityState;
+}
+
+// @public
+export interface DiagnoseFuzzyResult {
+    // (undocumented)
+    candidates: Array<{
+        score: number;
+        ref: string;
+        selector: string;
+        role: string;
+        name: string;
+        visible: boolean;
+        disabled: boolean;
+        matchReason: string;
+    }>;
+    // (undocumented)
+    matched: false;
+    // (undocumented)
+    query: string;
+}
+
+// @public (undocumented)
+export interface DiagnoseOptions {
+    includeHidden?: boolean;
+    maxCandidates?: number;
+}
+
+// @public (undocumented)
+export type DiagnoseResult = DiagnoseExactResult | DiagnoseFuzzyResult;
 
 // @public (undocumented)
 export interface Dialog {
@@ -559,6 +677,7 @@ export type ErrorHandler = (error: PageError) => void;
 export function evaluateCondition(condition: Condition, page: Page, context?: {
     networkTracker?: NetworkResponseTracker;
     beforeSignature?: string;
+    beforeStructureSignature?: string;
 }): Promise<MatchedCondition>;
 
 // @public
@@ -569,6 +688,7 @@ export function evaluateOutcome(page: Page, options: {
     dangerous?: boolean;
     networkTracker?: NetworkResponseTracker;
     beforeSignature?: string;
+    beforeStructureSignature?: string;
 }): Promise<{
     outcomeStatus: OutcomeStatus;
     matchedConditions: MatchedCondition[];
@@ -655,6 +775,13 @@ export interface FulfillRequestOptions {
 }
 
 // @public
+export interface FuzzyMatchOptions {
+    maxResults?: number;
+    minScore?: number;
+    returnAll?: boolean;
+}
+
+// @public
 export function generateSilence(durationMs: number, sampleRate?: number): Float32Array;
 
 // @public
@@ -691,6 +818,7 @@ export function grantAudioPermissions(cdp: CDPClient, origin?: string): Promise<
 
 // @public (undocumented)
 export interface InteractiveElement {
+    attributes?: Record<string, string>;
     checked?: boolean;
     disabled?: boolean;
     name: string;
@@ -800,6 +928,7 @@ export class Page {
     deleteCookie(options: DeleteCookieOptions): Promise<void>;
     deleteCookies(cookies: DeleteCookieOptions[]): Promise<void>;
     delta(before?: PageState): Promise<DeltaResult | PageState>;
+    diagnose(selectorOrIntent: string, opts?: DiagnoseOptions): Promise<DiagnoseResult>;
     disableInterception(): Promise<void>;
     emulate(device: DeviceDescriptor): Promise<void>;
     evaluate<T = unknown, Args extends unknown[] = unknown[]>(expression: string | ((...args: Args) => T), ...args: Args): Promise<T>;
@@ -846,6 +975,14 @@ export class Page {
     removeSessionStorage(key: string): Promise<void>;
     reset(): Promise<void>;
     resetLastActionPosition(): void;
+    resolveAll(intent: string, opts?: {
+        snapshot?: PageSnapshot;
+        action?: string;
+        limit?: number;
+        includeHidden?: boolean;
+        strategies?: CandidateStrategy[];
+        minConfidence?: number;
+    }): Promise<RankedCandidate[]>;
     review(): Promise<ReviewResult>;
     route(urlPattern: string, options: RouteOptions): Promise<() => void>;
     screenshot(options?: {
@@ -995,6 +1132,35 @@ export interface ProviderSession {
     wsUrl: string;
 }
 
+// @public
+export function rankCandidates(snapshot: PageSnapshot, intent: string, opts?: RankCandidatesOptions): RankedCandidate[];
+
+// @public
+export interface RankCandidatesOptions {
+    actionType?: string;
+    maxResults?: number;
+    minConfidence?: number;
+    returnAll?: boolean;
+    strategies?: CandidateStrategy[];
+}
+
+// @public
+export interface RankedCandidate {
+    name: string;
+    ref?: string;
+    role: string;
+    score: number;
+    selector: string;
+    strategy: CandidateStrategy;
+}
+
+// @public
+export function rankSelectorCandidates(el: InteractiveElement): {
+    strategy: CandidateStrategy;
+    selector: string;
+    score: number;
+}[];
+
 // @public (undocumented)
 export interface RecordOptions {
     format?: 'png' | 'jpeg' | 'webp';
@@ -1097,6 +1263,14 @@ export interface ReviewResult {
 }
 
 // @public
+export interface RichSelectorCandidate {
+    confidence: 'high' | 'medium' | 'low';
+    // Warning: (ae-forgotten-export) The symbol "SelectorStrategy" needs to be exported by the entry point index.d.ts
+    strategy: SelectorStrategy;
+    value: string;
+}
+
+// @public
 export interface RoundTripOptions {
     input: ArrayBuffer | Uint8Array;
     preDelay?: number;
@@ -1120,6 +1294,9 @@ export interface RouteOptions {
     headers?: Record<string, string>;
     status?: number;
 }
+
+// @public
+export function scoreElement(query: string, element: InteractiveElement): number;
 
 // @public
 export interface SemanticFingerprint {
@@ -1160,6 +1337,7 @@ export interface SnapshotNode {
 
 // @public (undocumented)
 export interface SnapshotOptions {
+    attributes?: boolean;
     roles?: string[];
 }
 
@@ -1249,6 +1427,14 @@ export interface StepResult {
     suggestion?: string;
     text?: string;
     timestamp?: number;
+}
+
+// @public (undocumented)
+export interface StructureSignatureOptions {
+    depth?: number;
+    includeState?: boolean;
+    maskRoles?: string[];
+    maskSelectors?: string[];
 }
 
 // @public
@@ -1547,8 +1733,9 @@ export interface WorkflowSummary {
 
 // Warnings were encountered during analysis:
 //
-// dist/types-DeVSWhXj.d.ts:67:9 - (ae-forgotten-export) The symbol "LocalBrowserCandidate" needs to be exported by the entry point index.d.ts
-// dist/types-DeVSWhXj.d.ts:68:9 - (ae-forgotten-export) The symbol "LocalDiscoveryFailure" needs to be exported by the entry point index.d.ts
+// dist/page-BaWtauBf.d.ts:841:9 - (ae-forgotten-export) The symbol "CoveringElement" needs to be exported by the entry point index.d.ts
+// dist/types-D2pJQpWs.d.ts:67:9 - (ae-forgotten-export) The symbol "LocalBrowserCandidate" needs to be exported by the entry point index.d.ts
+// dist/types-D2pJQpWs.d.ts:68:9 - (ae-forgotten-export) The symbol "LocalDiscoveryFailure" needs to be exported by the entry point index.d.ts
 
 // (No @packageDocumentation comment for this package)
 

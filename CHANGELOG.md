@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.1.0] - 2026-06-30
+
+Non-breaking release — everything below is additive. Existing APIs and byte-level outputs are unchanged except where noted for `bp exec --json` hints (see Changed).
+
+### Added
+
+- `diagnoseElement` and `Page.diagnose(selectorOrIntent, opts)` — explain why a selector or intent does/doesn't resolve, returning exact-match interactivity/visibility details or ranked fuzzy candidates (`DiagnoseResult`, `DiagnoseExactResult`, `DiagnoseFuzzyResult`, `DiagnoseOptions`).
+- Configurable fuzzy matching — `scoreElement`, `FuzzyMatchOptions`, and `DEFAULT_FUZZY_THRESHOLD` expose the element-scoring primitive and let callers tune the match threshold, plus slug normalization (`normalizeSlug`) so dashed/underscored/camelCase intents match human labels.
+- Opt-in DOM attribute enrichment — `snapshot({ attributes: true })` populates `InteractiveElement.attributes` (real `id`/`data-testid`/`data-test`/`data-qa`/stable `class`/`name`/`type`) via a single batched `DOM.getDocument` pass.
+- Candidate ranking — `rankCandidates`, `rankSelectorCandidates`, and `Page.resolveAll(intent, opts)` score every plausible target for an intent and return ranked candidates (`RankedCandidate`, `CandidateStrategy`, `RankCandidatesOptions`, `RichSelectorCandidate`). `resolveAll` is read-only (ranks only, executes nothing).
+- Structural page signatures — `captureStructureSignature` (`StructureSignatureOptions`, `DEFAULT_MASK_ROLES`) hashes the accessibility role-tree skeleton, and the `stateSignatureChanges` outcome condition gains `mode?: 'text' | 'structure'` (default `'text'`, existing behavior unchanged).
+
+### Changed
+
+- `bp exec --json` `hints[]` output for testid/id lookups now normalizes dashed/underscored/camelCase intents, so an intent like `create-order` can match a `Create Order` element. This changes hint suggestions for failed testid/id selectors; the mechanical action contract is unchanged.
+
 ## [0.0.18] - 2026-03-22
 
 - Add Browser Use cloud provider with built-in CAPTCHA solving, anti-detect fingerprinting, and residential proxies in 195+ countries. Recommended cloud provider when local Chrome CDP is unavailable.

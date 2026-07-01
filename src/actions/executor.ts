@@ -13,6 +13,7 @@ import {
 import { ActionabilityError } from '../browser/actionability.ts';
 import { generateHints } from '../browser/hint-generator.ts';
 import type { Page } from '../browser/page.ts';
+import { captureStructureSignature } from '../browser/signature.ts';
 import { ElementNotFoundError, NavigationError, TimeoutError } from '../browser/types.ts';
 import { CDPError } from '../cdp/protocol.ts';
 import {
@@ -206,14 +207,30 @@ function needsNetworkTracking(step: Step): boolean {
   return allConditions.some((c) => c.kind === 'networkResponse');
 }
 
-/** Check if any conditions need state signature */
-function needsStateSignature(step: Step): boolean {
+/**
+ * Which before-state signatures a step's `stateSignatureChanges` conditions
+ * require. A condition compares its "after" capture against a like-for-like
+ * "before" capture, so a `mode:'structure'` condition needs a structural
+ * before-signature while the default (`mode:'text'`) needs the text one. A
+ * step may contain both, so we capture each mode only when actually needed.
+ */
+function stateSignatureModes(step: Step): { text: boolean; structure: boolean } {
   const allConditions: Condition[] = [
     ...(step.expectAny ?? []),
     ...(step.expectAll ?? []),
     ...(step.failIf ?? []),
   ];
-  return allConditions.some((c) => c.kind === 'stateSignatureChanges');
+  let text = false;
+  let structure = false;
+  for (const c of allConditions) {
+    if (c.kind !== 'stateSignatureChanges') continue;
+    if (c.mode === 'structure') {
+      structure = true;
+    } else {
+      text = true;
+    }
+  }
+  return { text, structure };
 }
 
 export class BatchExecutor {
@@ -271,14 +288,19 @@ export class BatchExecutor {
       const hasOutcome = hasOutcomeConditions(step);
       let networkTracker: NetworkResponseTracker | undefined;
       let beforeSignature: string | undefined;
+      let beforeStructureSignature: string | undefined;
+      const signatureModes = stateSignatureModes(step);
 
       if (hasOutcome) {
         if (needsNetworkTracking(step)) {
           networkTracker = new NetworkResponseTracker();
           networkTracker.start(this.page.cdpClient);
         }
-        if (needsStateSignature(step)) {
+        if (signatureModes.text) {
           beforeSignature = await captureStateSignature(this.page);
+        }
+        if (signatureModes.structure) {
+          beforeStructureSignature = await captureStructureSignature(this.page);
         }
       }
 
@@ -287,8 +309,11 @@ export class BatchExecutor {
           await new Promise((resolve) => setTimeout(resolve, retryDelay));
           // Reset network tracker for retry
           if (networkTracker) networkTracker.reset();
-          if (hasOutcome && needsStateSignature(step)) {
+          if (hasOutcome && signatureModes.text) {
             beforeSignature = await captureStateSignature(this.page);
+          }
+          if (hasOutcome && signatureModes.structure) {
+            beforeStructureSignature = await captureStructureSignature(this.page);
           }
         }
 
@@ -320,6 +345,7 @@ export class BatchExecutor {
               dangerous: step.dangerous,
               networkTracker,
               beforeSignature,
+              beforeStructureSignature,
             });
             stepResult.outcomeStatus = outcome.outcomeStatus;
             stepResult.matchedConditions = outcome.matchedConditions;

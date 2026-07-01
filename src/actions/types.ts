@@ -27,7 +27,7 @@ export type Condition =
   | { kind: 'textAppears'; selector?: string | string[]; text: string }
   | { kind: 'textChanges'; selector?: string | string[]; to?: string }
   | { kind: 'networkResponse'; urlPattern: string; status?: number }
-  | { kind: 'stateSignatureChanges' };
+  | { kind: 'stateSignatureChanges'; mode?: 'text' | 'structure' };
 
 export interface MatchedCondition {
   condition: Condition;

@@ -3,6 +3,7 @@
  */
 
 import type { Page } from '../browser/page.ts';
+import { captureStructureSignature } from '../browser/signature.ts';
 import type { CDPClient } from '../cdp/client.ts';
 import { globToRegex } from '../utils/strings.ts';
 import type { Condition, MatchedCondition, OutcomeStatus } from './types.ts';
@@ -78,6 +79,7 @@ export async function evaluateCondition(
   context: {
     networkTracker?: NetworkResponseTracker;
     beforeSignature?: string;
+    beforeStructureSignature?: string;
   } = {}
 ): Promise<MatchedCondition> {
   switch (condition.kind) {
@@ -211,11 +213,20 @@ export async function evaluateCondition(
     }
 
     case 'stateSignatureChanges': {
-      if (!context.beforeSignature) {
+      const isStructure = condition.mode === 'structure';
+      // Compare like-for-like: a structural condition must diff against the
+      // structural before-signature (and text against the text one). Comparing
+      // a structural "after" to a text "before" would always report a change.
+      const beforeSignature = isStructure
+        ? context.beforeStructureSignature
+        : context.beforeSignature;
+      if (!beforeSignature) {
         return { condition, matched: false, detail: 'No before-signature captured' };
       }
-      const afterSignature = await captureStateSignature(page);
-      const matched = afterSignature !== context.beforeSignature;
+      const afterSignature = isStructure
+        ? await captureStructureSignature(page)
+        : await captureStateSignature(page);
+      const matched = afterSignature !== beforeSignature;
       return {
         condition,
         matched,
@@ -250,6 +261,7 @@ export async function evaluateOutcome(
     dangerous?: boolean;
     networkTracker?: NetworkResponseTracker;
     beforeSignature?: string;
+    beforeStructureSignature?: string;
   }
 ): Promise<{
   outcomeStatus: OutcomeStatus;
@@ -263,9 +275,10 @@ export async function evaluateOutcome(
     dangerous = false,
     networkTracker,
     beforeSignature,
+    beforeStructureSignature,
   } = options;
   const allMatched: MatchedCondition[] = [];
-  const context = { networkTracker, beforeSignature };
+  const context = { networkTracker, beforeSignature, beforeStructureSignature };
 
   // 1. Check failIf conditions first (any match = failure)
   if (failIf && failIf.length > 0) {

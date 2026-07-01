@@ -12,6 +12,13 @@ export {
   type PageState,
 } from './delta.ts';
 export {
+  type DiagnoseExactResult,
+  type DiagnoseFuzzyResult,
+  type DiagnoseOptions,
+  type DiagnoseResult,
+  diagnoseElement,
+} from './diagnose.ts';
+export {
   buildFingerprintMap,
   createFingerprint,
   fingerprintKey,
@@ -19,6 +26,15 @@ export {
   recoverStaleRef,
   type SemanticFingerprint,
 } from './fingerprint.ts';
+export {
+  DEFAULT_FUZZY_THRESHOLD,
+  type FuzzyMatch,
+  type FuzzyMatchOptions,
+  fuzzyMatchElements,
+  jaroWinkler,
+  scoreElement,
+  stringSimilarity,
+} from './fuzzy-match.ts';
 export { detectOverlay, type OverlayInfo } from './overlay-detect.ts';
 export { Page } from './page.ts';
 export {
@@ -33,6 +49,24 @@ export {
   type SubmitAndVerifyResult,
   submitAndVerify,
 } from './safe-submit.ts';
+export {
+  type GeneratedSelector,
+  generateSelectorStrings,
+  generateSelectors,
+} from './selector-generator.ts';
+export {
+  type CandidateStrategy,
+  type RankCandidatesOptions,
+  type RankedCandidate,
+  type RichSelectorCandidate,
+  rankCandidates,
+  rankSelectorCandidates,
+} from './selector-rank.ts';
+export {
+  captureStructureSignature,
+  DEFAULT_MASK_ROLES,
+  type StructureSignatureOptions,
+} from './signature.ts';
 export {
   createTargetFingerprint,
   type PinRecoveryResult,

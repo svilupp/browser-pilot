@@ -178,6 +178,22 @@ await page.batch([
 await browser.close();
 ```
 
+Resolve and diagnose targets without executing anything:
+
+```typescript
+import { connect } from 'browser-pilot';
+
+const page = await (await connect({ provider: 'generic' })).page();
+
+// Rank every plausible target for an intent (read-only; runs no actions)
+const candidates = await page.resolveAll('create order', { limit: 5 });
+
+// Explain why a selector or intent does/doesn't resolve
+const diagnosis = await page.diagnose('#submit-btn');
+```
+
+`rankCandidates`, `scoreElement`, `diagnoseElement`, and `captureStructureSignature` are also exported directly from `browser-pilot` for use against a snapshot you already hold.
+
 ## Guides
 
 - [CLI guide](./docs/cli.md)

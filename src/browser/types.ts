@@ -124,6 +124,13 @@ export interface PageSnapshot {
 export interface SnapshotOptions {
   /** Restrict the snapshot to these accessibility roles */
   roles?: string[];
+  /**
+   * Capture real DOM attributes (`id`, `data-testid`/`data-test`/`data-qa`,
+   * stable `class`es, `name`, `type`) onto each `InteractiveElement.attributes`
+   * via a single batched in-page pass. Opt-in: when `false`/omitted the
+   * snapshot is byte-for-byte the cheap accessibility-only result. Default: false.
+   */
+  attributes?: boolean;
 }
 
 export interface SnapshotNode {
@@ -160,6 +167,11 @@ export interface InteractiveElement {
   checked?: boolean;
   /** Current value where relevant */
   value?: string;
+  /**
+   * Real DOM attributes for this element (data-testid/data-test/data-qa/id/class/name/type).
+   * Populated only when `snapshot({ attributes: true })` is passed (Phase 7 Change 3a).
+   */
+  attributes?: Record<string, string>;
 }
 
 export interface FormOption {
