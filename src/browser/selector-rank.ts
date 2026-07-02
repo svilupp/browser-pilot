@@ -38,6 +38,16 @@
  * `testid`/`css` selector from the synthetic `[data-backend-node-id=...]`
  * selector string. When attributes are absent we only emit the honest
  * `role_name` / `label` / `scoped_text` / `structural_fingerprint` strategies.
+ *
+ * Configurable attribute allowlist: the `testid` strategy defaults to
+ * {@link DEFAULT_TESTID_ATTRIBUTES} (`data-testid` / `data-test` / `data-qa`).
+ * Callers may EXTEND (never shrink) that set via `testIdAttributes` so a
+ * site-specific deterministic hook — e.g. `data-cmd` on an icon toolbar of
+ * otherwise-identical unnamed buttons — becomes a high-confidence `testid`
+ * candidate like `[data-cmd="c2"]`. {@link rankCandidates} additionally
+ * verifies the extended attribute's value is UNIQUE across the snapshot before
+ * emitting it, so the generated selector is guaranteed to disambiguate. When
+ * `testIdAttributes` is omitted behaviour is byte-for-byte unchanged.
  */
 
 import { fingerprintKey, type SemanticFingerprint } from './fingerprint.ts';
@@ -98,6 +108,36 @@ export interface RankCandidatesOptions {
    * button/link/menuitem while `'fill'` favours textbox/searchbox/combobox.
    */
   actionType?: string;
+  /**
+   * Extra DOM attribute names the `testid` strategy may use as a deterministic
+   * hook, in addition to the built-in {@link DEFAULT_TESTID_ATTRIBUTES}. An
+   * extended attribute produces a `[attr="value"]` candidate only when the
+   * element's value for that attribute is UNIQUE across `snapshot`, guaranteeing
+   * the selector resolves to exactly one element (e.g. `[data-cmd="c2"]`).
+   * Omit to keep the default behaviour unchanged.
+   */
+  testIdAttributes?: string[];
+}
+
+/**
+ * Built-in attribute allowlist for the `testid` strategy. Extended (never
+ * replaced) by the optional `testIdAttributes` option.
+ */
+export const DEFAULT_TESTID_ATTRIBUTES = ['data-testid', 'data-test', 'data-qa'] as const;
+
+/**
+ * Merge caller-supplied extra attribute names onto the default testid
+ * allowlist, dropping blanks and de-duplicating while preserving priority
+ * (defaults first, so a genuine `data-testid` still wins over a custom attr).
+ */
+function resolveTestIdAttributes(extra: string[] | undefined): string[] {
+  if (!extra || extra.length === 0) return [...DEFAULT_TESTID_ATTRIBUTES];
+  const merged = [...DEFAULT_TESTID_ATTRIBUTES] as string[];
+  for (const name of extra) {
+    const trimmed = name.trim();
+    if (trimmed && !merged.includes(trimmed)) merged.push(trimmed);
+  }
+  return merged;
 }
 
 // --- Ladder scores -----------------------------------------------------------
@@ -248,14 +288,22 @@ function actionTypeDelta(actionType: string | undefined, role: string): number {
  * `testid` and `css` are emitted only when the backing real DOM attribute is
  * present on `el.attributes`; otherwise only the honest accessibility-derived
  * strategies are returned. See the module doc-comment for the score ladder.
+ *
+ * `options.testIdAttributes` extends the attribute allowlist scanned for the
+ * `testid` strategy beyond {@link DEFAULT_TESTID_ATTRIBUTES} (defaults keep
+ * priority). Uniqueness across a snapshot is NOT checked here — that is the
+ * caller's contract (see {@link rankCandidates}, which only passes attributes
+ * whose value is unique). Omitting the option leaves behaviour unchanged.
  */
 export function rankSelectorCandidates(
-  el: InteractiveElement
+  el: InteractiveElement,
+  options: { testIdAttributes?: string[] } = {}
 ): { strategy: CandidateStrategy; selector: string; score: number }[] {
   const out: { strategy: CandidateStrategy; selector: string; score: number }[] = [];
 
-  // 1. testid — only from a genuine data-testid/data-test/data-qa attribute.
-  for (const key of ['data-testid', 'data-test', 'data-qa'] as const) {
+  // 1. testid — only from a genuine data-testid/data-test/data-qa attribute
+  //    (plus any caller-supplied extra attributes).
+  for (const key of resolveTestIdAttributes(options.testIdAttributes)) {
     const value = attr(el, key);
     if (value) {
       out.push({
@@ -337,13 +385,46 @@ export function rankCandidates(
   const { strategies, minConfidence, returnAll = false, maxResults, actionType } = opts;
   const strategyFilter = strategies && strategies.length > 0 ? new Set(strategies) : null;
 
+  // Extended (non-default) testid attributes, if any. For these we require the
+  // value to be UNIQUE across the snapshot before we let the ranker emit a
+  // `[attr="value"]` candidate, so the generated selector is guaranteed to
+  // disambiguate N identical-role elements to exactly one.
+  const extendedAttrs = (opts.testIdAttributes ?? [])
+    .map((a) => a.trim())
+    .filter((a) => a.length > 0 && !DEFAULT_TESTID_ATTRIBUTES.includes(a as never));
+  const attrValueCounts = new Map<string, Map<string, number>>();
+  if (extendedAttrs.length > 0) {
+    for (const name of extendedAttrs) attrValueCounts.set(name, new Map());
+    for (const el of snapshot.interactiveElements) {
+      for (const name of extendedAttrs) {
+        const value = el.attributes?.[name];
+        if (value) {
+          const counts = attrValueCounts.get(name)!;
+          counts.set(value, (counts.get(value) ?? 0) + 1);
+        }
+      }
+    }
+  }
+
   const results: RankedCandidate[] = [];
 
   for (const el of snapshot.interactiveElements) {
     const intentScore = scoreElement(intent, el); // 0..1
     const delta = actionTypeDelta(actionType, el.role);
 
-    let selectorCandidates = rankSelectorCandidates(el);
+    // Only offer extended attrs whose value is unique to THIS element.
+    const uniqueExtendedAttrs =
+      extendedAttrs.length > 0
+        ? extendedAttrs.filter((name) => {
+            const value = el.attributes?.[name];
+            return value !== undefined && attrValueCounts.get(name)?.get(value) === 1;
+          })
+        : [];
+
+    let selectorCandidates = rankSelectorCandidates(
+      el,
+      uniqueExtendedAttrs.length > 0 ? { testIdAttributes: uniqueExtendedAttrs } : {}
+    );
     if (strategyFilter) {
       selectorCandidates = selectorCandidates.filter((c) => strategyFilter.has(c.strategy));
     }

@@ -150,6 +150,14 @@ export interface SnapshotOptions {
    * snapshot is byte-for-byte the cheap accessibility-only result. Default: false.
    */
   attributes?: boolean;
+  /**
+   * Extra DOM attribute names to capture onto `InteractiveElement.attributes`
+   * beyond the built-in set, when `attributes` is enabled. Use this to surface
+   * site-specific deterministic hooks (e.g. `data-cmd`) so the selector ranker
+   * can turn them into `[attr="value"]` candidates. Ignored when `attributes`
+   * is falsy. Default: none.
+   */
+  attributeNames?: string[];
 }
 
 export interface SnapshotNode {

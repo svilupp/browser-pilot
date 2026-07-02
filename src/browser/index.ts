@@ -56,6 +56,7 @@ export {
 } from './selector-generator.ts';
 export {
   type CandidateStrategy,
+  DEFAULT_TESTID_ATTRIBUTES,
   type RankCandidatesOptions,
   type RankedCandidate,
   type RichSelectorCandidate,

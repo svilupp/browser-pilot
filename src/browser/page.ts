@@ -2689,7 +2689,12 @@ export class Page {
     // unchanged.
     if (options.attributes && interactiveElements.length > 0) {
       try {
-        await this.enrichSnapshotAttributes(interactiveElements, nodeRefs, nodeMap);
+        await this.enrichSnapshotAttributes(
+          interactiveElements,
+          nodeRefs,
+          nodeMap,
+          options.attributeNames
+        );
       } catch {
         // Enrichment is best-effort; never fail the snapshot over it.
       }
@@ -2737,7 +2742,8 @@ export class Page {
   private async enrichSnapshotAttributes(
     interactiveElements: InteractiveElement[],
     nodeRefs: Map<string, string>,
-    nodeMap: Map<string, { backendDOMNodeId?: number }>
+    nodeMap: Map<string, { backendDOMNodeId?: number }>,
+    extraAttributeNames?: string[]
   ): Promise<void> {
     // Build ref -> backendNodeId from the AX node map (the snapshot's source of truth).
     const refToBackendId = new Map<string, number>();
@@ -2754,7 +2760,11 @@ export class Page {
       pierce: true,
     });
 
-    const byBackendId = extractAttributesByBackendId(doc.root, Page.ENRICHED_ATTRIBUTE_NAMES);
+    const wantedNames =
+      extraAttributeNames && extraAttributeNames.length > 0
+        ? [...Page.ENRICHED_ATTRIBUTE_NAMES, ...extraAttributeNames]
+        : Page.ENRICHED_ATTRIBUTE_NAMES;
+    const byBackendId = extractAttributesByBackendId(doc.root, wantedNames);
 
     for (const el of interactiveElements) {
       const backendId = refToBackendId.get(el.ref);
@@ -3454,14 +3464,24 @@ export class Page {
       includeHidden?: boolean;
       strategies?: CandidateStrategy[];
       minConfidence?: number;
+      /**
+       * Extra DOM attribute names the ranker may use as deterministic hooks
+       * (extends the default data-testid/data-test/data-qa set). When a fresh
+       * snapshot is taken here it is enriched with these attributes too, so a
+       * unique value like `data-cmd="c2"` becomes a `[data-cmd="c2"]` candidate.
+       */
+      testIdAttributes?: string[];
     } = {}
   ): Promise<RankedCandidate[]> {
-    const snapshot = opts.snapshot ?? (await this.snapshot({ attributes: true }));
+    const snapshot =
+      opts.snapshot ??
+      (await this.snapshot({ attributes: true, attributeNames: opts.testIdAttributes }));
     return rankCandidates(snapshot, intent, {
       actionType: opts.action,
       maxResults: opts.limit,
       strategies: opts.strategies,
       minConfidence: opts.minConfidence,
+      testIdAttributes: opts.testIdAttributes,
       returnAll: true,
     });
   }

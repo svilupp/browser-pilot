@@ -82,6 +82,7 @@ export {
   createTargetFingerprint,
   DEFAULT_FUZZY_THRESHOLD,
   DEFAULT_MASK_ROLES,
+  DEFAULT_TESTID_ATTRIBUTES,
   type DeltaChange,
   type DeltaResult,
   type DiagnoseExactResult,

@@ -1,11 +1,35 @@
 export interface ParsedTextSelector {
   query: string;
   exact: boolean;
+  /**
+   * 1-based positional index into the DOM-ordered list of matches, when the
+   * selector carried a `[N]` suffix (e.g. `text:"Add"[2]`). `undefined` means
+   * "single best match" (legacy behaviour).
+   */
+  index?: number;
+  /**
+   * CSS selector for a container to restrict the search to, when the selector
+   * carried a scope prefix (`within(<css>) …` or `<css> >> …`). `undefined`
+   * means "search the whole document".
+   */
+  scope?: string;
 }
 
 export interface ParsedRoleSelector {
   role: string;
   name?: string;
+  /**
+   * 1-based positional index into the DOM-ordered list of matches, when the
+   * selector carried a `[N]` suffix (e.g. `role:button[2]`). `undefined` means
+   * "single best match" (legacy behaviour).
+   */
+  index?: number;
+  /**
+   * CSS selector for a container to restrict the search to, when the selector
+   * carried a scope prefix (`within(<css>) …` or `<css> >> …`). `undefined`
+   * means "search the whole document".
+   */
+  scope?: string;
 }
 
 function stripQuotes(value: string): string {
@@ -18,10 +42,67 @@ function stripQuotes(value: string): string {
   return value;
 }
 
-export function parseTextSelector(selector: string): ParsedTextSelector | null {
-  if (!selector.startsWith('text:')) return null;
+/**
+ * Split an optional container scope off the front of a special selector.
+ *
+ * Two equivalent, order-independent forms are recognised:
+ *   - `within(<containerSelector>) <inner>`  e.g. `within(.toolbar) role:button[2]`
+ *   - `<containerSelector> >> <inner>`        e.g. `.toolbar >> role:button[2]`
+ *
+ * The container selector is an arbitrary (shadow-piercing) CSS selector; the
+ * inner is the remaining `text:`/`role:` special selector. When no scope prefix
+ * is present the whole string is returned as `inner` with no `scope`.
+ *
+ * The `>>` split only takes effect when both sides are non-empty; this keeps a
+ * plain (albeit deprecated) CSS `a >> b` from being misparsed here — if the
+ * inner is not a recognised special selector the caller falls back to treating
+ * the ORIGINAL string as plain CSS.
+ */
+function isSpecialInner(inner: string): boolean {
+  return inner.startsWith('role:') || inner.startsWith('text:');
+}
 
-  let raw = selector.slice(5).trim();
+function parseScopePrefix(selector: string): { scope?: string; inner: string } {
+  const s = selector.trim();
+
+  const withinMatch = /^within\(\s*([\s\S]+?)\s*\)\s+([\s\S]+)$/.exec(s);
+  if (withinMatch?.[1] && withinMatch[2]) {
+    const inner = withinMatch[2].trim();
+    if (isSpecialInner(inner)) {
+      return { scope: stripQuotes(withinMatch[1].trim()), inner };
+    }
+  }
+
+  // `<containerSelector> >> <inner>`. Only treat `>>` as a scope separator when
+  // the right-hand side is itself a special selector — this keeps a literal
+  // `text:">>"` query and plain (deprecated) CSS `a >> b` from being misparsed.
+  const idx = s.indexOf('>>');
+  if (idx > 0) {
+    const left = s.slice(0, idx).trim();
+    const right = s.slice(idx + 2).trim();
+    if (left && isSpecialInner(right)) return { scope: stripQuotes(left), inner: right };
+  }
+
+  return { inner: s };
+}
+
+/**
+ * Pull a trailing 1-based `[N]` positional index off a selector body, if any.
+ * A bracketed index only counts when it is the very last token (so a bracketed
+ * value inside a quoted name — e.g. `role:button:"foo[2]"` — is left intact).
+ */
+function extractTrailingIndex(body: string): { body: string; index?: number } {
+  const match = /\[(\d+)\]\s*$/.exec(body);
+  if (!match) return { body };
+  const index = Number.parseInt(match[1] as string, 10);
+  return { body: body.slice(0, match.index).trim(), index };
+}
+
+export function parseTextSelector(selector: string): ParsedTextSelector | null {
+  const { scope, inner } = parseScopePrefix(selector);
+  if (!inner.startsWith('text:')) return null;
+
+  let raw = inner.slice(5).trim();
   let exact = false;
 
   if (raw.startsWith('=')) {
@@ -29,23 +110,29 @@ export function parseTextSelector(selector: string): ParsedTextSelector | null {
     raw = raw.slice(1).trim();
   }
 
+  const { body, index } = extractTrailingIndex(raw);
+  raw = body;
+
   const query = stripQuotes(raw);
   if (!query) return null;
 
-  return { query, exact };
+  return { query, exact, index, scope };
 }
 
 export function parseRoleSelector(selector: string): ParsedRoleSelector | null {
-  if (!selector.startsWith('role:')) return null;
+  const { scope, inner } = parseScopePrefix(selector);
+  if (!inner.startsWith('role:')) return null;
 
-  const body = selector.slice(5);
-  const separator = body.indexOf(':');
-  const role = (separator === -1 ? body : body.slice(0, separator)).trim().toLowerCase();
-  const name = separator === -1 ? undefined : stripQuotes(body.slice(separator + 1).trim());
+  const { body: withoutIndex, index } = extractTrailingIndex(inner.slice(5));
+  const separator = withoutIndex.indexOf(':');
+  const role = (separator === -1 ? withoutIndex : withoutIndex.slice(0, separator))
+    .trim()
+    .toLowerCase();
+  const name = separator === -1 ? undefined : stripQuotes(withoutIndex.slice(separator + 1).trim());
 
   if (!role) return null;
 
-  return { role, name: name || undefined };
+  return { role, name: name || undefined, index, scope };
 }
 
 export const SPECIAL_SELECTOR_SCRIPT = `
@@ -74,6 +161,69 @@ function bpCollectElements(root) {
 
   visit(root);
   return elements;
+}
+
+// Shadow-piercing querySelector used to resolve a scope container. Mirrors the
+// deep-query behaviour used elsewhere: try the light DOM first, then descend
+// into every shadow root in document order and return the first match.
+function bpDeepQuerySelector(root, selector) {
+  if (!root || !selector) return null;
+  var direct = null;
+  try {
+    direct = root.querySelector(selector);
+  } catch (e) {
+    return null;
+  }
+  if (direct) return direct;
+  var hosts = root.querySelectorAll('*');
+  for (var i = 0; i < hosts.length; i++) {
+    if (hosts[i].shadowRoot) {
+      var found = bpDeepQuerySelector(hosts[i].shadowRoot, selector);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+// Collect the descendants of a container in flattened DOM order, piercing any
+// shadow roots. Deduplicated so a positional index is always stable. The
+// container itself is NOT included (scope = "descendants of the container").
+function bpCollectDescendants(container) {
+  var elements = [];
+  var seen = new Set();
+
+  function visit(node) {
+    if (!node || typeof node.querySelectorAll !== 'function') return;
+    var matches = node.querySelectorAll('*');
+    for (var i = 0; i < matches.length; i++) {
+      var el = matches[i];
+      if (seen.has(el)) continue;
+      seen.add(el);
+      elements.push(el);
+      if (el.shadowRoot) {
+        visit(el.shadowRoot);
+      }
+    }
+  }
+
+  visit(container);
+  if (container && container.shadowRoot) {
+    visit(container.shadowRoot);
+  }
+  return elements;
+}
+
+// Resolve the candidate element set for a query: either every element in the
+// document (legacy) or, when a scope selector is given, only the descendants of
+// the (shadow-piercing) container. Returns null when a requested scope
+// container does not exist, so the query resolves to "no match".
+function bpCandidateElements(scopeSelector) {
+  if (scopeSelector) {
+    var container = bpDeepQuerySelector(document, scopeSelector);
+    if (!container) return null;
+    return bpCollectDescendants(container);
+  }
+  return bpCollectElements(document);
 }
 
 function bpIsVisible(el) {
@@ -206,13 +356,32 @@ function bpIsInteractive(role, el) {
   return tag === 'button' || tag === 'a' || tag === 'input' || tag === 'select' || tag === 'textarea';
 }
 
-function bpFindByText(query, exact, includeHidden) {
+function bpFindByText(query, exact, includeHidden, index, scopeSelector) {
   var needle = bpNormalizeSpace(query).toLowerCase();
   if (!needle) return null;
 
+  var elements = bpCandidateElements(scopeSelector);
+  if (!elements) return null;
+
+  // Positional query (1-based): return the Nth match in DOM order, no scoring.
+  if (index) {
+    var seen = 0;
+    for (var k = 0; k < elements.length; k++) {
+      var candidate = elements[k];
+      if (!includeHidden && !bpIsVisible(candidate)) continue;
+      var candidateText = bpAccessibleName(candidate);
+      if (!candidateText) continue;
+      var candidateHay = candidateText.toLowerCase();
+      var candidateMatched = exact ? candidateHay === needle : candidateHay.includes(needle);
+      if (!candidateMatched) continue;
+      seen++;
+      if (seen === index) return candidate;
+    }
+    return null;
+  }
+
   var best = null;
   var bestScore = -1;
-  var elements = bpCollectElements(document);
 
   for (var i = 0; i < elements.length; i++) {
     var el = elements[i];
@@ -240,14 +409,34 @@ function bpFindByText(query, exact, includeHidden) {
   return best;
 }
 
-function bpFindByRole(role, name, includeHidden) {
+function bpFindByRole(role, name, includeHidden, index, scopeSelector) {
   var targetRole = bpNormalizeSpace(role).toLowerCase();
   if (!targetRole) return null;
 
   var nameNeedle = bpNormalizeSpace(name).toLowerCase();
+
+  var elements = bpCandidateElements(scopeSelector);
+  if (!elements) return null;
+
+  // Positional query (1-based): return the Nth match in DOM order, no scoring.
+  if (index) {
+    var seen = 0;
+    for (var k = 0; k < elements.length; k++) {
+      var candidate = elements[k];
+      if (!includeHidden && !bpIsVisible(candidate)) continue;
+      if (bpInferRole(candidate) !== targetRole) continue;
+      if (nameNeedle) {
+        var candidateName = bpAccessibleName(candidate).toLowerCase();
+        if (!candidateName.includes(nameNeedle)) continue;
+      }
+      seen++;
+      if (seen === index) return candidate;
+    }
+    return null;
+  }
+
   var best = null;
   var bestScore = -1;
-  var elements = bpCollectElements(document);
 
   for (var i = 0; i < elements.length; i++) {
     var el = elements[i];
@@ -285,7 +474,7 @@ export function buildSpecialSelectorLookupExpression(
   if (text) {
     return `(() => {
       ${SPECIAL_SELECTOR_SCRIPT}
-      return bpFindByText(${JSON.stringify(text.query)}, ${text.exact}, ${includeHidden});
+      return bpFindByText(${JSON.stringify(text.query)}, ${text.exact}, ${includeHidden}, ${text.index ?? 0}, ${JSON.stringify(text.scope ?? null)});
     })()`;
   }
 
@@ -293,7 +482,7 @@ export function buildSpecialSelectorLookupExpression(
   if (role) {
     return `(() => {
       ${SPECIAL_SELECTOR_SCRIPT}
-      return bpFindByRole(${JSON.stringify(role.role)}, ${JSON.stringify(role.name ?? '')}, ${includeHidden});
+      return bpFindByRole(${JSON.stringify(role.role)}, ${JSON.stringify(role.name ?? '')}, ${includeHidden}, ${role.index ?? 0}, ${JSON.stringify(role.scope ?? null)});
     })()`;
   }
 

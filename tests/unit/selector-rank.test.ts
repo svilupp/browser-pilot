@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 import {
   type CandidateStrategy,
+  DEFAULT_TESTID_ATTRIBUTES,
   rankCandidates,
   rankSelectorCandidates,
 } from '../../src/browser/selector-rank.ts';
@@ -221,5 +222,119 @@ describe('rankCandidates', () => {
 
     const click = rankCandidates(snapshot, 'Email', { actionType: 'click' });
     expect(click[0]?.role).toBe('button');
+  });
+});
+
+describe('configurable testid attribute allowlist', () => {
+  it('exposes the built-in default set', () => {
+    expect([...DEFAULT_TESTID_ATTRIBUTES]).toEqual(['data-testid', 'data-test', 'data-qa']);
+  });
+
+  it('rankSelectorCandidates ignores non-default attrs when the option is omitted', () => {
+    const el: InteractiveElement = {
+      ref: 'e1',
+      role: 'button',
+      name: '',
+      selector: 'x',
+      attributes: { 'data-cmd': 'c2' },
+    };
+    // Default behavior: data-cmd is not a testid source, no testid candidate.
+    expect(rankSelectorCandidates(el).some((c) => c.strategy === 'testid')).toBe(false);
+  });
+
+  it('rankSelectorCandidates emits [data-cmd="c2"] when data-cmd is in the allowlist', () => {
+    const el: InteractiveElement = {
+      ref: 'e1',
+      role: 'button',
+      name: '',
+      selector: 'x',
+      attributes: { 'data-cmd': 'c2' },
+    };
+    const candidates = rankSelectorCandidates(el, { testIdAttributes: ['data-cmd'] });
+    const top = candidates[0];
+    expect(top?.strategy).toBe('testid');
+    expect(top?.selector).toBe('[data-cmd="c2"]');
+  });
+
+  it('keeps genuine data-testid priority over a custom attr', () => {
+    const el: InteractiveElement = {
+      ref: 'e1',
+      role: 'button',
+      name: 'Save',
+      selector: 'x',
+      attributes: { 'data-testid': 'save', 'data-cmd': 'c2' },
+    };
+    const testid = rankSelectorCandidates(el, { testIdAttributes: ['data-cmd'] }).find(
+      (c) => c.strategy === 'testid'
+    );
+    expect(testid?.selector).toBe('[data-testid="save"]');
+  });
+
+  it('rankCandidates disambiguates 8 identical unnamed buttons via a unique data-cmd', () => {
+    // Icon toolbar: 8 <button>s, no testid/label/text, aria-hidden SVG → empty
+    // accessible name. Each has a unique data-cmd.
+    const snapshot = makeSnapshot(
+      Array.from({ length: 8 }, (_, i) => ({
+        ref: `e${i + 1}`,
+        role: 'button',
+        name: '',
+        selector: `[data-backend-node-id="${i + 1}"]`,
+        attributes: { 'data-cmd': `c${i + 1}` },
+      }))
+    );
+
+    // Without the option: nothing deterministic — no testid candidates at all.
+    const baseline = rankCandidates(snapshot, 'c2', { returnAll: true });
+    expect(baseline.some((c) => c.strategy === 'testid')).toBe(false);
+
+    // With the option: each unique data-cmd becomes a high-confidence candidate.
+    const results = rankCandidates(snapshot, 'c2', {
+      returnAll: true,
+      testIdAttributes: ['data-cmd'],
+    });
+    const forC2 = results.find((c) => c.ref === 'e2');
+    expect(forC2).toBeDefined();
+    const testidForC2 = results.find((c) => c.ref === 'e2' && c.selector === '[data-cmd="c2"]');
+    expect(testidForC2?.strategy).toBe('testid');
+  });
+
+  it('does NOT emit a custom-attr candidate when its value is not unique', () => {
+    // Two buttons share data-cmd="dup" → ambiguous → must not be emitted.
+    const snapshot = makeSnapshot([
+      { ref: 'e1', role: 'button', name: '', selector: 'x', attributes: { 'data-cmd': 'dup' } },
+      { ref: 'e2', role: 'button', name: '', selector: 'y', attributes: { 'data-cmd': 'dup' } },
+      { ref: 'e3', role: 'button', name: '', selector: 'z', attributes: { 'data-cmd': 'uniq' } },
+    ]);
+
+    const results = rankCandidates(snapshot, 'button', {
+      returnAll: true,
+      testIdAttributes: ['data-cmd'],
+    });
+
+    // The unique one is emitted...
+    expect(results.some((c) => c.selector === '[data-cmd="uniq"]')).toBe(true);
+    // ...the ambiguous shared value is never turned into a selector.
+    expect(results.some((c) => c.selector === '[data-cmd="dup"]')).toBe(false);
+  });
+
+  it('default output is unchanged when testIdAttributes is omitted', () => {
+    const snapshot = makeSnapshot([
+      {
+        ref: 'e1',
+        role: 'button',
+        name: 'Save',
+        selector: 'x',
+        attributes: { 'data-testid': 'save', 'data-cmd': 'c1' },
+      },
+    ]);
+
+    const withOption = rankCandidates(snapshot, 'Save', {
+      returnAll: true,
+      testIdAttributes: [],
+    });
+    const withoutOption = rankCandidates(snapshot, 'Save', { returnAll: true });
+    expect(withOption).toEqual(withoutOption);
+    // data-cmd never leaks in when it isn't in the allowlist.
+    expect(withoutOption.some((c) => c.selector.includes('data-cmd'))).toBe(false);
   });
 });
