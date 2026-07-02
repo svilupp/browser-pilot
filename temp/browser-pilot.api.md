@@ -654,6 +654,21 @@ export class ElementNotFoundError extends Error {
 }
 
 // @public (undocumented)
+export interface ElementState {
+    boundingBox: {
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+    } | null;
+    count: number;
+    exists: boolean;
+    text: string;
+    value: string | null;
+    visible: boolean;
+}
+
+// @public (undocumented)
 export interface EmulationState {
     // (undocumented)
     geolocation?: GeolocationOptions;
@@ -930,6 +945,7 @@ export class Page {
     delta(before?: PageState): Promise<DeltaResult | PageState>;
     diagnose(selectorOrIntent: string, opts?: DiagnoseOptions): Promise<DiagnoseResult>;
     disableInterception(): Promise<void>;
+    elementState(selector: string): Promise<ElementState>;
     emulate(device: DeviceDescriptor): Promise<void>;
     evaluate<T = unknown, Args extends unknown[] = unknown[]>(expression: string | ((...args: Args) => T), ...args: Args): Promise<T>;
     exportRefMap(): Record<string, number>;
@@ -1733,7 +1749,7 @@ export interface WorkflowSummary {
 
 // Warnings were encountered during analysis:
 //
-// dist/page-BaWtauBf.d.ts:841:9 - (ae-forgotten-export) The symbol "CoveringElement" needs to be exported by the entry point index.d.ts
+// dist/page-D_0iGbv5.d.ts:863:9 - (ae-forgotten-export) The symbol "CoveringElement" needs to be exported by the entry point index.d.ts
 // dist/types-D2pJQpWs.d.ts:67:9 - (ae-forgotten-export) The symbol "LocalBrowserCandidate" needs to be exported by the entry point index.d.ts
 // dist/types-D2pJQpWs.d.ts:68:9 - (ae-forgotten-export) The symbol "LocalDiscoveryFailure" needs to be exported by the entry point index.d.ts
 

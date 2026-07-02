@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Duplicate same-name buttons</title>
+  <style>
+    body { font-family: sans-serif; padding: 40px; }
+    .product { margin: 16px 0; }
+    button { padding: 8px 16px; font-size: 16px; }
+    #clicked { margin-top: 24px; font-weight: bold; }
+  </style>
+</head>
+<body>
+  <h1>Products</h1>
+
+  <!-- Two buttons with the SAME accessible name ("Add to cart") but distinct
+       data-testid attributes. A snapshot assigns each its own ref, so a caller
+       can end up holding the ref for the WRONG button while leading with a
+       unique testid hint for the RIGHT one. -->
+  <div class="product">
+    <span>Keyboard</span>
+    <button type="button" data-testid="add-p-keyboard" data-product="keyboard">Add to cart</button>
+  </div>
+
+  <div class="product">
+    <span>Headphones</span>
+    <button type="button" data-testid="add-p-headphones" data-product="headphones">Add to cart</button>
+  </div>
+
+  <div id="clicked">none</div>
+
+  <script>
+    const result = document.getElementById('clicked');
+    for (const button of document.querySelectorAll('button[data-product]')) {
+      button.addEventListener('click', () => {
+        result.textContent = button.getAttribute('data-product');
+      });
+    }
+  </script>
+</body>
+</html>

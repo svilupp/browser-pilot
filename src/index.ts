@@ -96,6 +96,7 @@ export {
   diagnoseElement,
   type ElementInfo,
   ElementNotFoundError,
+  type ElementState,
   type EmulationState,
   type ErrorHandler,
   extractPageState,

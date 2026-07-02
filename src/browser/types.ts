@@ -93,6 +93,25 @@ export interface ElementInfo {
   waitedMs: number;
 }
 
+// Arbitrary-selector DOM state
+export interface ElementState {
+  /** At least one match in the DOM (shadow roots pierced) */
+  exists: boolean;
+  /** First match is visibly rendered (display/visibility/opacity + non-zero box) */
+  visible: boolean;
+  /** Number of matches */
+  count: number;
+  /** First match's innerText (fallback textContent), trimmed; "" if none */
+  text: string;
+  /**
+   * First match's form-control value: `el.value` for `<input>`/`<select>`/
+   * `<textarea>`, otherwise null (including when there is no match).
+   */
+  value: string | null;
+  /** First match's bounding box; null if no match or not rendered */
+  boundingBox: { x: number; y: number; width: number; height: number } | null;
+}
+
 // Action result
 export interface ActionResult {
   /** Whether the action succeeded */

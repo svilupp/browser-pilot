@@ -61,6 +61,27 @@ function deepQuery(selector, root = document) {
 `;
 
 /**
+ * Shared visibility predicate, as a JS function declaration string so it can be
+ * inlined into `Runtime.evaluate` expressions. Defines `bpElementVisible(el)`:
+ * an element is visible when it exists AND its computed style is not
+ * display:none / visibility:hidden / opacity:0 AND its bounding box has
+ * non-zero width and height. Reused by the wait subsystem and
+ * `Page.elementState` so the notion of "visible" stays identical across both.
+ * Exported for use in page.ts and other modules.
+ */
+export const VISIBLE_PREDICATE_SCRIPT = `
+function bpElementVisible(el) {
+  if (!el) return false;
+  const style = getComputedStyle(el);
+  if (style.display === 'none') return false;
+  if (style.visibility === 'hidden') return false;
+  if (parseFloat(style.opacity) === 0) return false;
+  const rect = el.getBoundingClientRect();
+  return rect.width > 0 && rect.height > 0;
+}
+`;
+
+/**
  * Check if an element is visible in the viewport
  * Pierces shadow DOM boundaries automatically
  */
@@ -75,14 +96,8 @@ async function isElementVisible(
       specialExpression ??
       `(() => {
         ${DEEP_QUERY_SCRIPT}
-        const el = deepQuery(${JSON.stringify(selector)});
-        if (!el) return false;
-        const style = getComputedStyle(el);
-        if (style.display === 'none') return false;
-        if (style.visibility === 'hidden') return false;
-        if (parseFloat(style.opacity) === 0) return false;
-        const rect = el.getBoundingClientRect();
-        return rect.width > 0 && rect.height > 0;
+        ${VISIBLE_PREDICATE_SCRIPT}
+        return bpElementVisible(deepQuery(${JSON.stringify(selector)}));
       })()`,
     returnByValue: true,
   };

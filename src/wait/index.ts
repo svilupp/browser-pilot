@@ -5,6 +5,7 @@
 export {
   DEEP_QUERY_SCRIPT,
   type NavigationOptions,
+  VISIBLE_PREDICATE_SCRIPT,
   type WaitOptions,
   type WaitResult,
   type WaitState,

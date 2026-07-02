@@ -26,6 +26,7 @@ import type {
 import { stringifyUnknown } from '../utils/json.ts';
 import {
   DEEP_QUERY_SCRIPT,
+  VISIBLE_PREDICATE_SCRIPT,
   waitForAnyElement,
   waitForNetworkIdle as waitForIdle,
   waitForNavigation as waitForNav,
@@ -58,6 +59,7 @@ import {
   type Download,
   type ElementInfo,
   ElementNotFoundError,
+  type ElementState,
   type EmulationState,
   type ErrorHandler,
   type FileInput,
@@ -1757,6 +1759,105 @@ export class Page {
   }
 
   /**
+   * Inspect the live-DOM state of an arbitrary selector — including
+   * non-interactive elements (e.g. a `<div data-testid="toolbar">` container)
+   * that `snapshot()` never surfaces, since that is built from the
+   * accessibility tree and only enumerates interactive roles.
+   *
+   * Runs a single `Runtime.evaluate` round-trip that pierces shadow roots and
+   * honors the current iframe context (like `waitFor`/`text`/`evaluate`). The
+   * visibility test reuses the exact predicate the wait subsystem uses.
+   *
+   * Selector parity with `waitFor`: plain CSS selectors (attribute selectors
+   * like `[data-testid='toolbar']`, `#id`, `.class`, descendant combinators)
+   * and browser-pilot special selectors (`text:` / `role:`) are supported.
+   * For special selectors the match is the single best element, so `count` is
+   * 0 or 1.
+   */
+  async elementState(selector: string): Promise<ElementState> {
+    // Special selectors (text:/role:) resolve to the single best element and
+    // must count hidden elements as "existing"; visibility is computed below.
+    const specialLookup = buildSpecialSelectorLookupExpression(selector, { includeHidden: true });
+
+    const matchesExpr = specialLookup
+      ? `(() => { const bpEl = ${specialLookup}; return bpEl ? [bpEl] : []; })()`
+      : `deepQueryAll(${JSON.stringify(selector)})`;
+
+    const expression = `(() => {
+      ${VISIBLE_PREDICATE_SCRIPT}
+      function deepQueryAll(selector, root) {
+        var node = root || document;
+        var results = [];
+        var seen = new Set();
+        function collect(scope) {
+          if (!scope || typeof scope.querySelectorAll !== 'function') return;
+          var direct;
+          try { direct = scope.querySelectorAll(selector); } catch (e) { return; }
+          for (var i = 0; i < direct.length; i++) {
+            if (!seen.has(direct[i])) { seen.add(direct[i]); results.push(direct[i]); }
+          }
+          var all = scope.querySelectorAll('*');
+          for (var j = 0; j < all.length; j++) {
+            if (all[j].shadowRoot) collect(all[j].shadowRoot);
+          }
+        }
+        collect(node);
+        return results;
+      }
+      var matches;
+      try { matches = ${matchesExpr}; } catch (e) { matches = []; }
+      if (!matches) matches = [];
+      var count = matches.length;
+      var first = count > 0 ? matches[0] : null;
+      var text = '';
+      if (first) {
+        var raw = first.innerText != null ? first.innerText : (first.textContent != null ? first.textContent : '');
+        text = String(raw).trim();
+      }
+      var value = null;
+      if (
+        first &&
+        'value' in first &&
+        typeof first.value === 'string' &&
+        /^(INPUT|SELECT|TEXTAREA)$/.test(first.tagName)
+      ) {
+        value = first.value;
+      }
+      var boundingBox = null;
+      if (first) {
+        var rect = first.getBoundingClientRect();
+        if (rect.width > 0 || rect.height > 0) {
+          boundingBox = { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+        }
+      }
+      return {
+        exists: count > 0,
+        visible: first ? bpElementVisible(first) : false,
+        count: count,
+        text: text,
+        value: value,
+        boundingBox: boundingBox,
+      };
+    })()`;
+
+    const result = await this.evaluateInFrame<{ result: { value: ElementState | undefined } }>(
+      expression,
+      { awaitPromise: true }
+    );
+
+    return (
+      result.result.value ?? {
+        exists: false,
+        visible: false,
+        count: 0,
+        text: '',
+        value: null,
+        boundingBox: null,
+      }
+    );
+  }
+
+  /**
    * Enumerate form controls on the page with labels and current state.
    */
   async forms(): Promise<FormField[]> {
@@ -3422,6 +3523,21 @@ export class Page {
   /**
    * Find an element using single or multiple selectors
    * Supports ref:, text:, and role: selectors.
+   *
+   * The candidate array is an ordered preference list — "most-specific/explicit
+   * hint first, fallbacks after" — so array position is authoritative. We make a
+   * SINGLE ordered pass that tries each candidate in the caller's order and
+   * returns the first that resolves to an element:
+   *   - a `ref:` entry resolves instantly via its backendNodeId (no polling); a
+   *     stale/missing ref falls through to the next candidate.
+   *   - a runtime selector (CSS / [attr] / descendant / `text:` / `role:`) is
+   *     probed with an INSTANT visibility check here.
+   * A `ref:` no longer jumps ahead of a runtime selector that precedes it — the
+   * only behavioral change vs. the old ref-first pass. If nothing is present yet,
+   * the waiting pass below polls the runtime selectors (in author order) so
+   * late-appearing elements still resolve; refs are static (a snapshot's
+   * backendNodeIds), so a ref that failed above can never "appear" later and
+   * needs no waiting.
    */
   private async findElement(
     selectors: string | string[],
@@ -3433,35 +3549,30 @@ export class Page {
     // Clear last matched selector at the start
     this._lastMatchedSelector = undefined;
 
-    // Check for ref: prefix in selectors first (instant lookup, no waiting)
+    // Single ordered pass — honor the caller's candidate order.
     for (const selector of selectorList) {
       if (selector.startsWith('ref:')) {
-        const ref = selector.slice(4); // Extract "e4" from "ref:e4"
-        const backendNodeId = this.refMap.get(ref);
-        if (!backendNodeId) {
-          continue; // Try next selector in list
+        const refMatch = await this.resolveRefSelector(selector);
+        if (refMatch) {
+          this._lastMatchedSelector = selector;
+          return refMatch;
         }
+        continue; // stale/missing ref → try next candidate
+      }
 
-        // Resolve backendNodeId to nodeId by pushing to frontend
-        try {
-          await this.ensureRootNode();
-          const pushResult = await this.cdp.send<{ nodeIds: number[] }>(
-            'DOM.pushNodesByBackendIdsToFrontend',
-            {
-              backendNodeIds: [backendNodeId],
-            }
-          );
-
-          if (pushResult.nodeIds?.[0]) {
-            this._lastMatchedSelector = selector;
-            return {
-              nodeId: pushResult.nodeIds[0],
-              backendNodeId,
-              selector,
-              waitedMs: 0,
-            };
-          }
-        } catch {}
+      // Runtime selector: instant visibility check (timeout: 0). If it is not
+      // present yet, fall through — the waiting pass below will poll for it.
+      const immediate = await waitForAnyElement(this.cdp, [selector], {
+        state: 'visible',
+        timeout: 0,
+        contextId: this.currentFrameContextId ?? undefined,
+      });
+      if (immediate.success && immediate.selector) {
+        const match = await this.resolveRuntimeSelector(immediate.selector, immediate.waitedMs);
+        if (match) {
+          this._lastMatchedSelector = immediate.selector;
+          return match;
+        }
       }
     }
 
@@ -3502,7 +3613,9 @@ export class Page {
       }
     }
 
-    // Filter out ref: selectors for runtime waiting/querying.
+    // Waiting pass: nothing was present immediately. Poll the runtime selectors
+    // (in author order) so late-appearing elements still resolve. refs are
+    // static and already failed above, so only runtime selectors remain here.
     const runtimeSelectors = selectorList.filter((s) => !s.startsWith('ref:'));
     if (runtimeSelectors.length === 0) {
       return null; // All were ref selectors and none worked
@@ -3518,12 +3631,63 @@ export class Page {
       return null;
     }
 
-    const specialSelectorMatch = await this.resolveSpecialSelector(result.selector);
-    if (specialSelectorMatch) {
+    const match = await this.resolveRuntimeSelector(result.selector, result.waitedMs);
+    if (match) {
       this._lastMatchedSelector = result.selector;
+    }
+    return match;
+  }
+
+  /**
+   * Resolve a `ref:eN` selector to a live node via its snapshot backendNodeId.
+   * Returns null (so the caller falls through to the next candidate) when the
+   * ref is missing from the current map or its backend node is stale.
+   */
+  private async resolveRefSelector(selector: string): Promise<ElementInfo | null> {
+    const ref = selector.slice(4); // Extract "e4" from "ref:e4"
+    const backendNodeId = this.refMap.get(ref);
+    if (!backendNodeId) {
+      return null;
+    }
+
+    // Resolve backendNodeId to nodeId by pushing to frontend
+    try {
+      await this.ensureRootNode();
+      const pushResult = await this.cdp.send<{ nodeIds: number[] }>(
+        'DOM.pushNodesByBackendIdsToFrontend',
+        {
+          backendNodeIds: [backendNodeId],
+        }
+      );
+
+      if (pushResult.nodeIds?.[0]) {
+        return {
+          nodeId: pushResult.nodeIds[0],
+          backendNodeId,
+          selector,
+          waitedMs: 0,
+        };
+      }
+    } catch {}
+
+    return null;
+  }
+
+  /**
+   * Resolve a runtime selector (CSS / [attr] / descendant / `text:` / `role:`)
+   * that has already been confirmed present, into an {@link ElementInfo}.
+   * Tries special-selector lookup, then standard querySelector, then a
+   * shadow-piercing deep query. Returns null if the node cannot be materialized.
+   */
+  private async resolveRuntimeSelector(
+    selector: string,
+    waitedMs: number
+  ): Promise<ElementInfo | null> {
+    const specialSelectorMatch = await this.resolveSpecialSelector(selector);
+    if (specialSelectorMatch) {
       return {
         ...specialSelectorMatch,
-        waitedMs: result.waitedMs,
+        waitedMs,
       };
     }
 
@@ -3533,7 +3697,7 @@ export class Page {
     // First try standard querySelector (faster for non-shadow DOM)
     const queryResult = await this.cdp.send<{ nodeId: number }>('DOM.querySelector', {
       nodeId: this.rootNodeId!,
-      selector: result.selector,
+      selector,
     });
 
     if (queryResult.nodeId) {
@@ -3543,12 +3707,11 @@ export class Page {
         { nodeId: queryResult.nodeId }
       );
 
-      this._lastMatchedSelector = result.selector;
       return {
         nodeId: queryResult.nodeId,
         backendNodeId: describeResult.node.backendNodeId,
-        selector: result.selector,
-        waitedMs: result.waitedMs,
+        selector,
+        waitedMs,
       };
     }
 
@@ -3556,7 +3719,7 @@ export class Page {
     const deepQueryResult = await this.evaluateInFrame<{ result: RemoteObject }>(
       `(() => {
         ${DEEP_QUERY_SCRIPT}
-        return deepQuery(${JSON.stringify(result.selector)});
+        return deepQuery(${JSON.stringify(selector)});
       })()`,
       { returnByValue: false }
     );
@@ -3580,12 +3743,11 @@ export class Page {
       { nodeId: nodeResult.nodeId }
     );
 
-    this._lastMatchedSelector = result.selector;
     return {
       nodeId: nodeResult.nodeId,
       backendNodeId: describeResult.node.backendNodeId,
-      selector: result.selector,
-      waitedMs: result.waitedMs,
+      selector,
+      waitedMs,
     };
   }
 
