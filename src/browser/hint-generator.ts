@@ -181,6 +181,27 @@ export async function generateHints(
     return []; // Can't generate hints if snapshot fails
   }
 
+  // We're already on the cold not-found path. If a plain CSS selector matches
+  // only inside a (same-origin) iframe, snapshot()/CSS resolution can't see it
+  // — surface a distinct hint so callers know to switchToFrame() rather than
+  // chasing a look-alike parent match. Best-effort; never throws.
+  const cssSelector = failedSelectors.find(
+    (s) => !s.startsWith('ref:') && !s.startsWith('text:') && !s.startsWith('role:')
+  );
+  if (cssSelector) {
+    try {
+      if ((await page.locateSelectorFrame(cssSelector)) === 'iframe') {
+        console.warn(
+          `[browser-pilot] Selector "${cssSelector}" matches only inside an iframe. ` +
+            'Call switchToFrame(<iframe selector>) before acting on it (snapshot/CSS ' +
+            'resolution does not pierce iframes).'
+        );
+      }
+    } catch {
+      // Detection is advisory only.
+    }
+  }
+
   // Extract search intent from failed selectors
   const intent = extractIntent(failedSelectors);
 

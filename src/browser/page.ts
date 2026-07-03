@@ -695,8 +695,87 @@ export class Page {
         }
       }
 
+      // Snapshot checkbox/radio state before the click so we can guarantee the
+      // click produced real user-click semantics afterwards. `null` for anything
+      // that isn't a checkbox/radio (buttons, links, ...), which are left untouched.
+      const toggleBefore = await this.readToggleState(objectId);
+
       await this.clickElement(element.nodeId);
+
+      if (toggleBefore) {
+        // A genuine user click toggles a checkbox / selects a radio AND fires
+        // bubbling input + change. The trusted CDP mouse click normally does this
+        // on its own, but some controls don't register it (e.g. pointer-events:none
+        // inputs driven by their <label>, or custom-styled controls). Verify and,
+        // if needed, recover — without double-toggling.
+        const expected = toggleBefore.isRadio ? true : !toggleBefore.checked;
+        await this.ensureToggleRegistered(objectId, expected);
+      }
       return true;
+    });
+  }
+
+  /**
+   * Read whether an element is a checkbox/radio and its current checked state.
+   * Returns null for any other element so plain clicks (buttons/links) are untouched.
+   */
+  private async readToggleState(
+    objectId: string
+  ): Promise<{ isRadio: boolean; checked: boolean } | null> {
+    const res = await this.cdp.send<{
+      result: { value: { isRadio: boolean; checked: boolean } | null };
+    }>('Runtime.callFunctionOn', {
+      objectId,
+      functionDeclaration: `function() {
+        if (!(this instanceof HTMLInputElement)) return null;
+        var t = String(this.type || '').toLowerCase();
+        if (t !== 'checkbox' && t !== 'radio') return null;
+        return { isRadio: t === 'radio', checked: !!this.checked };
+      }`,
+      returnByValue: true,
+    });
+    return res.result.value ?? null;
+  }
+
+  /**
+   * After a trusted click on a checkbox/radio, ensure the toggle actually
+   * registered with full user-click semantics (state change + bubbling
+   * input/change). No-op when the click already produced the expected state, so
+   * this never double-toggles. Recovers via a trusted click on the associated
+   * <label> when possible, otherwise synthesizes the state change and events.
+   */
+  private async ensureToggleRegistered(objectId: string, expected: boolean): Promise<void> {
+    let actual: boolean;
+    try {
+      actual = await this.readCheckedState(objectId);
+    } catch {
+      // Node detached (e.g. the click navigated) — nothing to verify.
+      return;
+    }
+    if (actual === expected) return; // Trusted click already did the right thing.
+
+    // Prefer fully-native semantics: a trusted click on the associated <label>.
+    if (await this.tryToggleViaLabel(objectId, expected)) return;
+
+    // Last resort: reproduce exactly what a user click fires — set the state,
+    // then dispatch input followed by change, both bubbling.
+    await this.setCheckedAndDispatch(objectId, expected);
+  }
+
+  /**
+   * Set a checkbox/radio's checked state and fire the bubbling input + change
+   * events (in that order) that a genuine user click would produce.
+   */
+  private async setCheckedAndDispatch(objectId: string, checked: boolean): Promise<void> {
+    await this.cdp.send('Runtime.callFunctionOn', {
+      objectId,
+      functionDeclaration: `function(desired) {
+        if (this.checked !== desired) this.checked = desired;
+        this.dispatchEvent(new Event('input', { bubbles: true }));
+        this.dispatchEvent(new Event('change', { bubbles: true }));
+      }`,
+      arguments: [{ value: checked }],
+      returnByValue: true,
     });
   }
 
@@ -1598,6 +1677,50 @@ export class Page {
    */
   getCurrentFrame(): string | null {
     return this.currentFrame;
+  }
+
+  /**
+   * Diagnose whether a CSS selector resolves inside an iframe rather than the
+   * current (main) document. `snapshot()` and CSS-based fills/waits do NOT
+   * pierce iframes, so a selector whose only true match lives inside an iframe
+   * `contentDocument` will silently fail (or, worse, resolve a look-alike
+   * parent element). This is a best-effort, on-demand check intended for the
+   * failure / not-found path — it runs a single in-page `Runtime.evaluate` and
+   * does not touch the happy path.
+   *
+   * Returns:
+   * - `'main'`   — the selector matches in the current document.
+   * - `'iframe'` — it matches only inside a same-origin iframe; the caller
+   *   should `switchToFrame(...)` before acting on it.
+   * - `'none'`   — no match anywhere reachable (may still exist in a
+   *   cross-origin iframe, which is not inspectable).
+   *
+   * @param selector - A plain CSS selector (ref:/text:/role: selectors are not
+   *   iframe-scoped and always report against the current document).
+   */
+  async locateSelectorFrame(selector: string): Promise<'main' | 'iframe' | 'none'> {
+    try {
+      const result = await this.cdp.send<{ result: RemoteObject }>('Runtime.evaluate', {
+        expression: `(() => {
+          const sel = ${JSON.stringify(selector)};
+          try { if (document.querySelector(sel)) return 'main'; } catch { return 'none'; }
+          const frames = document.querySelectorAll('iframe, frame');
+          for (const f of frames) {
+            try {
+              const doc = f.contentDocument;
+              if (doc && doc.querySelector(sel)) return 'iframe';
+            } catch { /* cross-origin: not inspectable */ }
+          }
+          return 'none';
+        })()`,
+        returnByValue: true,
+        contextId: this.currentFrameContextId ?? undefined,
+      });
+      const value = result.result.value;
+      return value === 'main' || value === 'iframe' ? value : 'none';
+    } catch {
+      return 'none';
+    }
   }
 
   // ============ Waiting ============
@@ -2502,9 +2625,13 @@ export class Page {
    */
   async snapshot(options: SnapshotOptions = {}): Promise<PageSnapshot> {
     const roleFilter = new Set((options.roles ?? []).map((role) => role.trim().toLowerCase()));
-    const [url, title, axTree] = await Promise.all([
-      this.url(),
-      this.title(),
+    // Fold url()+title() into a single Runtime.evaluate round-trip (one CDP
+    // call instead of two) and fetch the AX tree in parallel.
+    const [urlTitle, axTree] = await Promise.all([
+      this.cdp.send<{ result: RemoteObject }>('Runtime.evaluate', {
+        expression: '({ url: location.href, title: document.title })',
+        returnByValue: true,
+      }),
       this.cdp.send<{
         nodes: Array<{
           nodeId: string;
@@ -2519,6 +2646,10 @@ export class Page {
         }>;
       }>('Accessibility.getFullAXTree'),
     ]);
+
+    const urlTitleValue = (urlTitle.result.value ?? {}) as { url?: string; title?: string };
+    const url = urlTitleValue.url ?? '';
+    const title = urlTitleValue.title ?? '';
 
     // Process accessibility nodes
     const nodes = axTree.nodes.filter((n) => !n.ignored);
@@ -2678,7 +2809,13 @@ export class Page {
       return lines.join('\n');
     };
 
-    const text =
+    // Lazily compute the (potentially large) text representation. Most callers
+    // only read `accessibilityTree` / `interactiveElements`; building the full
+    // formatted string on every snapshot is wasteful. The getter memoizes on
+    // first access so repeated reads (and CLI commands that print `.text`) are
+    // unaffected.
+    let textCache: string | undefined;
+    const computeText = (): string =>
       roleFilter.size > 0
         ? accessibilityTree.map((node) => formatNode(node)).join('\n')
         : formatTree(accessibilityTree);
@@ -2706,7 +2843,10 @@ export class Page {
       timestamp: new Date().toISOString(),
       accessibilityTree,
       interactiveElements,
-      text,
+      get text(): string {
+        if (textCache === undefined) textCache = computeText();
+        return textCache;
+      },
     };
     if (roleFilter.size === 0 && !options.attributes) {
       this.lastSnapshot = result; // Store for stale ref recovery
