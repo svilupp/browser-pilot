@@ -440,10 +440,30 @@ export async function ensureActionable(
   const timeout = options?.timeout ?? 30000;
   const start = Date.now();
   let attempt = 0;
+  let broughtToFront = false;
 
   while (true) {
     const result = await runChecks(cdp, objectId, checks, options);
     if (result.actionable) return;
+
+    // A backgrounded/occluded tab is rAF-throttled by Chrome, so its layout can
+    // report a zero-size rect indefinitely and this wait would otherwise poll to
+    // the full timeout. On the FIRST zero-size result, foreground the tab once
+    // (best-effort) and re-measure immediately rather than backing off. Foreground
+    // resumes rendering, so a genuinely-laid-out element measures nonzero at once.
+    if (
+      !broughtToFront &&
+      result.failureType === 'visible' &&
+      result.reason?.includes('zero size')
+    ) {
+      broughtToFront = true;
+      try {
+        await cdp.send('Page.bringToFront');
+      } catch {
+        // Headless / environments that reject bringToFront: fall through to poll.
+      }
+      continue;
+    }
 
     if (Date.now() - start >= timeout) {
       throw new ActionabilityError(

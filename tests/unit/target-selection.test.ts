@@ -7,10 +7,16 @@ import type { TargetInfo } from '../../src/cdp/protocol.ts';
 
 type CDPCall = { method: string; params?: Record<string, unknown> };
 type EventHandler = (params: Record<string, unknown>) => void;
+type AnyEventHandler = (
+  method: string,
+  params: Record<string, unknown>,
+  sessionId?: string
+) => void;
 
 function createMockCDPClient() {
   const responses = new Map<string, unknown>();
   const eventHandlers = new Map<string, Set<EventHandler>>();
+  const anyHandlers = new Set<AnyEventHandler>();
 
   return {
     sent: [] as CDPCall[],
@@ -41,6 +47,42 @@ function createMockCDPClient() {
 
     off(_event: string, _handler: EventHandler) {
       eventHandlers.get(_event)?.delete(_handler);
+    },
+
+    // Firehose used by the session-scoped view that Browser.page() wraps a page
+    // in; the scope routes on()/off() through onAny()/offAny().
+    onAny(handler: AnyEventHandler) {
+      anyHandlers.add(handler);
+    },
+
+    offAny(handler: AnyEventHandler) {
+      anyHandlers.delete(handler);
+    },
+
+    onSessionEvent(_sessionId: string, _event: string, _handler: EventHandler) {
+      return () => {};
+    },
+
+    onTargetAttached(_handler: (info: unknown) => void) {
+      return () => {};
+    },
+
+    async setAutoAttach() {},
+
+    async runIfWaitingForDebugger() {},
+
+    hasSession(_sessionId: string) {
+      return false;
+    },
+
+    get sessions() {
+      return new Set<string>();
+    },
+
+    sessionId: 'mock-session-id' as string | undefined,
+
+    setSessionId(sessionId: string | undefined) {
+      this.sessionId = sessionId;
     },
 
     mockResponse(method: string, response: unknown) {

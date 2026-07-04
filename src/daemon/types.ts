@@ -35,6 +35,13 @@ export interface DaemonEvent {
   method: string;
   /** CDP event params */
   params: Record<string, unknown>;
+  /**
+   * Flat session the event belongs to (undefined = browser-level / default
+   * session). Mirrors CDP's top-level `sessionId` so the CLI's CDP client
+   * parses it back into `event.sessionId` and routes session-scoped events
+   * (e.g. OOPIF child sessions) correctly over the daemon fast-path.
+   */
+  sessionId?: string;
 }
 
 /** Info stored in the session JSON to locate the daemon */

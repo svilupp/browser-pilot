@@ -36,7 +36,7 @@ export {
   stringSimilarity,
 } from './fuzzy-match.ts';
 export { detectOverlay, type OverlayInfo } from './overlay-detect.ts';
-export { Page } from './page.ts';
+export { Page, type PageInitOptions } from './page.ts';
 export {
   extractReview,
   type KeyValuePair,
@@ -57,6 +57,7 @@ export {
 export {
   type CandidateStrategy,
   DEFAULT_TESTID_ATTRIBUTES,
+  isDestructiveName,
   type RankCandidatesOptions,
   type RankedCandidate,
   type RichSelectorCandidate,

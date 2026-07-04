@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test';
 import {
   type CandidateStrategy,
   DEFAULT_TESTID_ATTRIBUTES,
+  isDestructiveName,
   rankCandidates,
   rankSelectorCandidates,
 } from '../../src/browser/selector-rank.ts';
@@ -336,5 +337,61 @@ describe('configurable testid attribute allowlist', () => {
     expect(withOption).toEqual(withoutOption);
     // data-cmd never leaks in when it isn't in the allowlist.
     expect(withoutOption.some((c) => c.selector.includes('data-cmd'))).toBe(false);
+  });
+});
+
+describe('destructive-candidate tagging', () => {
+  it('exports isDestructiveName matching generic destructive words (whole-word, case-insensitive)', () => {
+    for (const name of [
+      'Print',
+      'Print order',
+      'Delete',
+      'Remove item',
+      'Discard changes',
+      'Archive',
+      'Unsubscribe',
+      'Cancel order',
+      'Cancel subscription',
+      'Deactivate account',
+      'Destroy',
+      'Reset password',
+      'Revoke access',
+      'Terminate',
+    ]) {
+      expect(isDestructiveName(name)).toBe(true);
+    }
+  });
+
+  it('does not match substrings of unrelated words or benign labels', () => {
+    for (const name of [
+      'Sprint planning',
+      'Fingerprint',
+      'Save',
+      'Continue',
+      'Submit order',
+      'Add to cart',
+      '',
+    ]) {
+      expect(isDestructiveName(name)).toBe(false);
+    }
+    expect(isDestructiveName(undefined)).toBe(false);
+  });
+
+  it('tags matching ranked candidates as dangerous without dropping them', () => {
+    const snapshot = makeSnapshot([
+      { ref: 'e1', role: 'button', name: 'Print', selector: 'x', attributes: {} },
+      { ref: 'e2', role: 'button', name: 'Save', selector: 'y', attributes: {} },
+    ]);
+
+    const ranked = rankCandidates(snapshot, 'button', { returnAll: true });
+    const print = ranked.filter((c) => c.name === 'Print');
+    const save = ranked.filter((c) => c.name === 'Save');
+
+    // Tagged, not filtered.
+    expect(print.length).toBeGreaterThan(0);
+    expect(print.every((c) => c.dangerous === true)).toBe(true);
+    // Benign candidate is not tagged (field omitted).
+    expect(save.length).toBeGreaterThan(0);
+    expect(save.every((c) => c.dangerous === undefined)).toBe(true);
   });
 });

@@ -1,20 +1,33 @@
 # Changelog
 
-## [0.1.0] - 2026-06-30
+## [0.1.0] - 2026-07-03
 
-Non-breaking release — everything below is additive. Existing APIs and byte-level outputs are unchanged except where noted for `bp exec --json` hints (see Changed).
+Additive for library and CLI users; one narrow breaking change affects only custom `CDPClient` implementers (see Breaking changes).
 
 ### Added
 
-- `diagnoseElement` and `Page.diagnose(selectorOrIntent, opts)` — explain why a selector or intent does/doesn't resolve, returning exact-match interactivity/visibility details or ranked fuzzy candidates (`DiagnoseResult`, `DiagnoseExactResult`, `DiagnoseFuzzyResult`, `DiagnoseOptions`).
-- Configurable fuzzy matching — `scoreElement`, `FuzzyMatchOptions`, and `DEFAULT_FUZZY_THRESHOLD` expose the element-scoring primitive and let callers tune the match threshold, plus slug normalization (`normalizeSlug`) so dashed/underscored/camelCase intents match human labels.
-- Opt-in DOM attribute enrichment — `snapshot({ attributes: true })` populates `InteractiveElement.attributes` (real `id`/`data-testid`/`data-test`/`data-qa`/stable `class`/`name`/`type`) via a single batched `DOM.getDocument` pass.
-- Candidate ranking — `rankCandidates`, `rankSelectorCandidates`, and `Page.resolveAll(intent, opts)` score every plausible target for an intent and return ranked candidates (`RankedCandidate`, `CandidateStrategy`, `RankCandidatesOptions`, `RichSelectorCandidate`). `resolveAll` is read-only (ranks only, executes nothing).
-- Structural page signatures — `captureStructureSignature` (`StructureSignatureOptions`, `DEFAULT_MASK_ROLES`) hashes the accessibility role-tree skeleton, and the `stateSignatureChanges` outcome condition gains `mode?: 'text' | 'structure'` (default `'text'`, existing behavior unchanged).
+- **Cross-origin iframe (OOPIF) support** — `page.switchToFrame(selector)` can now enter genuine cross-origin iframes (e.g. payment widgets). Inside the frame: `fill`, `type`, `click`, `focus`, `press`, `text`, `waitFor`, and `evaluate` work; `switchToMain()` exits. Unsupported methods fail with a clear error instead of silently acting on the parent page. Requires Chrome site isolation (`--site-per-process`). Nested cross-origin frames (e.g. Stripe-like payment forms) are supported.
+- **CDP session multiplexing** (`browser-pilot/cdp`) — multi-session support over a single WebSocket (Workers-safe): `setAutoAttach()`, `onTargetAttached()`, `onSessionEvent()`, and friends. Cross-origin iframes, workers, and service workers auto-attach and are unpaused automatically (no start-up hang).
+- **Per-page CDP session isolation** — each `Page` is pinned to its own CDP session, so actions and events no longer leak between tabs when multiple targets are attached (also applied to the `bp` daemon fast-path).
+- **Background-tab handling** — pages are brought to the front on init (opt out with `PageInitOptions.bringToFront: false`), so automation works reliably against occluded or backgrounded tabs.
+- **Element diagnostics** — `page.diagnose(selectorOrIntent)` explains why a selector does or doesn't resolve, with ranked fuzzy candidates. Fuzzy matching is configurable (`FuzzyMatchOptions`) and normalizes dashed/underscored/camelCase intents to human labels.
+- **Candidate ranking** — `page.resolveAll(intent)` scores every plausible target for an intent and returns ranked candidates (read-only, executes nothing).
+- **Snapshot attribute enrichment** — `snapshot({ attributes: true })` adds real `id`/`data-testid`/`name`/`type` attributes to interactive elements.
+- **Structural page signatures** — the `stateSignatureChanges` outcome condition gains `mode: 'structure'` to detect layout changes instead of text changes.
 
 ### Changed
 
-- `bp exec --json` `hints[]` output for testid/id lookups now normalizes dashed/underscored/camelCase intents, so an intent like `create-order` can match a `Create Order` element. This changes hint suggestions for failed testid/id selectors; the mechanical action contract is unchanged.
+- `bp exec --json` failure `hints[]` now normalize dashed/underscored/camelCase intents (e.g. `create-order` matches a `Create Order` element).
+
+### Fixed
+
+- No more 30-second hangs on hidden or occluded tabs — actionability checks now self-heal when a throttled background tab reports zero-size elements.
+- Daemon session-scoped events now route correctly, and iframes/workers no longer stay frozen (paused) after a CLI command exits — the daemon auto-resumes them.
+- Page listeners are cleaned up on close (no leaks under heavy tab churn), stale frame state is fully reset when a cross-origin frame detaches, and unhandled promise rejections in `reload`, `goBack`, and `goForward` are fixed.
+
+### Breaking changes
+
+- **Custom `CDPClient` implementers only** — the `CDPClient` interface gained session-routing members (`onSessionEvent`, `onTargetAttached`, `setAutoAttach`, `runIfWaitingForDebugger`, `sessions`, `hasSession`), `onAny` handlers now receive a third `sessionId` argument, and calling `setSessionId` on a session-scoped view throws. Users of the bundled client are unaffected.
 
 ## [0.0.18] - 2026-03-22
 

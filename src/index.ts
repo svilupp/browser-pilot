@@ -111,6 +111,7 @@ export {
   fingerprintSimilarity,
   type GeolocationOptions,
   type InteractiveElement,
+  isDestructiveName,
   type KeyValuePair,
   NavigationError,
   type NetworkIdleOptions,

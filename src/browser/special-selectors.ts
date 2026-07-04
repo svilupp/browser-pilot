@@ -119,16 +119,34 @@ export function parseTextSelector(selector: string): ParsedTextSelector | null {
   return { query, exact, index, scope };
 }
 
+/**
+ * Pull a trailing `[name="..."]` bracket off a role selector body, if any.
+ * Agents naturally write `role:button[name="More actions"]` (CSS-attribute
+ * style) as an alias for `role:button:"More actions"`, so accept both. The
+ * bracket value may be double-quoted, single-quoted, or bare, and only the
+ * `name` attribute is recognised — any other bracket is left untouched so the
+ * caller can fall back to plain CSS.
+ */
+function extractTrailingNameBracket(body: string): { body: string; name?: string } {
+  const match = /\[\s*name\s*=\s*("([^"]*)"|'([^']*)'|([^\]]*?))\s*\]\s*$/.exec(body);
+  if (!match) return { body };
+  const name = match[2] ?? match[3] ?? match[4] ?? '';
+  return { body: body.slice(0, match.index).trim(), name };
+}
+
 export function parseRoleSelector(selector: string): ParsedRoleSelector | null {
   const { scope, inner } = parseScopePrefix(selector);
   if (!inner.startsWith('role:')) return null;
 
   const { body: withoutIndex, index } = extractTrailingIndex(inner.slice(5));
-  const separator = withoutIndex.indexOf(':');
-  const role = (separator === -1 ? withoutIndex : withoutIndex.slice(0, separator))
+  const { body: withoutBracket, name: bracketName } = extractTrailingNameBracket(withoutIndex);
+  const separator = withoutBracket.indexOf(':');
+  const role = (separator === -1 ? withoutBracket : withoutBracket.slice(0, separator))
     .trim()
     .toLowerCase();
-  const name = separator === -1 ? undefined : stripQuotes(withoutIndex.slice(separator + 1).trim());
+  const colonName =
+    separator === -1 ? undefined : stripQuotes(withoutBracket.slice(separator + 1).trim());
+  const name = bracketName !== undefined ? bracketName : colonName;
 
   if (!role) return null;
 
@@ -260,6 +278,40 @@ function bpInferRole(el) {
       return 'button';
     }
     return 'textbox';
+  }
+
+  // Custom elements (tag contains a hyphen) have no native role mapping, but
+  // component libraries (web components) frequently render interactive controls
+  // as custom tags with no explicit role attribute. Infer a role from generic,
+  // affordance-based signals only — never from specific tag names — so this
+  // stays library-agnostic. Gated to custom elements, which are rare relative to
+  // the total node count, so the getComputedStyle fallback stays cheap overall.
+  if (tag.indexOf('-') !== -1) {
+    var getAttr = el.getAttribute ? el.getAttribute.bind(el) : function () { return null; };
+    if ((el.hasAttribute && el.hasAttribute('href')) || getAttr('href')) return 'link';
+
+    var tabindex = getAttr('tabindex');
+    if (tabindex != null && !isNaN(parseInt(tabindex, 10)) && parseInt(tabindex, 10) >= 0) {
+      return 'button';
+    }
+    if (el.hasAttribute && el.hasAttribute('onclick')) return 'button';
+
+    // A native interactive control inside the shadow root is a strong signal
+    // that the host is meant to be actioned as a button (shallow check only).
+    if (el.shadowRoot && typeof el.shadowRoot.querySelector === 'function') {
+      try {
+        if (el.shadowRoot.querySelector('button, a[href], [role="button"], input, select, textarea')) {
+          return 'button';
+        }
+      } catch (e) {}
+    }
+
+    // cursor:pointer is the most reliable generic "this is clickable" hint. It
+    // needs getComputedStyle, so it runs last and only for custom elements.
+    try {
+      var cs = getComputedStyle(el);
+      if (cs && cs.cursor === 'pointer') return 'button';
+    } catch (e) {}
   }
 
   return '';

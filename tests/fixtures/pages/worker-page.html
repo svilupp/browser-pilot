@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Worker Fixture Page</title>
+  <style>
+    body { font-family: system-ui, sans-serif; padding: 20px; }
+    .result { margin-top: 10px; padding: 10px; background: #e8f5e9; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <!--
+    Fixture proving that the global `Target.setAutoAttach({ waitForDebuggerOnStart:
+    true })` installed by Page.init() does NOT hang child targets. Every child
+    target (including dedicated workers and service workers) attaches PAUSED and
+    must be released by the engine's `runIfWaitingForDebugger` in
+    handleTargetAttached's finally. If that release ever regressed, the worker's
+    postMessage below would never arrive and #worker-result / #sw-result would
+    stay hidden — so these elements appearing is the proof that children ran.
+  -->
+  <h1>Worker Fixture Page</h1>
+
+  <div id="worker-result" class="result" style="display: none;"></div>
+  <div id="sw-result" class="result" style="display: none;"></div>
+
+  <script>
+    // --- Dedicated Worker (inline via Blob URL, no extra served file) ---
+    // The worker posts a readiness message on start AND echoes a ping. If it were
+    // left paused on the debugger, neither message would arrive.
+    const workerCode = [
+      "self.onmessage = function (e) { self.postMessage('echo:' + e.data); };",
+      "self.postMessage('worker-ready:' + (40 + 2));"
+    ].join('\n');
+    const blob = new Blob([workerCode], { type: 'application/javascript' });
+    const worker = new Worker(URL.createObjectURL(blob));
+    window.__workerMessages = [];
+    worker.onmessage = (e) => {
+      window.__workerMessages.push(String(e.data));
+      const el = document.getElementById('worker-result');
+      el.style.display = 'block';
+      el.textContent = window.__workerMessages.join(' | ');
+    };
+    worker.postMessage('ping');
+
+    // --- Service Worker (best-effort; served from /worker-sw.js) ---
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker
+        .register('/worker-sw.js')
+        .then(() => navigator.serviceWorker.ready)
+        .then(() => {
+          window.__swReady = true;
+          const el = document.getElementById('sw-result');
+          el.style.display = 'block';
+          el.textContent = 'sw-ready';
+        })
+        .catch((err) => { window.__swError = String(err); });
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Cross-Origin Parent Test Page</title>
+  <style>
+    body { font-family: system-ui, sans-serif; padding: 20px; }
+    .section { margin-bottom: 20px; }
+    iframe { border: 2px solid #e65100; border-radius: 4px; }
+    .result { margin-top: 10px; padding: 10px; background: #e8f5e9; border-radius: 4px; }
+    input { padding: 8px; border: 1px solid #ccc; border-radius: 4px; }
+    button { padding: 10px 20px; background: #1976d2; color: white; border: none; border-radius: 4px; cursor: pointer; margin: 5px; }
+  </style>
+</head>
+<body>
+  <!--
+    Served by ORIGIN A. `%%CHILD_ORIGIN%%` is string-replaced with origin B's
+    absolute URL by the harness at serve time (see cross-origin-harness.ts), so
+    the iframes below load CROSS-ORIGIN content and become OOPIFs under
+    --site-per-process.
+  -->
+  <h1>Cross-Origin Parent Test Page (Origin A)</h1>
+
+  <!--
+    ADVERSARIAL LOOK-ALIKE controls. These deliberately mimic the child form:
+    the parent input carries the SAME data-testid ("xo-name") and id ("name")
+    as the real in-frame field, and there is a parent button labelled "Submit".
+    A correct switchToFrame + fill must land the value in the REAL in-frame
+    field on origin B, NOT in this parent look-alike. Test (b) proves that by
+    asserting this parent input stays empty.
+  -->
+  <div class="section">
+    <h2>Parent Controls (look-alikes)</h2>
+    <label for="name">Name:</label>
+    <input type="text" id="name" name="name" data-testid="xo-name" placeholder="Enter name">
+    <button type="button" data-testid="xo-submit">Submit</button>
+  </div>
+
+  <!-- A genuine top-level control for the switchToMain round-trip test (c). -->
+  <div class="section">
+    <h2>Main Frame Control</h2>
+    <button type="button" id="parent-btn" data-testid="parent-button">Parent Frame Button</button>
+    <div id="parent-result" class="result" style="display: none;"></div>
+  </div>
+
+  <div class="section">
+    <h2>Cross-Origin Iframe (Origin B)</h2>
+    <iframe
+      id="xframe"
+      data-testid="x-frame"
+      src="%%CHILD_ORIGIN%%/cross-origin-child.html"
+      width="400"
+      height="260"
+      title="Cross-Origin Child Frame">
+    </iframe>
+  </div>
+
+  <!-- Stretch: Stripe-Elements-like nested OOPIF (controller frame on B that
+       itself embeds a field frame). Exercised by the skipped test (d). -->
+  <div class="section">
+    <h2>Stripe-like Nested Frame (Origin B controller)</h2>
+    <iframe
+      id="stripe-frame"
+      data-testid="stripe-controller-frame"
+      src="%%CHILD_ORIGIN%%/cross-origin-stripe-like.html"
+      width="400"
+      height="260"
+      title="Stripe-like Controller Frame">
+    </iframe>
+  </div>
+
+  <script>
+    document.getElementById('parent-btn').addEventListener('click', () => {
+      const el = document.getElementById('parent-result');
+      el.style.display = 'block';
+      el.textContent = 'Parent frame button clicked!';
+    });
+  </script>
+</body>
+</html>

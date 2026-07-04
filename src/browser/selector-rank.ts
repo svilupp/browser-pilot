@@ -86,6 +86,14 @@ export interface RankedCandidate {
   strategy: CandidateStrategy;
   /** Combined score in 0..1, higher = better. */
   score: number;
+  /**
+   * True when the accessible name matches a generic destructive-action pattern
+   * (print, delete, remove, discard, archive, unsubscribe, cancel order,
+   * deactivate, destroy, ...). Purely advisory: candidates are NEVER filtered on
+   * this — callers decide whether to require confirmation before executing. The
+   * pattern list is intentionally site-agnostic.
+   */
+  dangerous?: boolean;
 }
 
 /**
@@ -138,6 +146,40 @@ function resolveTestIdAttributes(extra: string[] | undefined): string[] {
     if (trimmed && !merged.includes(trimmed)) merged.push(trimmed);
   }
   return merged;
+}
+
+// --- Destructive-action detection --------------------------------------------
+
+/**
+ * Generic, site-agnostic patterns for destructive/irreversible actions. Matched
+ * case-insensitively against an element's accessible name as whole words (so
+ * "print" matches "Print" / "Print order" but not "sprint" or "fingerprint").
+ * Used only to TAG candidates as {@link RankedCandidate.dangerous}; nothing is
+ * filtered out. Keep this list generic — no site- or brand-specific terms.
+ */
+const DESTRUCTIVE_PATTERNS: readonly RegExp[] = [
+  /\bprint\b/i,
+  /\bdelete\b/i,
+  /\bremove\b/i,
+  /\bdiscard\b/i,
+  /\barchive\b/i,
+  /\bunsubscribe\b/i,
+  /\bcancel\s+order\b/i,
+  /\bcancel\s+subscription\b/i,
+  /\bdeactivate\b/i,
+  /\bdestroy\b/i,
+  /\bwipe\b/i,
+  /\berase\b/i,
+  /\bpurge\b/i,
+  /\breset\b/i,
+  /\brevoke\b/i,
+  /\bterminate\b/i,
+];
+
+/** True when `name` matches any generic destructive-action pattern. */
+export function isDestructiveName(name: string | undefined): boolean {
+  if (!name) return false;
+  return DESTRUCTIVE_PATTERNS.some((re) => re.test(name));
 }
 
 // --- Ladder scores -----------------------------------------------------------
@@ -433,6 +475,7 @@ export function rankCandidates(
     // best-per-element (default) vs all candidates for the element.
     const chosen = returnAll ? selectorCandidates : selectorCandidates.slice(0, 1);
 
+    const dangerous = isDestructiveName(el.name);
     for (const candidate of chosen) {
       const score = clamp01(intentScore * INTENT_WEIGHT + candidate.score * QUALITY_WEIGHT + delta);
       results.push({
@@ -442,6 +485,7 @@ export function rankCandidates(
         selector: candidate.selector,
         strategy: candidate.strategy,
         score,
+        ...(dangerous ? { dangerous: true } : {}),
       });
     }
   }

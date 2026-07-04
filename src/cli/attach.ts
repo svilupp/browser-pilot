@@ -153,13 +153,20 @@ export async function attachSession(
 
         const { Browser: BrowserClass } = await import('../browser/browser.ts');
         const { Page: PageClass } = await import('../browser/page.ts');
+        const { createSessionScopedCDP } = await import('../cdp/session-scope.ts');
         const browser = BrowserClass.fromCDP(cdp, session);
         const page =
           session.daemon.cdpSessionId && session.targetId
             ? addBatchToPage(
                 await (async () => {
-                  cdp.setSessionId(session.daemon?.cdpSessionId);
-                  const attachedPage = new PageClass(cdp, session.targetId!);
+                  const cdpSessionId = session.daemon?.cdpSessionId as string;
+                  // Keep the raw client's default session in sync for any code
+                  // that reads it, but pin the Page to a scoped view so its
+                  // session-omitting sends/events stay on ITS target even if
+                  // another target is later attached on the shared client.
+                  cdp.setSessionId(cdpSessionId);
+                  const scoped = createSessionScopedCDP(cdp, cdpSessionId);
+                  const attachedPage = new PageClass(scoped, session.targetId!);
                   await attachedPage.init();
                   return attachedPage;
                 })()

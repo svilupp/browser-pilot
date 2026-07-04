@@ -46,6 +46,12 @@ BatchExecutor        CLI → Unix socket → Daemon → Chrome
 
 Entry: `src/index.ts` exports `Browser`, `Page`, types, providers.
 
+### Per-Page Session Pinning
+One WebSocket per browser, but each `Page` is pinned to its own flat CDP session via `createSessionScopedCDP` (`src/cdp/session-scope.ts`). Session-omitting `send`/`on` calls resolve against the page's own target instead of the client's mutable "current default session", so a page's reads, actions, and events stay on its own target even after other targets attach. Explicit session ids (OOPIF children) and `null` (browser-level) pass through unchanged; `setSessionId` on a scoped view throws. The daemon fast-path (`src/cli/attach.ts`) is pinned the same way.
+
+### Page Lifecycle
+`Page.init()` brings the tab to front via `Page.bringToFront` (opt out with `PageInitOptions.bringToFront: false`). `ensureActionable` does a one-shot `bringToFront` + re-measure when an element first measures 0x0 — fixes rAF-throttled background-tab 30s hangs. `Page.dispose()`/`close()` cleans up event listeners; `Browser.closePage`/`close`/`disconnect` dispose their pages.
+
 ### Target Selection & Viewport Validation
 When `browser.page()` picks a target, it scores candidates (prefers http URLs, unattached targets, targets with titles; penalizes chrome://, devtools://, extensions). After attaching, validates the viewport — if dimensions are pathological (e.g. 56px height from a side panel), auto-applies 1280x720 override with a warning.
 - Scoring: `src/browser/browser.ts` (`scoreTarget()`, `pickBestTarget()`)
@@ -94,6 +100,7 @@ Complex patterns (custom dropdowns, multi-step forms) are composed from primitiv
 | Failure hint generation | `src/browser/hint-generator.ts` |
 | Snapshot diffing | `src/browser/snapshot-diff.ts` |
 | CDP client | `src/cdp/client.ts:53-242` |
+| Session-scoped CDP view | `src/cdp/session-scope.ts` |
 | Batch executor | `src/actions/executor.ts` |
 | Step types + FailureReason | `src/actions/types.ts` |
 | Wait strategies | `src/wait/strategies.ts` |
@@ -166,6 +173,8 @@ bp daemon logs                      # View daemon log
 - **Centralized logging**: All daemon ops logged to `~/.browser-pilot/sessions/{id}/daemon.log`
 - **Heartbeat**: Daemon updates session file every 30s; stale heartbeat triggers fallback
 - **Platform**: Linux, macOS, GitHub Actions (Unix sockets) for daemon mode. Cloudflare Workers use direct WS. Workers now expose parts of `node:net` (with compatibility flags), but daemon mode still depends on Unix domain sockets + local process lifecycle, which are CLI/Node runtime concerns.
+- **Session-scoped events**: `DaemonEvent` carries `sessionId`, so session-scoped event routing works over the daemon.
+- **Auto-resume**: The daemon unpauses auto-attached children that stop for the debugger — immediately when no client is connected, with a 2s fallback otherwise (timers cleaned on close). Prevents a paused OOPIF/worker from freezing the user's live tab.
 - Implementation: `src/daemon/` (server, lifecycle, transport, types), `src/cli/daemon-spawn.ts`
 
 
@@ -227,6 +236,12 @@ const id = ++messageId;
 pending.set(id, { resolve, reject, timeout: setTimeout(...) });
 ws.send(JSON.stringify({ id, method, params, sessionId }));
 ```
+
+Interface additions for flat-session/OOPIF plumbing: `onSessionEvent`, `onTargetAttached`, `setAutoAttach`, `runIfWaitingForDebugger`, `sessions`, `hasSession`. The `onAny` handler signature is now `(method, params, sessionId?)`.
+
+### Cross-Origin (OOPIF) Iframes
+Out-of-process iframes are supported. Per page, auto-attach is armed (`flatten`, `waitForDebuggerOnStart`) so cross-origin frames attach as their own flat child sessions; nested OOPIFs are supported. `switchToFrame` classifies same- vs cross-origin by whether the frame has a child session. Inside a cross-origin frame the supported action subset is `click`/`fill`/`type`/`focus`/`press`/`shortcut`/`text`/`waitFor`/`evaluate`; unsupported actions (`select`/`check`/`uncheck`/`submit`/`hover`/`scroll`/`snapshot`/`forms`/`diagnose`/`upload`, etc.) throw a clear error via `assertOopifUnsupported` — `switchToMain` first. Requires Chrome site isolation (`--site-per-process`). A same-origin iframe nested inside a cross-origin frame (full Stripe Elements) is not supported.
+- Implementation: `src/browser/page.ts` (`oopifFrames` registry, `switchToFrame`, `assertOopifUnsupported`)
 
 ## Provider Pattern
 

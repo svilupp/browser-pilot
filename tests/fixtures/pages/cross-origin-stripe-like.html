@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Stripe-like Controller Frame</title>
+  <style>
+    body { font-family: system-ui, sans-serif; padding: 12px; background: #ede7f6; }
+    iframe { border: 2px solid #5e35b1; border-radius: 4px; }
+    h3 { margin-top: 0; color: #4527a0; }
+  </style>
+</head>
+<body>
+  <!--
+    STRETCH / nested-OOPIF model. This "controller" page is served by ORIGIN B.
+    When embedded in the origin-A parent it is a cross-origin OOPIF, and it in
+    turn embeds a "field" iframe (the child form) — mirroring Stripe Elements'
+    structure: top page -> controller iframe -> card-field iframe.
+
+    The field iframe below is loaded from %%CHILD_ORIGIN%% (origin B) too, so
+    the nesting is: A (parent) -> B (this controller) -> B (field form). The
+    child server templates %%CHILD_ORIGIN%% exactly like the parent server does,
+    which is why the placeholder resolves here as well.
+
+    Reaching the field requires descending TWO frame levels, the second of
+    which lives inside an OOPIF. Exercised by the skipped test (d).
+  -->
+  <h3>Stripe-like Controller (Origin B)</h3>
+
+  <iframe
+    id="stripe-field-frame"
+    data-testid="stripe-field-frame"
+    src="%%CHILD_ORIGIN%%/cross-origin-child.html"
+    width="360"
+    height="180"
+    title="Stripe-like Field Frame">
+  </iframe>
+</body>
+</html>

@@ -2,7 +2,7 @@
  * Browser class - manages CDP connection and pages
  */
 
-import { type CDPClient, createCDPClient } from '../cdp/index.ts';
+import { type CDPClient, createCDPClient, createSessionScopedCDP } from '../cdp/index.ts';
 import type { TargetInfo } from '../cdp/protocol.ts';
 import {
   type ConnectOptions,
@@ -30,6 +30,12 @@ export interface PageOptions {
    * Set to false to disable viewport validation.
    */
   minViewport?: { width: number; height: number } | false;
+  /**
+   * Override `window.print` with a logging no-op on every document for this page,
+   * so a stray click on a "Print" control can't freeze the renderer in a native
+   * print preview (which stalls every subsequent CDP call). Off by default.
+   */
+  blockNativePrint?: boolean;
 }
 
 /**
@@ -219,11 +225,16 @@ export class Browser {
       targetId = result.targetId;
     }
 
-    // Attach to the target
-    await this.cdp.attachToTarget(targetId);
+    // Attach to the target and PIN the page to the returned session id. Using a
+    // session-scoped view keeps this page's session-omitting send/on calls on
+    // its own target even after another target is later attached (which would
+    // otherwise move the client's mutable "current default session").
+    const sessionId = await this.cdp.attachToTarget(targetId);
 
     // Create and initialize page
-    const page = new Page(this.cdp, targetId);
+    const page = new Page(createSessionScopedCDP(this.cdp, sessionId), targetId, {
+      blockNativePrint: options?.blockNativePrint === true,
+    });
     await page.init();
 
     // Validate viewport dimensions (detect pathological targets like 921x56)
@@ -264,9 +275,10 @@ export class Browser {
       null
     );
 
-    await this.cdp.attachToTarget(result.targetId);
+    // Pin the page to its own session (see page() for rationale).
+    const sessionId = await this.cdp.attachToTarget(result.targetId);
 
-    const page = new Page(this.cdp, result.targetId);
+    const page = new Page(createSessionScopedCDP(this.cdp, sessionId), result.targetId);
     await page.init();
 
     // Generate unique name for the page
@@ -284,6 +296,10 @@ export class Browser {
     if (!page) return;
 
     const targetId = page.targetId;
+    // Release the page's connection-global listeners before dropping it, so a
+    // closed Page stops reacting to target attach/detach events on the shared
+    // connection (listener leak on long-lived connections with tab churn).
+    page.dispose();
     await this.cdp.send('Target.closeTarget', { targetId }, null);
     this.pages.delete(name);
 
@@ -344,6 +360,7 @@ export class Browser {
    * Disconnect from the browser (keeps provider session alive for reconnection)
    */
   async disconnect(): Promise<void> {
+    for (const page of this.pages.values()) page.dispose();
     this.pages.clear();
     await this.cdp.close();
   }
@@ -352,6 +369,7 @@ export class Browser {
    * Close the browser session completely
    */
   async close(): Promise<void> {
+    for (const page of this.pages.values()) page.dispose();
     this.pages.clear();
     await this.cdp.close();
     await this.providerSession.close();

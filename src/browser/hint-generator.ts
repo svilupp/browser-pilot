@@ -188,14 +188,18 @@ export async function generateHints(
   const cssSelector = failedSelectors.find(
     (s) => !s.startsWith('ref:') && !s.startsWith('text:') && !s.startsWith('role:')
   );
+  let iframeHint: FailureHint | undefined;
   if (cssSelector) {
     try {
       if ((await page.locateSelectorFrame(cssSelector)) === 'iframe') {
-        console.warn(
-          `[browser-pilot] Selector "${cssSelector}" matches only inside an iframe. ` +
-            'Call switchToFrame(<iframe selector>) before acting on it (snapshot/CSS ' +
-            'resolution does not pierce iframes).'
-        );
+        iframeHint = {
+          selector: cssSelector,
+          reason:
+            `Selector matches only inside an iframe. Call switchToFrame(<iframe selector>) ` +
+            'before acting on it (snapshot/CSS resolution does not pierce iframes).',
+          confidence: 'high',
+          element: { ref: '', role: 'iframe', name: cssSelector },
+        };
       }
     } catch {
       // Detection is advisory only.
@@ -220,11 +224,12 @@ export async function generateHints(
   });
 
   if (matches.length === 0) {
-    return [];
+    return iframeHint ? [iframeHint] : [];
   }
 
   // Diversify hints
-  return diversifyHints(matches, maxHints);
+  const diversified = diversifyHints(matches, maxHints);
+  return iframeHint ? [iframeHint, ...diversified] : diversified;
 }
 
 /**

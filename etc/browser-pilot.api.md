@@ -256,13 +256,23 @@ export function captureStructureSignature(page: Page, opts?: StructureSignatureO
 export interface CDPClient {
     attachToTarget(targetId: string): Promise<string>;
     close(): Promise<void>;
+    hasSession(sessionId: string): boolean;
     readonly isConnected: boolean;
     off(event: string, handler: (params: Record<string, unknown>) => void): void;
-    offAny(handler: (method: string, params: Record<string, unknown>) => void): void;
+    offAny(handler: (method: string, params: Record<string, unknown>, sessionId?: string) => void): void;
     on(event: string, handler: (params: Record<string, unknown>) => void): void;
-    onAny(handler: (method: string, params: Record<string, unknown>) => void): void;
-    send<T = unknown>(method: string, params?: Record<string, unknown>, sessionId?: string | null): Promise<T>;
+    onAny(handler: (method: string, params: Record<string, unknown>, sessionId?: string) => void): void;
+    onSessionEvent(sessionId: string, event: string, handler: (params: Record<string, unknown>) => void): () => void;
+    // Warning: (ae-forgotten-export) The symbol "TargetAttachedInfo" needs to be exported by the entry point index.d.ts
+    onTargetAttached(handler: (info: TargetAttachedInfo) => void): () => void;
+    runIfWaitingForDebugger(sessionId: string): Promise<void>;
+    // Warning: (ae-forgotten-export) The symbol "CDPSendOptions" needs to be exported by the entry point index.d.ts
+    send<T = unknown>(method: string, params?: Record<string, unknown>, sessionId?: string | null, options?: CDPSendOptions): Promise<T>;
     readonly sessionId: string | undefined;
+    readonly sessions: ReadonlySet<string>;
+    setAutoAttach(opts?: {
+        sessionId?: string | null;
+    }): Promise<void>;
     setSessionId(sessionId: string | undefined): void;
 }
 
@@ -478,6 +488,9 @@ export const DEFAULT_FUZZY_THRESHOLD = 0.3;
 
 // @public
 export const DEFAULT_MASK_ROLES: readonly ["status", "alert", "log", "timer", "progressbar", "marquee"];
+
+// @public
+export const DEFAULT_TESTID_ATTRIBUTES: readonly ["data-testid", "data-test", "data-qa"];
 
 // @public (undocumented)
 export interface DeleteCookieOptions {
@@ -858,6 +871,9 @@ export interface InterceptedRequest {
 }
 
 // @public
+export function isDestructiveName(name: string | undefined): boolean;
+
+// @public
 export function isTranscriptionAvailable(): boolean;
 
 // @public
@@ -913,9 +929,10 @@ export interface OverlayInfo {
     overlayText?: string;
 }
 
-// @public
+// @public (undocumented)
 export class Page {
-    constructor(cdp: CDPClient, targetId: string);
+    // Warning: (ae-forgotten-export) The symbol "PageInitOptions" needs to be exported by the entry point index.d.ts
+    constructor(cdp: CDPClient, targetId: string, options?: PageInitOptions);
     get audioInput(): AudioInput;
     get audioOutput(): AudioOutput;
     audioRoundTrip(options: RoundTripOptions): Promise<RoundTripResult>;
@@ -980,6 +997,7 @@ export class Page {
     importRefMap(refMap: Record<string, number>): void;
     init(): Promise<void>;
     intercept(pattern: string | RequestPattern, handler: RequestHandler): Promise<() => void>;
+    locateSelectorFrame(selector: string): Promise<'main' | 'iframe' | 'none'>;
     onConsole(handler: ConsoleHandler): Promise<() => void>;
     onDialog(handler: DialogHandler | null): Promise<void>;
     onError(handler: ErrorHandler): Promise<() => void>;
@@ -998,6 +1016,7 @@ export class Page {
         includeHidden?: boolean;
         strategies?: CandidateStrategy[];
         minConfidence?: number;
+        testIdAttributes?: string[];
     }): Promise<RankedCandidate[]>;
     review(): Promise<ReviewResult>;
     route(urlPattern: string, options: RouteOptions): Promise<() => void>;
@@ -1053,6 +1072,7 @@ export interface PageError {
 
 // @public (undocumented)
 export interface PageOptions {
+    blockNativePrint?: boolean;
     minViewport?: {
         width: number;
         height: number;
@@ -1158,10 +1178,12 @@ export interface RankCandidatesOptions {
     minConfidence?: number;
     returnAll?: boolean;
     strategies?: CandidateStrategy[];
+    testIdAttributes?: string[];
 }
 
 // @public
 export interface RankedCandidate {
+    dangerous?: boolean;
     name: string;
     ref?: string;
     role: string;
@@ -1171,7 +1193,9 @@ export interface RankedCandidate {
 }
 
 // @public
-export function rankSelectorCandidates(el: InteractiveElement): {
+export function rankSelectorCandidates(el: InteractiveElement, options?: {
+    testIdAttributes?: string[];
+}): {
     strategy: CandidateStrategy;
     selector: string;
     score: number;
@@ -1353,6 +1377,7 @@ export interface SnapshotNode {
 
 // @public (undocumented)
 export interface SnapshotOptions {
+    attributeNames?: string[];
     attributes?: boolean;
     roles?: string[];
 }
@@ -1749,7 +1774,7 @@ export interface WorkflowSummary {
 
 // Warnings were encountered during analysis:
 //
-// dist/page-D_0iGbv5.d.ts:863:9 - (ae-forgotten-export) The symbol "CoveringElement" needs to be exported by the entry point index.d.ts
+// dist/page-DvcsWJqm.d.ts:871:9 - (ae-forgotten-export) The symbol "CoveringElement" needs to be exported by the entry point index.d.ts
 // dist/types-D2pJQpWs.d.ts:67:9 - (ae-forgotten-export) The symbol "LocalBrowserCandidate" needs to be exported by the entry point index.d.ts
 // dist/types-D2pJQpWs.d.ts:68:9 - (ae-forgotten-export) The symbol "LocalDiscoveryFailure" needs to be exported by the entry point index.d.ts
 

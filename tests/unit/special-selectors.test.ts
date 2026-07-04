@@ -28,6 +28,7 @@ interface ElSpec {
   attrs?: Record<string, string>;
   text?: string;
   visible?: boolean;
+  cursor?: string;
   children?: ElSpec[];
 }
 
@@ -36,6 +37,7 @@ class FakeElement {
   private attrs: Record<string, string>;
   text: string;
   visible: boolean;
+  cursor: string;
   children: FakeElement[];
   shadowRoot: null = null;
 
@@ -44,6 +46,7 @@ class FakeElement {
     this.attrs = spec.attrs ?? {};
     this.text = spec.text ?? '';
     this.visible = spec.visible ?? true;
+    this.cursor = spec.cursor ?? 'auto';
     this.children = (spec.children ?? []).map((c) => new FakeElement(c));
   }
 
@@ -134,6 +137,7 @@ function makeFinders(doc: ReturnType<typeof makeDocument>) {
     display: el.visible ? 'block' : 'none',
     visibility: 'visible',
     opacity: '1',
+    cursor: el.cursor,
   });
   const factory = new Function(
     'document',
@@ -229,6 +233,36 @@ describe('parseRoleSelector — index + scope grammar', () => {
     expect(parseRoleSelector('[data-cmd="c2"]')).toBeNull();
     expect(parseRoleSelector('.toolbar >> .btn')).toBeNull();
   });
+
+  it('parses the [name="..."] bracket alias', () => {
+    expect(parseRoleSelector('role:button[name="More actions"]')).toMatchObject({
+      role: 'button',
+      name: 'More actions',
+    });
+  });
+
+  it('parses the bracket alias with single quotes', () => {
+    expect(parseRoleSelector("role:link[name='GAL-1001']")).toMatchObject({
+      role: 'link',
+      name: 'GAL-1001',
+    });
+  });
+
+  it('parses a bare (unquoted) bracket name', () => {
+    expect(parseRoleSelector('role:button[name=Save]')).toMatchObject({
+      role: 'button',
+      name: 'Save',
+    });
+  });
+
+  it('parses the bracket alias alongside an index and scope', () => {
+    expect(parseRoleSelector('within(.toolbar) role:button[name="Delete"][3]')).toMatchObject({
+      role: 'button',
+      name: 'Delete',
+      index: 3,
+      scope: '.toolbar',
+    });
+  });
 });
 
 describe('parseTextSelector — index + scope grammar', () => {
@@ -320,6 +354,49 @@ describe('bpFindByRole — container scope', () => {
 
   it('returns null when the scope container does not exist', () => {
     expect(bpFindByRole('button', '', false, 1, '.nope')).toBeNull();
+  });
+});
+
+describe('bpFindByRole — custom-element role inference', () => {
+  // A web-component UI: custom tags with no explicit role attribute, matched by
+  // generic affordance signals only (no tag names hard-coded in the finder).
+  const doc = makeDocument({
+    tag: 'html',
+    children: [
+      {
+        tag: 'body',
+        children: [
+          { tag: 's-button', attrs: { tabindex: '0' }, text: 'More actions' },
+          { tag: 's-link', attrs: { href: '/orders/GAL-1001' }, text: 'GAL-1001' },
+          { tag: 's-clickable', cursor: 'pointer', text: 'Filter' },
+          { tag: 's-onclick', attrs: { onclick: 'x()' }, text: 'Run' },
+          // Non-interactive custom element: no affordance, so no inferred role.
+          { tag: 's-text', text: 'Just a label' },
+        ],
+      },
+    ],
+  });
+  const { bpFindByRole } = makeFinders(doc);
+
+  it('infers button from a focusable (tabindex>=0) custom element', () => {
+    expect(bpFindByRole('button', 'More actions', false, 0, null)?.tagName).toBe('S-BUTTON');
+  });
+
+  it('infers link from a custom element with href', () => {
+    expect(bpFindByRole('link', 'GAL-', false, 0, null)?.tagName).toBe('S-LINK');
+  });
+
+  it('infers button from cursor:pointer', () => {
+    expect(bpFindByRole('button', 'Filter', false, 0, null)?.tagName).toBe('S-CLICKABLE');
+  });
+
+  it('infers button from an onclick handler', () => {
+    expect(bpFindByRole('button', 'Run', false, 0, null)?.tagName).toBe('S-ONCLICK');
+  });
+
+  it('does not infer a role for an affordance-free custom element', () => {
+    expect(bpFindByRole('button', 'Just a label', false, 0, null)).toBeNull();
+    expect(bpFindByRole('link', 'Just a label', false, 0, null)).toBeNull();
   });
 });
 
