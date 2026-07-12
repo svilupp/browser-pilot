@@ -234,6 +234,30 @@ describe('Browser Integration', () => {
     });
   });
 
+  test('should expose dispatch receipts for fill, type, and native select', async () => {
+    const { page, baseUrl } = ctx.get();
+
+    await page.goto(`${baseUrl}/react-form.html`);
+
+    await page.fill('#username', 'receipt');
+    expect(page.getLastActionReceipt()).toMatchObject({
+      dispatchState: 'dispatched',
+      retrySafe: false,
+    });
+
+    await page.type('#username', 'x', { delay: 0 });
+    expect(page.getLastActionReceipt()).toMatchObject({
+      dispatchState: 'dispatched',
+      retrySafe: false,
+    });
+
+    await page.select('#country', 'ca');
+    expect(page.getLastActionReceipt()).toMatchObject({
+      dispatchState: 'dispatched',
+      retrySafe: false,
+    });
+  });
+
   // Navigation test last since it changes page state
   test('should click elements and navigate', async () => {
     const { page, baseUrl } = ctx.get();

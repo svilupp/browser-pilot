@@ -6,6 +6,7 @@ This reference is for command and action details. For workflow routing, see [SKI
 
 - Inspect page state: `snapshot`, `page`, `forms`, `text`, `diagnose`
 - Act in the browser: `exec`, `run`
+- Select an exact tab: `use-target`
 - Capture a manual demo: `record`
 - Analyze behavior over time: `trace`
 - Exercise voice/media: `audio`
@@ -46,6 +47,7 @@ This reference is for command and action details. For workflow routing, see [SKI
 {"action":"wait","selector":".loaded","waitFor":"visible"}
 {"action":"wait","waitFor":"navigation"}
 {"action":"wait","waitFor":"networkIdle"}
+{"action":"waitForReady","any":["main"],"loadingHidden":".spinner","stableForMs":250}
 {"action":"snapshot"}
 {"action":"screenshot"}
 {"action":"evaluate","value":"document.title"}
@@ -104,7 +106,16 @@ Condition kinds:
 | `textAppears` | `text`, optional `selector` | Text found on page/element |
 | `textChanges` | optional `to`, optional `selector` | Text content changed |
 | `networkResponse` | `urlPattern`, optional `status` | HTTP response seen |
-| `stateSignatureChanges` | (none) | Page state fingerprint changed |
+| `stateSignatureChanges` | optional `mode` | Page state fingerprint changed |
+| `selectedTab` | optional `selector`, `name`, `landmark` | Selected tab matches |
+| `fieldValue` | `selector`, `value` | Field has the expected value |
+| `checkbox` | `selector`, `checked` | Checkbox state matches |
+| `switch` | `selector`, `checked` | Switch state matches |
+| `elementEnabled` | `selector`, optional `enabled` | Control enabled/disabled state matches |
+| `targetCount` | `count`, optional `type` | Number of matching browser targets |
+| `newTarget` | optional target/opener/url/type | A new browser target appeared |
+| `urlChanged` | optional `from`, `mode` | URL changed from the prior state |
+| `fieldChanged` | `selector`, optional `from`, `to` | Field value changed |
 
 Result fields: `outcomeStatus`, `matchedConditions`, `retrySafe`.
 
@@ -124,7 +135,10 @@ Result fields: `outcomeStatus`, `matchedConditions`, `retrySafe`.
 
 ### Retry
 
-Any step supports bounded retries:
+Any step supports bounded retries. Before dispatch, a retry may run the action again. Once an
+effectful action has dispatched (or its outcome is uncertain), retries do not blindly repeat the
+input: they observe the page and re-evaluate the step's conditions. Use `effect` (`observe`,
+`idempotent`, or `at_most_once`) and `dangerous` to make the intended safety boundary explicit.
 
 ```json
 {"action":"click","selector":"#flaky-button","retry":2,"retryDelay":500}

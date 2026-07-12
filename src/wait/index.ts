@@ -13,4 +13,5 @@ export {
   waitForElement,
   waitForNavigation,
   waitForNetworkIdle,
+  waitForReady,
 } from './strategies.ts';

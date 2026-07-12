@@ -30,10 +30,13 @@ import {
   waitForAnyElement,
   waitForNetworkIdle as waitForIdle,
   waitForNavigation as waitForNav,
+  waitForReady as waitForReadyStrategy,
 } from '../wait/index.ts';
+import { ActionDispatch } from './action-dispatch.ts';
 import { ActionabilityError, ensureActionable } from './actionability.ts';
 import { computeDelta, type DeltaResult, extractPageState, type PageState } from './delta.ts';
 import { type DiagnoseOptions, type DiagnoseResult, diagnoseElement } from './diagnose.ts';
+import { buildFingerprintMap, fingerprintSimilarity, recoverStaleRef } from './fingerprint.ts';
 import { generateHints } from './hint-generator.ts';
 import {
   computeModifierBitmask,
@@ -47,8 +50,10 @@ import {
 import { extractReview, type ReviewResult } from './review.ts';
 import { type CandidateStrategy, type RankedCandidate, rankCandidates } from './selector-rank.ts';
 import { buildSpecialSelectorLookupExpression } from './special-selectors.ts';
+import { classifyStaleError, type StaleRecoveryDiagnostics } from './stale-errors.ts';
 import {
   type ActionOptions,
+  type ActionReceipt,
   type ConsoleHandler,
   type ConsoleMessage,
   type ConsoleMessageType,
@@ -67,17 +72,21 @@ import {
   type FormField,
   type GeolocationOptions,
   type InteractiveElement,
+  type NavigationMilestone,
   type NetworkIdleOptions,
   type PageError,
   type PageSnapshot,
+  type ReadinessDiagnostics,
   type SnapshotNode,
   type SnapshotOptions,
   type SubmitOptions,
+  type TargetProvenance,
   TimeoutError,
   type TypeOptions,
   type UserAgentOptions,
   type ViewportOptions,
   type WaitForOptions,
+  type WaitForReadyOptions,
 } from './types.ts';
 
 const DEFAULT_TIMEOUT = 30000;
@@ -307,15 +316,8 @@ export interface PageInitOptions {
    */
   blockNativePrint?: boolean;
 
-  /**
-   * Bring this page's tab to the foreground on init. Backgrounded/occluded tabs
-   * are rAF-throttled by Chrome, so elements can measure 0x0 and actionability
-   * waits block until timeout. Foreground state persists across same-target
-   * navigations, so this is a one-time init step (the actionability path also
-   * self-heals a 0x0 measurement on demand). Default `true`; set `false` to opt
-   * out (best-effort either way — headless may reject it).
-   */
-  bringToFront?: boolean;
+  /** Provenance for diagnostics and workflow evidence. */
+  targetProvenance?: TargetProvenance;
 }
 
 export class Page {
@@ -376,6 +378,10 @@ export class Page {
   private _lastActionBoundingBox: { x: number; y: number; width: number; height: number } | null =
     null;
   private _lastActionTargetMetadata: ActionTargetMetadata | null = null;
+  private _lastActionReceipt: ActionReceipt | undefined;
+  private _lastNavigationMilestone: NavigationMilestone | undefined;
+  private _lastReadinessDiagnostics: ReadinessDiagnostics | undefined;
+  private _lastStaleRecovery: StaleRecoveryDiagnostics | undefined;
   /** Last snapshot for stale ref recovery */
   private lastSnapshot?: PageSnapshot;
   /** Audio input controller (lazy-initialized) */
@@ -391,31 +397,14 @@ export class Page {
    */
   private readonly blockNativePrint: boolean;
 
-  /** Whether to foreground the tab on init (BUG F). Default true. */
-  private readonly autoBringToFront: boolean;
+  private readonly targetProvenance: TargetProvenance;
 
   constructor(cdp: CDPClient, targetId: string, options: PageInitOptions = {}) {
     this.cdp = cdp;
     this._targetId = targetId;
     this.blockNativePrint = options.blockNativePrint === true;
-    this.autoBringToFront = options.bringToFront !== false;
+    this.targetProvenance = options.targetProvenance ?? { targetId, source: 'session' };
     this.batchExecutor = new BatchExecutor(this);
-  }
-
-  /**
-   * Foreground this page's tab (best-effort). A backgrounded/occluded tab is
-   * rAF-throttled by Chrome, so its layout can report zero-size rects and
-   * actionability waits block until timeout. Failures (e.g. headless) are
-   * swallowed. No-op when `bringToFront: false` was passed. Sent on the page's
-   * own pinned session so it activates THIS target, not the mutable default.
-   */
-  private async bringToFront(): Promise<void> {
-    if (!this.autoBringToFront) return;
-    try {
-      await this.cdp.send('Page.bringToFront');
-    } catch {
-      // Best-effort: some environments/headless reject bringToFront.
-    }
   }
 
   /**
@@ -423,6 +412,10 @@ export class Page {
    */
   get targetId(): string {
     return this._targetId;
+  }
+
+  getTargetProvenance(): TargetProvenance {
+    return { ...this.targetProvenance };
   }
 
   /**
@@ -526,11 +519,62 @@ export class Page {
     return this._lastActionTargetMetadata;
   }
 
+  getLastActionReceipt(): ActionReceipt | undefined {
+    return this._lastActionReceipt;
+  }
+
+  getLastStaleRecovery(): StaleRecoveryDiagnostics | undefined {
+    return this._lastStaleRecovery;
+  }
+
+  /** Last correlated main-frame navigation milestone observed by this page. */
+  getLastNavigationMilestone(): NavigationMilestone | undefined {
+    return this._lastNavigationMilestone;
+  }
+
+  /** Diagnostics from the most recent semantic readiness wait. */
+  getReadinessDiagnostics(): ReadinessDiagnostics | undefined {
+    return this._lastReadinessDiagnostics
+      ? {
+          ...this._lastReadinessDiagnostics,
+          unmetConditions: [...this._lastReadinessDiagnostics.unmetConditions],
+        }
+      : undefined;
+  }
+
+  /** Alias for inspection clients that expose diagnostics as a verb. */
+  diagnoseReadiness(): ReadinessDiagnostics | undefined {
+    return this.getReadinessDiagnostics();
+  }
+
+  markLastActionNavigationObserved(): void {
+    if (this._lastActionReceipt) {
+      this._lastActionReceipt = { ...this._lastActionReceipt, navigationObserved: true };
+    }
+  }
+
   /** Reset position tracking (call before each executor step) */
   resetLastActionPosition(): void {
     this._lastActionCoordinates = null;
     this._lastActionBoundingBox = null;
     this._lastActionTargetMetadata = null;
+  }
+
+  resetLastActionReceipt(): void {
+    this._lastActionReceipt = undefined;
+    this._lastStaleRecovery = undefined;
+  }
+
+  private async withActionDispatch<T>(fn: (dispatch: ActionDispatch) => Promise<T>): Promise<T> {
+    const dispatch = new ActionDispatch();
+    try {
+      return await fn(dispatch);
+    } finally {
+      this._lastActionReceipt = {
+        ...dispatch.toReceipt(),
+        ...(this._lastStaleRecovery ? { staleRecovery: this._lastStaleRecovery } : {}),
+      };
+    }
   }
 
   /**
@@ -644,14 +688,6 @@ export class Page {
     }
 
     await this.installEventListenerTracker();
-
-    // Foreground the tab once so a backgrounded/occluded target isn't
-    // rAF-throttled (which makes elements measure 0x0 and stalls actionability
-    // waits — BUG F). Foreground state persists across same-target navigations,
-    // so this is not repeated per navigation (doing so perturbs frame-content
-    // load timing); the actionability path also self-heals a 0x0 measurement by
-    // foregrounding once on demand.
-    await this.bringToFront();
   }
 
   /**
@@ -779,7 +815,11 @@ export class Page {
     // `optional: true` so the nav wait RESOLVES (false) on timeout instead of
     // throwing — the throw form skipped the state reset below (M1). We surface a
     // URL-specific TimeoutError ourselves after the reset always runs.
-    const navPromise = this.waitForNavigation({ timeout, optional: true });
+    const navPromise = this.waitForNavigation({
+      timeout,
+      optional: true,
+      waitUntil: options.waitUntil ?? 'load',
+    });
 
     await this.cdp.send('Page.navigate', { url });
 
@@ -833,7 +873,11 @@ export class Page {
     // than rejecting: a throwing navPromise created BEFORE the `send` below would
     // become an unhandled rejection if `send` throws (BUG E). We surface the
     // timeout ourselves after the reset always runs.
-    const navPromise = this.waitForNavigation({ timeout, optional: true });
+    const navPromise = this.waitForNavigation({
+      timeout,
+      optional: true,
+      waitUntil: options.waitUntil ?? 'load',
+    });
     await this.cdp.send('Page.reload');
     let result: boolean;
     try {
@@ -869,7 +913,12 @@ export class Page {
 
     // `optional: true` so an unawaited navPromise can't become an unhandled
     // rejection if the `send` below throws (BUG E); timeout surfaced after reset.
-    const navPromise = this.waitForNavigation({ timeout, optional: true });
+    const navPromise = this.waitForNavigation({
+      timeout,
+      optional: true,
+      waitUntil: options.waitUntil ?? 'load',
+      expectedUrl: history.entries[history.currentIndex - 1]!.url,
+    });
 
     // Use CDP navigation instead of history.back() - fires proper events
     await this.cdp.send('Page.navigateToHistoryEntry', {
@@ -910,7 +959,11 @@ export class Page {
 
     // `optional: true` so an unawaited navPromise can't become an unhandled
     // rejection if the `send` below throws (BUG E); timeout surfaced after reset.
-    const navPromise = this.waitForNavigation({ timeout, optional: true });
+    const navPromise = this.waitForNavigation({
+      timeout,
+      optional: true,
+      waitUntil: options.waitUntil ?? 'load',
+    });
 
     // Use CDP navigation instead of history.forward() - fires proper events
     await this.cdp.send('Page.navigateToHistoryEntry', {
@@ -942,123 +995,157 @@ export class Page {
    * trigger native form submission — no JS dispatch needed.
    */
   async click(selector: string | string[], options: ActionOptions = {}): Promise<boolean> {
+    return this.withActionDispatch((dispatch) => this.clickInternal(selector, options, dispatch));
+  }
+
+  private async clickInternal(
+    selector: string | string[],
+    options: ActionOptions,
+    dispatch: ActionDispatch
+  ): Promise<boolean> {
     // Cross-origin (OOPIF) frame active: use element.click() on the child
     // session (coordinate-based dispatch is out of scope for OOPIFs).
     if (this.currentFrameSession) {
-      return this.clickInFrame(selector, options);
+      return this.clickInFrame(selector, options, dispatch);
     }
-    return this.withStaleNodeRetry(async () => {
-      const element = await this.findElement(selector, options);
-      if (!element) {
-        if (options.optional) return false;
-        const selectorList = Array.isArray(selector) ? selector : [selector];
-        const hints = await generateHints(this, selectorList, 'click');
-        throw new ElementNotFoundError(selector, hints);
-      }
-
-      await this.scrollIntoView(element.nodeId);
-
-      const objectId = await this.resolveObjectId(element.nodeId);
-
-      // Actionability checks before click
-      try {
-        await ensureActionable(this.cdp, objectId, ['visible', 'enabled', 'stable'], {
-          timeout: options.timeout ?? DEFAULT_TIMEOUT,
-        });
-      } catch (e) {
-        if (
-          e instanceof ActionabilityError &&
-          e.failureType === 'hitTarget' &&
-          (await this.tryClickAssociatedLabel(objectId))
-        ) {
-          return true;
-        }
-        if (options.optional) return false;
-        throw e;
-      }
-
-      // Compute click coordinates for hit target check
-      let clickX: number;
-      let clickY: number;
-      try {
-        const { quads } = await this.cdp.send<{ quads: number[][] }>('DOM.getContentQuads', {
-          objectId,
-        });
-        if (quads?.length > 0) {
-          const quad = quads[0]!;
-          clickX = (quad[0]! + quad[2]! + quad[4]! + quad[6]!) / 4;
-          clickY = (quad[1]! + quad[3]! + quad[5]! + quad[7]!) / 4;
-          const minX = Math.min(quad[0]!, quad[2]!, quad[4]!, quad[6]!);
-          const maxX = Math.max(quad[0]!, quad[2]!, quad[4]!, quad[6]!);
-          const minY = Math.min(quad[1]!, quad[3]!, quad[5]!, quad[7]!);
-          const maxY = Math.max(quad[1]!, quad[3]!, quad[5]!, quad[7]!);
-          this.setLastActionPosition(
-            { x: clickX, y: clickY },
-            { x: minX, y: minY, width: maxX - minX, height: maxY - minY }
-          );
-        } else {
-          throw new Error('No quads');
-        }
-      } catch {
-        const box = await this.getBoxModel(element.nodeId);
-        if (!box) throw new Error('Could not get element position');
-        clickX = box.content[0]! + box.width / 2;
-        clickY = box.content[1]! + box.height / 2;
-        this.setLastActionPosition(
-          { x: clickX, y: clickY },
-          { x: box.content[0]!, y: box.content[1]!, width: box.width, height: box.height }
-        );
-      }
-
-      // Hit target checks inside iframes need frame-local coordinates, while
-      // Input.dispatchMouseEvent still needs the page-level coordinates above.
-      const hitTargetCoordinates = this.currentFrame ? undefined : { x: clickX, y: clickY };
-
-      // Hit target check with bounded retry for transient overlays
-      const HIT_TARGET_RETRIES = 3;
-      const HIT_TARGET_DELAY = 100;
-
-      for (let attempt = 0; attempt < HIT_TARGET_RETRIES; attempt++) {
-        try {
-          await ensureActionable(this.cdp, objectId, ['hitTarget'], {
-            timeout: options.timeout ?? DEFAULT_TIMEOUT,
-            coordinates: hitTargetCoordinates,
-          });
-          break;
-        } catch (e) {
+    return this.withStaleNodeRetry(
+      async () => {
+        const element = await this.findElement(selector, options);
+        if (!element) {
           if (options.optional) return false;
+          const selectorList = Array.isArray(selector) ? selector : [selector];
+          const hints = await generateHints(this, selectorList, 'click');
+          throw new ElementNotFoundError(selector, hints);
+        }
+
+        await this.scrollIntoView(element.nodeId);
+
+        const objectId = await this.resolveObjectId(element.nodeId);
+
+        // Actionability checks before click
+        try {
+          await ensureActionable(this.cdp, objectId, ['visible', 'enabled', 'stable'], {
+            timeout: options.timeout ?? DEFAULT_TIMEOUT,
+          });
+        } catch (e) {
           if (
             e instanceof ActionabilityError &&
             e.failureType === 'hitTarget' &&
-            attempt < HIT_TARGET_RETRIES - 1
+            (await this.tryClickAssociatedLabel(objectId, dispatch))
           ) {
-            await sleep(HIT_TARGET_DELAY);
-            // Re-scroll in case layout shifted
-            await this.cdp.send('DOM.scrollIntoViewIfNeeded', { nodeId: element.nodeId });
-            continue;
+            return true;
           }
+          if (options.optional) return false;
           throw e;
         }
-      }
 
-      // Snapshot checkbox/radio state before the click so we can guarantee the
-      // click produced real user-click semantics afterwards. `null` for anything
-      // that isn't a checkbox/radio (buttons, links, ...), which are left untouched.
-      const toggleBefore = await this.readToggleState(objectId);
+        // Compute click coordinates for hit target check
+        let clickX: number;
+        let clickY: number;
+        try {
+          const { quads } = await this.cdp.send<{ quads: number[][] }>('DOM.getContentQuads', {
+            objectId,
+          });
+          if (quads?.length > 0) {
+            const quad = quads[0]!;
+            clickX = (quad[0]! + quad[2]! + quad[4]! + quad[6]!) / 4;
+            clickY = (quad[1]! + quad[3]! + quad[5]! + quad[7]!) / 4;
+            const minX = Math.min(quad[0]!, quad[2]!, quad[4]!, quad[6]!);
+            const maxX = Math.max(quad[0]!, quad[2]!, quad[4]!, quad[6]!);
+            const minY = Math.min(quad[1]!, quad[3]!, quad[5]!, quad[7]!);
+            const maxY = Math.max(quad[1]!, quad[3]!, quad[5]!, quad[7]!);
+            this.setLastActionPosition(
+              { x: clickX, y: clickY },
+              { x: minX, y: minY, width: maxX - minX, height: maxY - minY }
+            );
+          } else {
+            throw new Error('No quads');
+          }
+        } catch {
+          const box = await this.getBoxModel(element.nodeId);
+          if (!box) throw new Error('Could not get element position');
+          clickX = box.content[0]! + box.width / 2;
+          clickY = box.content[1]! + box.height / 2;
+          this.setLastActionPosition(
+            { x: clickX, y: clickY },
+            { x: box.content[0]!, y: box.content[1]!, width: box.width, height: box.height }
+          );
+        }
 
-      await this.clickElement(element.nodeId);
+        // Hit target checks inside iframes need frame-local coordinates, while
+        // Input.dispatchMouseEvent still needs the page-level coordinates above.
+        const hitTargetCoordinates = this.currentFrame ? undefined : { x: clickX, y: clickY };
 
-      if (toggleBefore) {
-        // A genuine user click toggles a checkbox / selects a radio AND fires
-        // bubbling input + change. The trusted CDP mouse click normally does this
-        // on its own, but some controls don't register it (e.g. pointer-events:none
-        // inputs driven by their <label>, or custom-styled controls). Verify and,
-        // if needed, recover — without double-toggling.
-        const expected = toggleBefore.isRadio ? true : !toggleBefore.checked;
-        await this.ensureToggleRegistered(objectId, expected);
-      }
-      return true;
-    });
+        // Hit target check with bounded retry for transient overlays
+        const HIT_TARGET_RETRIES = 3;
+        const HIT_TARGET_DELAY = 100;
+
+        // Snapshot checkbox/radio state before any possible label or mouse
+        // dispatch so label-driven controls can be verified without a second
+        // effectful input event.
+        const toggleBefore = await this.readToggleState(objectId);
+
+        // A pointer-events:none input cannot receive the coordinate event even
+        // when its center otherwise looks actionable. Choose its label before
+        // dispatching any mouse event.
+        if (
+          toggleBefore &&
+          (await this.hasPointerEventsNone(objectId)) &&
+          (await this.tryClickAssociatedLabel(objectId, dispatch))
+        ) {
+          const expected = toggleBefore.isRadio ? true : !toggleBefore.checked;
+          await this.ensureToggleRegistered(objectId, expected);
+          return true;
+        }
+
+        for (let attempt = 0; attempt < HIT_TARGET_RETRIES; attempt++) {
+          try {
+            await ensureActionable(this.cdp, objectId, ['hitTarget'], {
+              timeout: options.timeout ?? DEFAULT_TIMEOUT,
+              coordinates: hitTargetCoordinates,
+            });
+            break;
+          } catch (e) {
+            if (options.optional) return false;
+            if (
+              e instanceof ActionabilityError &&
+              e.failureType === 'hitTarget' &&
+              (await this.tryClickAssociatedLabel(objectId, dispatch))
+            ) {
+              if (toggleBefore) {
+                const expected = toggleBefore.isRadio ? true : !toggleBefore.checked;
+                await this.ensureToggleRegistered(objectId, expected);
+              }
+              return true;
+            }
+            if (
+              e instanceof ActionabilityError &&
+              e.failureType === 'hitTarget' &&
+              attempt < HIT_TARGET_RETRIES - 1
+            ) {
+              await sleep(HIT_TARGET_DELAY);
+              // Re-scroll in case layout shifted
+              await this.cdp.send('DOM.scrollIntoViewIfNeeded', { nodeId: element.nodeId });
+              continue;
+            }
+            throw e;
+          }
+        }
+
+        await this.clickElement(element.nodeId, dispatch);
+
+        if (toggleBefore) {
+          // A genuine user click toggles a checkbox / selects a radio AND fires
+          // bubbling input + change. The trusted CDP mouse click normally does this
+          // on its own. Verification is observation only; label-driven controls
+          // are selected before dispatch above.
+          const expected = toggleBefore.isRadio ? true : !toggleBefore.checked;
+          await this.ensureToggleRegistered(objectId, expected);
+        }
+        return true;
+      },
+      { dispatch }
+    );
   }
 
   /**
@@ -1083,12 +1170,24 @@ export class Page {
     return res.result.value ?? null;
   }
 
+  private async hasPointerEventsNone(objectId: string): Promise<boolean> {
+    try {
+      const result = await this.cdp.send<{ result: { value: boolean } }>('Runtime.callFunctionOn', {
+        objectId,
+        functionDeclaration:
+          'function() { return getComputedStyle(this).pointerEvents === "none"; }',
+        returnByValue: true,
+      });
+      return result.result.value === true;
+    } catch {
+      return false;
+    }
+  }
+
   /**
-   * After a trusted click on a checkbox/radio, ensure the toggle actually
-   * registered with full user-click semantics (state change + bubbling
-   * input/change). No-op when the click already produced the expected state, so
-   * this never double-toggles. Recovers via a trusted click on the associated
-   * <label> when possible, otherwise synthesizes the state change and events.
+   * After a trusted click on a checkbox/radio, observe whether the toggle
+   * registered. This is deliberately not a recovery path: a second label click
+   * or synthetic event could duplicate an already accepted effect.
    */
   private async ensureToggleRegistered(objectId: string, expected: boolean): Promise<void> {
     let actual: boolean;
@@ -1100,29 +1199,9 @@ export class Page {
     }
     if (actual === expected) return; // Trusted click already did the right thing.
 
-    // Prefer fully-native semantics: a trusted click on the associated <label>.
-    if (await this.tryToggleViaLabel(objectId, expected)) return;
-
-    // Last resort: reproduce exactly what a user click fires — set the state,
-    // then dispatch input followed by change, both bubbling.
-    await this.setCheckedAndDispatch(objectId, expected);
-  }
-
-  /**
-   * Set a checkbox/radio's checked state and fire the bubbling input + change
-   * events (in that order) that a genuine user click would produce.
-   */
-  private async setCheckedAndDispatch(objectId: string, checked: boolean): Promise<void> {
-    await this.cdp.send('Runtime.callFunctionOn', {
-      objectId,
-      functionDeclaration: `function(desired) {
-        if (this.checked !== desired) this.checked = desired;
-        this.dispatchEvent(new Event('input', { bubbles: true }));
-        this.dispatchEvent(new Event('change', { bubbles: true }));
-      }`,
-      arguments: [{ value: checked }],
-      returnByValue: true,
-    });
+    throw new Error(
+      `Click was dispatched but toggle state did not become ${expected ? 'checked' : 'unchecked'}`
+    );
   }
 
   /**
@@ -1138,121 +1217,138 @@ export class Page {
     // Cross-origin (OOPIF) frame active: focus + Input.insertText on the child
     // session (coordinate geometry / special-input handling is out of scope).
     if (this.currentFrameSession) {
-      return this.fillInFrame(selector, value, options);
+      return this.withActionDispatch((dispatch) =>
+        this.fillInFrame(selector, value, options, dispatch)
+      );
     }
 
-    return this.withStaleNodeRetry(async () => {
-      const element = await this.findElement(selector, options);
+    return this.withActionDispatch((dispatch) =>
+      this.withStaleNodeRetry(
+        async () => {
+          const element = await this.findElement(selector, options);
 
-      if (!element) {
-        if (options.optional) return false;
-        const selectorList = Array.isArray(selector) ? selector : [selector];
-        const hints = await generateHints(this, selectorList, 'fill');
-        throw new ElementNotFoundError(selector, hints);
-      }
+          if (!element) {
+            if (options.optional) return false;
+            const selectorList = Array.isArray(selector) ? selector : [selector];
+            const hints = await generateHints(this, selectorList, 'fill');
+            throw new ElementNotFoundError(selector, hints);
+          }
 
-      // Resolve nodeId to objectId for Runtime.callFunctionOn
-      const { object } = await this.cdp.send<{ object: { objectId: string } }>('DOM.resolveNode', {
-        nodeId: element.nodeId,
-      });
-      const objectId = object.objectId;
+          // Resolve nodeId to objectId for Runtime.callFunctionOn
+          const { object } = await this.cdp.send<{ object: { objectId: string } }>(
+            'DOM.resolveNode',
+            {
+              nodeId: element.nodeId,
+            }
+          );
+          const objectId = object.objectId;
 
-      // Actionability checks before fill
-      try {
-        await ensureActionable(this.cdp, objectId, ['visible', 'enabled', 'editable'], {
-          timeout: options.timeout ?? DEFAULT_TIMEOUT,
-        });
-      } catch (e) {
-        if (options.optional) return false;
-        throw e;
-      }
+          // Actionability checks before fill
+          try {
+            await ensureActionable(this.cdp, objectId, ['visible', 'enabled', 'editable'], {
+              timeout: options.timeout ?? DEFAULT_TIMEOUT,
+            });
+          } catch (e) {
+            if (options.optional) return false;
+            throw e;
+          }
 
-      const fillPos = await this.getElementPosition({ nodeId: element.nodeId });
-      if (fillPos) this.setLastActionPosition(fillPos.center, fillPos.bbox);
+          const fillPos = await this.getElementPosition({ nodeId: element.nodeId });
+          if (fillPos) this.setLastActionPosition(fillPos.center, fillPos.bbox);
 
-      // Check if this is a special input type that can't use Input.insertText
-      const tagInfo = await this.cdp.send<{
-        result: { value: { tagName: string; inputType: string; autocomplete: string } };
-      }>('Runtime.callFunctionOn', {
-        objectId,
-        functionDeclaration: `function() {
+          // Check if this is a special input type that can't use Input.insertText
+          const tagInfo = await this.cdp.send<{
+            result: { value: { tagName: string; inputType: string; autocomplete: string } };
+          }>('Runtime.callFunctionOn', {
+            objectId,
+            functionDeclaration: `function() {
             return {
               tagName: this.tagName?.toLowerCase() || '',
               inputType: (this.type || '').toLowerCase(),
               autocomplete: typeof this.autocomplete === 'string' ? this.autocomplete.toLowerCase() : '',
             };
           }`,
-        returnByValue: true,
-      });
-      this._lastActionTargetMetadata = tagInfo.result.value;
-      const { tagName, inputType } = tagInfo.result.value;
-      const specialInputTypes = new Set([
-        'date',
-        'datetime-local',
-        'month',
-        'week',
-        'time',
-        'color',
-        'range',
-        'file',
-      ]);
-      const isSpecialInput = tagName === 'input' && specialInputTypes.has(inputType);
+            returnByValue: true,
+          });
+          this._lastActionTargetMetadata = tagInfo.result.value;
+          const { tagName, inputType } = tagInfo.result.value;
+          const specialInputTypes = new Set([
+            'date',
+            'datetime-local',
+            'month',
+            'week',
+            'time',
+            'color',
+            'range',
+            'file',
+          ]);
+          const isSpecialInput = tagName === 'input' && specialInputTypes.has(inputType);
 
-      if (isSpecialInput) {
-        // Special inputs: set value directly + dispatch events
-        await this.cdp.send('Runtime.callFunctionOn', {
-          objectId,
-          functionDeclaration: `function(val) {
-            this.value = val;
-            this.dispatchEvent(new Event('input', { bubbles: true }));
-            this.dispatchEvent(new Event('change', { bubbles: true }));
-          }`,
-          arguments: [{ value }],
-          returnByValue: true,
-        });
-      } else {
-        // Playwright pattern: focus + select all, then insertText/Delete.
-        await this.selectEditableContent(objectId);
-
-        if (value === '') {
-          // Empty value: send Delete key to clear selected text (Playwright pattern)
-          await this.dispatchKey('Delete');
-        } else {
-          // Non-empty: Input.insertText fires real isTrusted:true events
-          await this.cdp.send('Input.insertText', { text: value });
-        }
-      }
-
-      if (options.verify !== false) {
-        let actualValue = await this.readEditableValue(objectId);
-
-        if (actualValue !== value && !isSpecialInput) {
-          if (value === '') {
-            await this.clearEditableSelection(objectId, 'Backspace');
+          if (isSpecialInput) {
+            // Special inputs: set value directly + dispatch events
+            await dispatch.send(
+              () =>
+                this.cdp.send('Runtime.callFunctionOn', {
+                  objectId,
+                  functionDeclaration: `function(val) {
+                this.value = val;
+                this.dispatchEvent(new Event('input', { bubbles: true }));
+                this.dispatchEvent(new Event('change', { bubbles: true }));
+              }`,
+                  arguments: [{ value }],
+                  returnByValue: true,
+                }),
+              'fillValue'
+            );
           } else {
-            await this.typeEditableFallback(element.nodeId, objectId, value);
+            // Playwright pattern: focus + select all, then insertText/Delete.
+            await this.selectEditableContent(objectId);
+
+            if (value === '') {
+              // Empty value: send Delete key to clear selected text (Playwright pattern)
+              await this.dispatchKey('Delete', undefined, dispatch);
+            } else {
+              // Non-empty: Input.insertText fires real isTrusted:true events
+              await dispatch.send(
+                () => this.cdp.send('Input.insertText', { text: value }),
+                'insertText'
+              );
+            }
           }
-          actualValue = await this.readEditableValue(objectId);
-        }
 
-        if (actualValue !== value) {
-          if (options.optional) return false;
-          throw new Error(
-            `Fill value did not stick. Expected ${JSON.stringify(value)} but got ${JSON.stringify(actualValue)}.`
-          );
-        }
-      }
+          if (options.verify !== false) {
+            let actualValue = await this.readEditableValue(objectId);
 
-      // Optionally trigger blur
-      if (blur) {
-        await this.cdp.send('Runtime.callFunctionOn', {
-          objectId,
-          functionDeclaration: 'function() { this.blur(); }',
-        });
-      }
+            if (actualValue !== value && !isSpecialInput) {
+              if (value === '') {
+                await this.clearEditableSelection(objectId, 'Backspace', dispatch);
+              } else {
+                await this.typeEditableFallback(element.nodeId, objectId, value, dispatch);
+              }
+              actualValue = await this.readEditableValue(objectId);
+            }
 
-      return true;
-    });
+            if (actualValue !== value) {
+              if (options.optional) return false;
+              throw new Error(
+                `Fill value did not stick. Expected ${JSON.stringify(value)} but got ${JSON.stringify(actualValue)}.`
+              );
+            }
+          }
+
+          // Optionally trigger blur
+          if (blur) {
+            await this.cdp.send('Runtime.callFunctionOn', {
+              objectId,
+              functionDeclaration: 'function() { this.blur(); }',
+            });
+          }
+
+          return true;
+        },
+        { dispatch }
+      )
+    );
   }
 
   /**
@@ -1271,94 +1367,69 @@ export class Page {
     // session (needed for checkout card entry). Routed before findElement so it
     // cannot silently resolve against the parent session.
     if (this.currentFrameSession) {
-      return this.typeInFrame(selector, text, options);
+      return this.withActionDispatch((dispatch) =>
+        this.typeInFrame(selector, text, options, dispatch)
+      );
     }
-    return this.withStaleNodeRetry(async () => {
-      const { delay = 50 } = options;
-      const element = await this.findElement(selector, options);
+    return this.withActionDispatch((dispatch) =>
+      this.withStaleNodeRetry(
+        async () => {
+          const { delay = 50 } = options;
+          const element = await this.findElement(selector, options);
 
-      if (!element) {
-        if (options.optional) return false;
-        throw new ElementNotFoundError(selector);
-      }
+          if (!element) {
+            if (options.optional) return false;
+            throw new ElementNotFoundError(selector);
+          }
 
-      // Actionability checks before typing
-      const objectId = await this.resolveObjectId(element.nodeId);
-      try {
-        await ensureActionable(this.cdp, objectId, ['visible', 'enabled'], {
-          timeout: options.timeout ?? DEFAULT_TIMEOUT,
-        });
-      } catch (e) {
-        if (options.optional) return false;
-        throw e;
-      }
-
-      const typePos = await this.getElementPosition({ nodeId: element.nodeId });
-      if (typePos) this.setLastActionPosition(typePos.center, typePos.bbox);
-      this._lastActionTargetMetadata = await this.getActionTargetMetadata({ objectId });
-
-      await this.cdp.send('DOM.focus', { nodeId: element.nodeId });
-
-      for (const char of text) {
-        const def = US_KEYBOARD[char];
-
-        if (def) {
-          if (def.text !== undefined) {
-            // Printable character: 'keyDown' with text fields
-            await this.cdp.send('Input.dispatchKeyEvent', {
-              type: 'keyDown',
-              key: def.key,
-              code: def.code,
-              text: def.text,
-              unmodifiedText: def.text,
-              windowsVirtualKeyCode: def.keyCode,
-              modifiers: 0,
-              autoRepeat: false,
-              location: def.location ?? 0,
-              isKeypad: false,
+          // Actionability checks before typing
+          const objectId = await this.resolveObjectId(element.nodeId);
+          try {
+            await ensureActionable(this.cdp, objectId, ['visible', 'enabled'], {
+              timeout: options.timeout ?? DEFAULT_TIMEOUT,
             });
-          } else {
-            // Non-text key (Enter, Tab, etc.): 'rawKeyDown', no text
-            await this.cdp.send('Input.dispatchKeyEvent', {
-              type: 'rawKeyDown',
-              key: def.key,
-              code: def.code,
-              windowsVirtualKeyCode: def.keyCode,
-              modifiers: 0,
-              autoRepeat: false,
-              location: def.location ?? 0,
-              isKeypad: false,
+          } catch (e) {
+            if (options.optional) return false;
+            throw e;
+          }
+
+          const typePos = await this.getElementPosition({ nodeId: element.nodeId });
+          if (typePos) this.setLastActionPosition(typePos.center, typePos.bbox);
+          this._lastActionTargetMetadata = await this.getActionTargetMetadata({ objectId });
+
+          await this.cdp.send('DOM.focus', { nodeId: element.nodeId });
+
+          for (const char of text) {
+            const def = US_KEYBOARD[char];
+
+            if (def) {
+              await this.dispatchKeyDefinition(def, 0, undefined, dispatch);
+            } else {
+              // Non-layout character (emoji, CJK): use insertText
+              await dispatch.send(
+                () => this.cdp.send('Input.insertText', { text: char }),
+                'insertText'
+              );
+            }
+
+            if (delay > 0) {
+              await sleep(delay);
+            }
+          }
+
+          // Optionally trigger blur
+          if (options.blur) {
+            await this.cdp.send('Runtime.callFunctionOn', {
+              objectId,
+              functionDeclaration: 'function() { this.blur(); }',
             });
           }
 
-          await this.cdp.send('Input.dispatchKeyEvent', {
-            type: 'keyUp',
-            key: def.key,
-            code: def.code,
-            windowsVirtualKeyCode: def.keyCode,
-            modifiers: 0,
-            location: def.location ?? 0,
-          });
-        } else {
-          // Non-layout character (emoji, CJK): use insertText
-          await this.cdp.send('Input.insertText', { text: char });
-        }
-
-        if (delay > 0) {
-          await sleep(delay);
-        }
-      }
-
-      // Optionally trigger blur
-      if (options.blur) {
-        await this.cdp.send('Runtime.callFunctionOn', {
-          objectId,
-          functionDeclaration: 'function() { this.blur(); }',
-        });
-      }
-
-      return true;
-    });
+          return true;
+        },
+        { dispatch }
+      )
+    );
   }
 
   /**
@@ -1389,80 +1460,86 @@ export class Page {
     const value = valueOrOptions as string | string[];
     const options = maybeOptions ?? {};
 
-    return this.withStaleNodeRetry(async () => {
-      const element = await this.findElement(selector, options);
-      if (!element) {
-        if (options.optional) return false;
-        const selectorList = Array.isArray(selector) ? selector : [selector];
-        const hints = await generateHints(this, selectorList, 'select');
-        throw new ElementNotFoundError(selector, hints);
-      }
+    return this.withActionDispatch((dispatch) =>
+      this.withStaleNodeRetry(
+        async () => {
+          const element = await this.findElement(selector, options);
+          if (!element) {
+            if (options.optional) return false;
+            const selectorList = Array.isArray(selector) ? selector : [selector];
+            const hints = await generateHints(this, selectorList, 'select');
+            throw new ElementNotFoundError(selector, hints);
+          }
 
-      const values = Array.isArray(value) ? value : [value];
-      const objectId = await this.resolveObjectId(element.nodeId);
+          const values = Array.isArray(value) ? value : [value];
+          const objectId = await this.resolveObjectId(element.nodeId);
 
-      try {
-        await this.scrollIntoView(element.nodeId);
-        await ensureActionable(this.cdp, objectId, ['visible', 'enabled'], {
-          timeout: options.timeout ?? DEFAULT_TIMEOUT,
-        });
-      } catch (e) {
-        if (options.optional) return false;
-        throw e;
-      }
+          try {
+            await this.scrollIntoView(element.nodeId);
+            await ensureActionable(this.cdp, objectId, ['visible', 'enabled'], {
+              timeout: options.timeout ?? DEFAULT_TIMEOUT,
+            });
+          } catch (e) {
+            if (options.optional) return false;
+            throw e;
+          }
 
-      const selectPos = await this.getElementPosition({ nodeId: element.nodeId });
-      if (selectPos) this.setLastActionPosition(selectPos.center, selectPos.bbox);
-      this._lastActionTargetMetadata = await this.getActionTargetMetadata({ objectId });
+          const selectPos = await this.getElementPosition({ nodeId: element.nodeId });
+          if (selectPos) this.setLastActionPosition(selectPos.center, selectPos.bbox);
+          this._lastActionTargetMetadata = await this.getActionTargetMetadata({ objectId });
 
-      const metadata = await this.getNativeSelectMetadata(objectId, values);
-      if (!metadata.isSelect) {
-        throw new Error('select() target must be a native <select> element');
-      }
-      if (metadata.missing.length > 0) {
-        throw new Error(`No option found for: ${metadata.missing.join(', ')}`);
-      }
-      if (metadata.disabled.length > 0) {
-        throw new Error(`Cannot select disabled option(s): ${metadata.disabled.join(', ')}`);
-      }
-      if (!metadata.multiple && metadata.targetIndexes.length > 1) {
-        throw new Error('Cannot select multiple values on a single-select element');
-      }
+          const metadata = await this.getNativeSelectMetadata(objectId, values);
+          if (!metadata.isSelect) {
+            throw new Error('select() target must be a native <select> element');
+          }
+          if (metadata.missing.length > 0) {
+            throw new Error(`No option found for: ${metadata.missing.join(', ')}`);
+          }
+          if (metadata.disabled.length > 0) {
+            throw new Error(`Cannot select disabled option(s): ${metadata.disabled.join(', ')}`);
+          }
+          if (!metadata.multiple && metadata.targetIndexes.length > 1) {
+            throw new Error('Cannot select multiple values on a single-select element');
+          }
 
-      const expectedValues = metadata.targetIndexes.map((idx) => metadata.options[idx]!.value);
-      if (this.selectValuesMatch(metadata.selectedValues, expectedValues, metadata.multiple)) {
-        return true;
-      }
+          const expectedValues = metadata.targetIndexes.map((idx) => metadata.options[idx]!.value);
+          if (this.selectValuesMatch(metadata.selectedValues, expectedValues, metadata.multiple)) {
+            return true;
+          }
 
-      if (!metadata.multiple && metadata.targetIndexes.length === 1) {
-        await this.applyNativeSelectByKeyboard(
-          element.nodeId,
-          objectId,
-          metadata.currentIndex,
-          metadata.targetIndexes[0]!
-        );
-      }
+          if (!metadata.multiple && metadata.targetIndexes.length === 1) {
+            await this.applyNativeSelectByKeyboard(
+              element.nodeId,
+              objectId,
+              metadata.currentIndex,
+              metadata.targetIndexes[0]!,
+              dispatch
+            );
+          }
 
-      let selectedValues = await this.readNativeSelectValues(objectId);
-      if (!this.selectValuesMatch(selectedValues, expectedValues, metadata.multiple)) {
-        await this.applyNativeSelectFallback(objectId, metadata.targetIndexes);
-        selectedValues = await this.readNativeSelectValues(objectId);
-      }
+          let selectedValues = await this.readNativeSelectValues(objectId);
+          if (!this.selectValuesMatch(selectedValues, expectedValues, metadata.multiple)) {
+            await this.applyNativeSelectFallback(objectId, metadata.targetIndexes, dispatch);
+            selectedValues = await this.readNativeSelectValues(objectId);
+          }
 
-      if (!this.selectValuesMatch(selectedValues, expectedValues, metadata.multiple)) {
-        await this.applyRecordedSelectFallback(objectId, metadata.targetIndexes);
-        selectedValues = await this.readNativeSelectValues(objectId);
-      }
+          if (!this.selectValuesMatch(selectedValues, expectedValues, metadata.multiple)) {
+            await this.applyRecordedSelectFallback(objectId, metadata.targetIndexes, dispatch);
+            selectedValues = await this.readNativeSelectValues(objectId);
+          }
 
-      if (!this.selectValuesMatch(selectedValues, expectedValues, metadata.multiple)) {
-        if (options.optional) return false;
-        throw new Error(
-          `Select value did not stick. Expected ${expectedValues.join(', ') || '(empty)'} but got ${selectedValues.join(', ') || '(empty)'}.`
-        );
-      }
+          if (!this.selectValuesMatch(selectedValues, expectedValues, metadata.multiple)) {
+            if (options.optional) return false;
+            throw new Error(
+              `Select value did not stick. Expected ${expectedValues.join(', ') || '(empty)'} but got ${selectedValues.join(', ') || '(empty)'}.`
+            );
+          }
 
-      return true;
-    });
+          return true;
+        },
+        { dispatch }
+      )
+    );
   }
 
   /**
@@ -1474,19 +1551,21 @@ export class Page {
   ): Promise<boolean> {
     const { trigger, option, value, match = 'text' } = config;
 
-    return this.withStaleNodeRetry(async () => {
-      // Click the trigger to open dropdown
-      await this.click(trigger, options);
+    return this.withActionDispatch((dispatch) =>
+      this.withStaleNodeRetry(
+        async () => {
+          // Click the trigger to open dropdown
+          await this.clickInternal(trigger, options, dispatch);
 
-      // Wait for dropdown to appear (up to 500ms) instead of fixed delay
-      const optionSelectors = Array.isArray(option) ? option : [option];
-      await waitForAnyElement(this.cdp, optionSelectors, {
-        state: 'visible',
-        timeout: 500,
-        contextId: this.currentFrameContextId ?? undefined,
-      }).catch(() => sleep(100)); // Fallback to brief delay if we can't detect
-      const optionHandle = await this.evaluateInFrame<{ result: RemoteObject }>(
-        `(() => {
+          // Wait for dropdown to appear (up to 500ms) instead of fixed delay
+          const optionSelectors = Array.isArray(option) ? option : [option];
+          await waitForAnyElement(this.cdp, optionSelectors, {
+            state: 'visible',
+            timeout: 500,
+            contextId: this.currentFrameContextId ?? undefined,
+          }).catch(() => sleep(100)); // Fallback to brief delay if we can't detect
+          const optionHandle = await this.evaluateInFrame<{ result: RemoteObject }>(
+            `(() => {
           const selectors = ${JSON.stringify(optionSelectors)};
           const wanted = ${JSON.stringify(value)};
           const mode = ${JSON.stringify(match)};
@@ -1515,35 +1594,38 @@ export class Page {
 
           return null;
         })()`,
-        { returnByValue: false }
-      );
+            { returnByValue: false }
+          );
 
-      if (!optionHandle.result.objectId) {
-        if (options.optional) return false;
-        throw new ElementNotFoundError(`Option with ${match} "${value}"`);
-      }
+          if (!optionHandle.result.objectId) {
+            if (options.optional) return false;
+            throw new ElementNotFoundError(`Option with ${match} "${value}"`);
+          }
 
-      const nodeResult = await this.cdp.send<{ nodeId: number }>('DOM.requestNode', {
-        objectId: optionHandle.result.objectId,
-      });
+          const nodeResult = await this.cdp.send<{ nodeId: number }>('DOM.requestNode', {
+            objectId: optionHandle.result.objectId,
+          });
 
-      if (!nodeResult.nodeId) {
-        if (options.optional) return false;
-        throw new ElementNotFoundError(`Option with ${match} "${value}"`);
-      }
+          if (!nodeResult.nodeId) {
+            if (options.optional) return false;
+            throw new ElementNotFoundError(`Option with ${match} "${value}"`);
+          }
 
-      await this.scrollIntoView(nodeResult.nodeId);
-      await ensureActionable(
-        this.cdp,
-        optionHandle.result.objectId,
-        ['visible', 'enabled', 'stable'],
-        {
-          timeout: options.timeout ?? DEFAULT_TIMEOUT,
-        }
-      );
-      await this.clickElement(nodeResult.nodeId);
-      return true;
-    });
+          await this.scrollIntoView(nodeResult.nodeId);
+          await ensureActionable(
+            this.cdp,
+            optionHandle.result.objectId,
+            ['visible', 'enabled', 'stable'],
+            {
+              timeout: options.timeout ?? DEFAULT_TIMEOUT,
+            }
+          );
+          await this.clickElement(nodeResult.nodeId, dispatch);
+          return true;
+        },
+        { dispatch }
+      )
+    );
   }
 
   /**
@@ -1552,63 +1634,84 @@ export class Page {
    */
   async check(selector: string | string[], options: ActionOptions = {}): Promise<boolean> {
     this.assertOopifUnsupported('check');
-    return this.withStaleNodeRetry(async () => {
-      const element = await this.findElement(selector, options);
-      if (!element) {
-        if (options.optional) return false;
-        const selectorList = Array.isArray(selector) ? selector : [selector];
-        const hints = await generateHints(this, selectorList, 'check');
-        throw new ElementNotFoundError(selector, hints);
-      }
+    return this.withActionDispatch((dispatch) =>
+      this.withStaleNodeRetry(
+        async () => {
+          const element = await this.findElement(selector, options);
+          if (!element) {
+            if (options.optional) return false;
+            const selectorList = Array.isArray(selector) ? selector : [selector];
+            const hints = await generateHints(this, selectorList, 'check');
+            throw new ElementNotFoundError(selector, hints);
+          }
 
-      const { object } = await this.cdp.send<{ object: { objectId: string } }>('DOM.resolveNode', {
-        nodeId: element.nodeId,
-      });
+          const { object } = await this.cdp.send<{ object: { objectId: string } }>(
+            'DOM.resolveNode',
+            {
+              nodeId: element.nodeId,
+            }
+          );
 
-      // Actionability checks
-      try {
-        await ensureActionable(this.cdp, object.objectId, ['visible', 'enabled'], {
-          timeout: options.timeout ?? DEFAULT_TIMEOUT,
-        });
-      } catch (e) {
-        if (options.optional) return false;
-        throw e;
-      }
+          // Actionability checks
+          try {
+            await ensureActionable(this.cdp, object.objectId, ['visible', 'enabled'], {
+              timeout: options.timeout ?? DEFAULT_TIMEOUT,
+            });
+          } catch (e) {
+            if (options.optional) return false;
+            throw e;
+          }
 
-      const checkPos = await this.getElementPosition({ nodeId: element.nodeId });
-      if (checkPos) this.setLastActionPosition(checkPos.center, checkPos.bbox);
+          const checkPos = await this.getElementPosition({ nodeId: element.nodeId });
+          if (checkPos) this.setLastActionPosition(checkPos.center, checkPos.bbox);
 
-      // Read current checked state
-      const before = await this.cdp.send<{ result: { value: boolean } }>('Runtime.callFunctionOn', {
-        objectId: object.objectId,
-        functionDeclaration: 'function() { return !!this.checked; }',
-        returnByValue: true,
-      });
+          // Read current checked state
+          const before = await this.cdp.send<{ result: { value: boolean } }>(
+            'Runtime.callFunctionOn',
+            {
+              objectId: object.objectId,
+              functionDeclaration: 'function() { return !!this.checked; }',
+              returnByValue: true,
+            }
+          );
 
-      if (before.result.value) return true; // Already checked
+          if (before.result.value) return true; // Already checked
 
-      // Real mouse click
-      await this.scrollIntoView(element.nodeId);
-      await this.clickElement(element.nodeId);
+          // Prefer the associated label when one exists. This is a
+          // pre-dispatch choice that supports controls whose input handler
+          // intentionally prevents the native input click; verification below
+          // remains observation-only.
+          if (await this.tryClickAssociatedLabel(object.objectId, dispatch)) {
+            const afterLabel = await this.readCheckedState(object.objectId);
+            if (!afterLabel) {
+              throw new Error('Label click was dispatched but checkbox did not become checked');
+            }
+            return true;
+          }
 
-      // Verify state changed
-      const after = await this.cdp.send<{ result: { value: boolean } }>('Runtime.callFunctionOn', {
-        objectId: object.objectId,
-        functionDeclaration: 'function() { return !!this.checked; }',
-        returnByValue: true,
-      });
+          // No associated label: dispatch directly to the input.
+          await this.scrollIntoView(element.nodeId);
+          await this.clickElement(element.nodeId, dispatch);
 
-      if (!after.result.value) {
-        if (await this.tryToggleViaLabel(object.objectId, true)) {
+          // Verify state changed
+          const after = await this.cdp.send<{ result: { value: boolean } }>(
+            'Runtime.callFunctionOn',
+            {
+              objectId: object.objectId,
+              functionDeclaration: 'function() { return !!this.checked; }',
+              returnByValue: true,
+            }
+          );
+
+          if (!after.result.value) {
+            throw new Error('Click was dispatched but checkbox did not become checked');
+          }
+
           return true;
-        }
-        throw new Error(
-          'Clicking the checkbox did not change its state. Tried the associated label too.'
-        );
-      }
-
-      return true;
-    });
+        },
+        { dispatch }
+      )
+    );
   }
 
   /**
@@ -1617,79 +1720,98 @@ export class Page {
    */
   async uncheck(selector: string | string[], options: ActionOptions = {}): Promise<boolean> {
     this.assertOopifUnsupported('uncheck');
-    return this.withStaleNodeRetry(async () => {
-      const element = await this.findElement(selector, options);
-      if (!element) {
-        if (options.optional) return false;
-        const selectorList = Array.isArray(selector) ? selector : [selector];
-        const hints = await generateHints(this, selectorList, 'uncheck');
-        throw new ElementNotFoundError(selector, hints);
-      }
+    return this.withActionDispatch((dispatch) =>
+      this.withStaleNodeRetry(
+        async () => {
+          const element = await this.findElement(selector, options);
+          if (!element) {
+            if (options.optional) return false;
+            const selectorList = Array.isArray(selector) ? selector : [selector];
+            const hints = await generateHints(this, selectorList, 'uncheck');
+            throw new ElementNotFoundError(selector, hints);
+          }
 
-      const { object } = await this.cdp.send<{ object: { objectId: string } }>('DOM.resolveNode', {
-        nodeId: element.nodeId,
-      });
+          const { object } = await this.cdp.send<{ object: { objectId: string } }>(
+            'DOM.resolveNode',
+            {
+              nodeId: element.nodeId,
+            }
+          );
 
-      // Actionability checks
-      try {
-        await ensureActionable(this.cdp, object.objectId, ['visible', 'enabled'], {
-          timeout: options.timeout ?? DEFAULT_TIMEOUT,
-        });
-      } catch (e) {
-        if (options.optional) return false;
-        throw e;
-      }
+          // Actionability checks
+          try {
+            await ensureActionable(this.cdp, object.objectId, ['visible', 'enabled'], {
+              timeout: options.timeout ?? DEFAULT_TIMEOUT,
+            });
+          } catch (e) {
+            if (options.optional) return false;
+            throw e;
+          }
 
-      const uncheckPos = await this.getElementPosition({ nodeId: element.nodeId });
-      if (uncheckPos) this.setLastActionPosition(uncheckPos.center, uncheckPos.bbox);
+          const uncheckPos = await this.getElementPosition({ nodeId: element.nodeId });
+          if (uncheckPos) this.setLastActionPosition(uncheckPos.center, uncheckPos.bbox);
 
-      // Check if it's a radio button (can't uncheck radio by clicking)
-      const isRadio = await this.cdp.send<{ result: { value: boolean } }>(
-        'Runtime.callFunctionOn',
-        {
-          objectId: object.objectId,
-          functionDeclaration: 'function() { return this.type === "radio"; }',
-          returnByValue: true,
-        }
-      );
+          // Check if it's a radio button (can't uncheck radio by clicking)
+          const isRadio = await this.cdp.send<{ result: { value: boolean } }>(
+            'Runtime.callFunctionOn',
+            {
+              objectId: object.objectId,
+              functionDeclaration: 'function() { return this.type === "radio"; }',
+              returnByValue: true,
+            }
+          );
 
-      if (isRadio.result.value) return true;
+          if (isRadio.result.value) return true;
 
-      // Read current checked state
-      const before = await this.cdp.send<{ result: { value: boolean } }>('Runtime.callFunctionOn', {
-        objectId: object.objectId,
-        functionDeclaration: 'function() { return !!this.checked; }',
-        returnByValue: true,
-      });
+          // Read current checked state
+          const before = await this.cdp.send<{ result: { value: boolean } }>(
+            'Runtime.callFunctionOn',
+            {
+              objectId: object.objectId,
+              functionDeclaration: 'function() { return !!this.checked; }',
+              returnByValue: true,
+            }
+          );
 
-      if (!before.result.value) return true; // Already unchecked
+          if (!before.result.value) return true; // Already unchecked
 
-      // Real mouse click
-      await this.scrollIntoView(element.nodeId);
-      await this.clickElement(element.nodeId);
+          if (await this.tryClickAssociatedLabel(object.objectId, dispatch)) {
+            const afterLabel = await this.readCheckedState(object.objectId);
+            if (afterLabel) {
+              throw new Error('Label click was dispatched but checkbox remained checked');
+            }
+            return true;
+          }
 
-      // Verify state changed
-      const after = await this.cdp.send<{ result: { value: boolean } }>('Runtime.callFunctionOn', {
-        objectId: object.objectId,
-        functionDeclaration: 'function() { return !!this.checked; }',
-        returnByValue: true,
-      });
+          // No associated label: dispatch directly to the input.
+          await this.scrollIntoView(element.nodeId);
+          await this.clickElement(element.nodeId, dispatch);
 
-      if (after.result.value) {
-        if (await this.tryToggleViaLabel(object.objectId, false)) {
+          // Verify state changed
+          const after = await this.cdp.send<{ result: { value: boolean } }>(
+            'Runtime.callFunctionOn',
+            {
+              objectId: object.objectId,
+              functionDeclaration: 'function() { return !!this.checked; }',
+              returnByValue: true,
+            }
+          );
+
+          if (after.result.value) {
+            throw new Error('Click was dispatched but checkbox remained checked');
+          }
+
           return true;
-        }
-        throw new Error(
-          'Clicking the checkbox did not change its state. Tried the associated label too.'
-        );
-      }
-
-      return true;
-    });
+        },
+        { dispatch }
+      )
+    );
   }
 
   /**
-   * Submit a form (tries Enter key first, then click)
+   * Submit a form with one effectful dispatch.
+   * `enter+click` uses the trusted mouse click path; it never sends Enter and
+   * then clicks the same control after an uncertain key dispatch.
    *
    * Navigation waiting behavior:
    * - 'auto' (default): Attempt to detect navigation for 1 second, then assume client-side handling
@@ -1701,107 +1823,132 @@ export class Page {
    */
   async submit(selector: string | string[], options: SubmitOptions = {}): Promise<boolean> {
     this.assertOopifUnsupported('submit');
-    return this.withStaleNodeRetry(async () => {
-      const { method = 'enter+click', waitForNavigation: shouldWait = 'auto' } = options;
-      const element = await this.findElement(selector, options);
+    return this.withActionDispatch((dispatch) =>
+      this.withStaleNodeRetry(
+        async () => {
+          const { method = 'enter+click', waitForNavigation: shouldWait = 'auto' } = options;
+          const element = await this.findElement(selector, options);
 
-      if (!element) {
-        if (options.optional) return false;
-        const selectorList = Array.isArray(selector) ? selector : [selector];
-        const hints = await generateHints(this, selectorList, 'submit');
-        throw new ElementNotFoundError(selector, hints);
-      }
+          if (!element) {
+            if (options.optional) return false;
+            const selectorList = Array.isArray(selector) ? selector : [selector];
+            const hints = await generateHints(this, selectorList, 'submit');
+            throw new ElementNotFoundError(selector, hints);
+          }
 
-      const objectId = await this.resolveObjectId(element.nodeId);
-      const submitPos = await this.getElementPosition({ nodeId: element.nodeId });
-      if (submitPos) this.setLastActionPosition(submitPos.center, submitPos.bbox);
+          const objectId = await this.resolveObjectId(element.nodeId);
+          const submitPos = await this.getElementPosition({ nodeId: element.nodeId });
+          if (submitPos) this.setLastActionPosition(submitPos.center, submitPos.bbox);
 
-      const isFormElement = await this.cdp.send<{ result: { value: boolean } }>(
-        'Runtime.callFunctionOn',
-        {
-          objectId,
-          functionDeclaration: 'function() { return this instanceof HTMLFormElement; }',
-          returnByValue: true,
-        }
-      );
-
-      if (isFormElement.result.value) {
-        // For form elements, use requestSubmit() which fires submit event and validates
-        await this.cdp.send('Runtime.callFunctionOn', {
-          objectId,
-          functionDeclaration: `function() {
-            if (typeof this.requestSubmit === 'function') {
-              this.requestSubmit();
-            } else {
-              this.submit();
+          const isFormElement = await this.cdp.send<{ result: { value: boolean } }>(
+            'Runtime.callFunctionOn',
+            {
+              objectId,
+              functionDeclaration: 'function() { return this instanceof HTMLFormElement; }',
+              returnByValue: true,
             }
-          }`,
-        });
+          );
 
-        // Handle navigation waiting
-        if (shouldWait === true) {
-          await this.waitForNavigation({ timeout: options.timeout ?? DEFAULT_TIMEOUT });
-        } else if (shouldWait === 'auto') {
-          await Promise.race([
-            this.waitForNavigation({ timeout: 2000, optional: true }).then(
-              () => 'navigation' as const
-            ),
-            this.waitForDOMMutation({ timeout: 1000 }).then(() => 'mutation' as const),
-            sleep(1500).then(() => 'timeout' as const),
-          ]);
-        }
-        return true;
-      }
+          if (isFormElement.result.value) {
+            // For form elements, use requestSubmit() which fires submit event and validates
+            await dispatch.send(
+              () =>
+                this.cdp.send('Runtime.callFunctionOn', {
+                  objectId,
+                  functionDeclaration: `function() {
+                if (typeof this.requestSubmit === 'function') {
+                  this.requestSubmit();
+                } else {
+                  this.submit();
+                }
+              }`,
+                }),
+              'requestSubmit'
+            );
 
-      // For non-form elements, continue with existing focus+enter/click logic
-      await this.cdp.send('DOM.focus', { nodeId: element.nodeId });
-
-      // Try Enter first if method includes it
-      if (method.includes('enter')) {
-        await this.press('Enter');
-
-        if (shouldWait === true) {
-          try {
-            await this.waitForNavigation({ timeout: options.timeout ?? DEFAULT_TIMEOUT });
+            // Handle navigation waiting
+            if (shouldWait === true) {
+              const observed = await this.waitForNavigation({
+                timeout: options.timeout ?? DEFAULT_TIMEOUT,
+                waitUntil: options.waitUntil ?? 'load',
+              });
+              if (observed) dispatch.observeNavigation();
+            } else if (shouldWait === 'auto') {
+              const result = await Promise.race([
+                this.waitForNavigation({
+                  timeout: 2000,
+                  optional: true,
+                  waitUntil: options.waitUntil ?? 'load',
+                }).then((observed) => {
+                  if (observed) dispatch.observeNavigation();
+                  return 'navigation' as const;
+                }),
+                this.waitForDOMMutation({ timeout: 1000 }).then(() => 'mutation' as const),
+                sleep(1500).then(() => 'timeout' as const),
+              ]);
+              void result;
+            }
             return true;
-          } catch {
-            // No navigation, try click if method includes it
           }
-        } else if (shouldWait === 'auto') {
-          // Race: real navigation vs DOM mutation (client-side form) vs timeout
-          const navigationDetected = await Promise.race([
-            this.waitForNavigation({ timeout: 2000, optional: true }).then((success) =>
-              success ? 'nav' : null
-            ),
-            this.waitForDOMMutation({ timeout: 1000 }).then(() => 'mutation'),
-            sleep(1500).then(() => 'timeout'),
-          ]);
 
-          if (navigationDetected === 'nav') {
-            return true; // Navigation happened, we're done
+          // For non-form elements, continue with existing focus+enter/click logic
+          await this.cdp.send('DOM.focus', { nodeId: element.nodeId });
+
+          // An explicit Enter request is one effectful dispatch. The
+          // enter+click mode intentionally uses the click path below so it
+          // cannot send two potentially submitting inputs.
+          if (method === 'enter') {
+            await this.pressInternal('Enter', undefined, dispatch);
+
+            if (shouldWait === true) {
+              const observed = await this.waitForNavigation({
+                timeout: options.timeout ?? DEFAULT_TIMEOUT,
+                waitUntil: options.waitUntil ?? 'load',
+              });
+              if (observed) dispatch.observeNavigation();
+            } else if (shouldWait === 'auto') {
+              const result = await Promise.race([
+                this.waitForNavigation({
+                  timeout: 2000,
+                  optional: true,
+                  waitUntil: options.waitUntil ?? 'load',
+                }).then((observed) => {
+                  if (observed) dispatch.observeNavigation();
+                  return observed ? ('nav' as const) : null;
+                }),
+                this.waitForDOMMutation({ timeout: 1000 }).then(() => 'mutation' as const),
+                sleep(1500).then(() => 'timeout' as const),
+              ]);
+              void result;
+            } else {
+              // waitForNavigation: false - don't wait
+            }
+
+            return true;
           }
-          // DOM mutation or timeout — assume client-side handling, try click if available
-        } else if (method === 'enter') {
-          // waitForNavigation: false - don't wait
+
+          // Try click if method includes it
+          if (method.includes('click')) {
+            await this.clickInternal(element.selector, { ...options, optional: false }, dispatch);
+
+            if (shouldWait === true) {
+              const observed = await this.waitForNavigation({
+                timeout: options.timeout ?? DEFAULT_TIMEOUT,
+                waitUntil: options.waitUntil ?? 'load',
+              });
+              if (observed) dispatch.observeNavigation();
+            } else if (shouldWait === 'auto') {
+              // Short wait to allow client-side handlers to run
+              await sleep(100);
+            }
+            // waitForNavigation: false - return immediately
+          }
+
           return true;
-        }
-      }
-
-      // Try click if method includes it
-      if (method.includes('click')) {
-        await this.click(element.selector, { ...options, optional: false });
-
-        if (shouldWait === true) {
-          await this.waitForNavigation({ timeout: options.timeout ?? DEFAULT_TIMEOUT });
-        } else if (shouldWait === 'auto') {
-          // Short wait to allow client-side handlers to run
-          await sleep(100);
-        }
-        // waitForNavigation: false - return immediately
-      }
-
-      return true;
-    });
+        },
+        { dispatch }
+      )
+    );
   }
 
   /**
@@ -1811,14 +1958,23 @@ export class Page {
     key: string,
     options?: { modifiers?: Array<'Control' | 'Shift' | 'Alt' | 'Meta'> }
   ): Promise<void> {
+    return this.withActionDispatch((dispatch) =>
+      this.pressInternal(key, options?.modifiers, dispatch)
+    );
+  }
+
+  private async pressInternal(
+    key: string,
+    modifiers: Array<'Control' | 'Shift' | 'Alt' | 'Meta'> | undefined,
+    dispatch: ActionDispatch
+  ): Promise<void> {
     // Route keystrokes to the active OOPIF child session so they reach the
     // focused in-frame element, not the parent (needed for checkout card entry).
     const sessionId = this.currentFrameSession ?? undefined;
-    const modifiers = options?.modifiers;
     if (modifiers && modifiers.length > 0) {
-      await this.dispatchKeyWithModifiers(key, modifiers, sessionId);
+      await this.dispatchKeyWithModifiers(key, modifiers, sessionId, dispatch);
     } else {
-      await this.dispatchKey(key, sessionId);
+      await this.dispatchKey(key, sessionId, dispatch);
     }
   }
 
@@ -1826,9 +1982,16 @@ export class Page {
    * Execute a keyboard shortcut (e.g. "Control+a", "Meta+Shift+z")
    */
   async shortcut(combo: string): Promise<void> {
-    const { modifiers, key } = parseShortcut(combo);
-    // Route to the active OOPIF child session when inside a cross-origin frame.
-    await this.dispatchKeyWithModifiers(key, modifiers, this.currentFrameSession ?? undefined);
+    return this.withActionDispatch(async (dispatch) => {
+      const { modifiers, key } = parseShortcut(combo);
+      // Route to the active OOPIF child session when inside a cross-origin frame.
+      await this.dispatchKeyWithModifiers(
+        key,
+        modifiers,
+        this.currentFrameSession ?? undefined,
+        dispatch
+      );
+    });
   }
 
   /**
@@ -2617,7 +2780,8 @@ export class Page {
   private async fillInFrame(
     selector: string | string[],
     value: string,
-    options: FillOptions
+    options: FillOptions,
+    dispatch: ActionDispatch
   ): Promise<boolean> {
     const sessionId = this.currentFrameSession!;
     const timeout = options.timeout ?? DEFAULT_TIMEOUT;
@@ -2634,21 +2798,28 @@ export class Page {
     await this.selectEditableContent(found.objectId, sessionId);
 
     if (value === '') {
-      await this.cdp.send(
-        'Runtime.callFunctionOn',
-        {
-          objectId: found.objectId,
-          functionDeclaration: `function() {
-            if (this.isContentEditable) { this.textContent = ''; }
-            else { this.value = ''; }
-            this.dispatchEvent(new Event('input', { bubbles: true }));
-            this.dispatchEvent(new Event('change', { bubbles: true }));
-          }`,
-        },
-        sessionId
+      await dispatch.send(
+        () =>
+          this.cdp.send(
+            'Runtime.callFunctionOn',
+            {
+              objectId: found.objectId,
+              functionDeclaration: `function() {
+                if (this.isContentEditable) { this.textContent = ''; }
+                else { this.value = ''; }
+                this.dispatchEvent(new Event('input', { bubbles: true }));
+                this.dispatchEvent(new Event('change', { bubbles: true }));
+              }`,
+            },
+            sessionId
+          ),
+        'fillValue'
       );
     } else {
-      await this.cdp.send('Input.insertText', { text: value }, sessionId);
+      await dispatch.send(
+        () => this.cdp.send('Input.insertText', { text: value }, sessionId),
+        'insertText'
+      );
     }
 
     if (options.verify !== false) {
@@ -2678,7 +2849,8 @@ export class Page {
    */
   private async clickInFrame(
     selector: string | string[],
-    options: ActionOptions
+    options: ActionOptions,
+    dispatch: ActionDispatch
   ): Promise<boolean> {
     const sessionId = this.currentFrameSession!;
     const timeout = options.timeout ?? DEFAULT_TIMEOUT;
@@ -2690,13 +2862,15 @@ export class Page {
     this._lastMatchedSelector = found.selector;
 
     await this.cdp.send('DOM.focus', { nodeId: found.nodeId }, sessionId).catch(() => {});
-    await this.cdp.send(
-      'Runtime.callFunctionOn',
-      { objectId: found.objectId, functionDeclaration: 'function() { this.click(); }' },
-      sessionId
+    await dispatch.send(
+      () =>
+        this.cdp.send(
+          'Runtime.callFunctionOn',
+          { objectId: found.objectId, functionDeclaration: 'function() { this.click(); }' },
+          sessionId
+        ),
+      'javascriptClick'
     );
-    // Flush synchronous handlers triggered by the click.
-    await this.cdp.send('Runtime.evaluate', { expression: '0' }, sessionId);
     return true;
   }
 
@@ -2709,7 +2883,8 @@ export class Page {
   private async typeInFrame(
     selector: string | string[],
     text: string,
-    options: TypeOptions
+    options: TypeOptions,
+    dispatch: ActionDispatch
   ): Promise<boolean> {
     const sessionId = this.currentFrameSession!;
     const timeout = options.timeout ?? DEFAULT_TIMEOUT;
@@ -2725,10 +2900,13 @@ export class Page {
     for (const char of text) {
       const def = US_KEYBOARD[char];
       if (def) {
-        await this.dispatchKeyDefinition(def, 0, sessionId);
+        await this.dispatchKeyDefinition(def, 0, sessionId, dispatch);
       } else {
         // Non-layout character (emoji, CJK): use insertText on the child session.
-        await this.cdp.send('Input.insertText', { text: char }, sessionId);
+        await dispatch.send(
+          () => this.cdp.send('Input.insertText', { text: char }, sessionId),
+          'insertText'
+        );
       }
       if (delay > 0) {
         await sleep(delay);
@@ -2885,11 +3063,53 @@ export class Page {
   }
 
   /**
+   * Wait for application-level readiness after a navigation milestone.
+   * Unlike element waits this deliberately keeps polling through an empty
+   * first snapshot and through pages that continue making background requests.
+   */
+  async waitForReady(options: WaitForReadyOptions = {}): Promise<boolean> {
+    this.assertOopifUnsupported('waitForReady');
+    const result = await waitForReadyStrategy(this.cdp, {
+      ...options,
+      timeout: options.timeout ?? DEFAULT_TIMEOUT,
+      contextId: this.currentFrameContextId ?? undefined,
+      refMap: this.exportRefMap(),
+    });
+    const diagnostics: ReadinessDiagnostics = {
+      ...(result.diagnostics ?? {
+        ready: result.success,
+        waitedMs: result.waitedMs,
+        unmetConditions: [],
+        checkedAt: new Date().toISOString(),
+      }),
+      ready: result.success,
+      waitedMs: result.waitedMs,
+      lastMilestone: this._lastNavigationMilestone,
+    };
+    this._lastReadinessDiagnostics = diagnostics;
+    if (!result.success && !options.optional) {
+      const unmet =
+        diagnostics.unmetConditions.length > 0
+          ? ` Unmet conditions: ${diagnostics.unmetConditions.join('; ')}.`
+          : '';
+      throw new TimeoutError(`Page readiness timeout after ${diagnostics.waitedMs}ms.${unmet}`);
+    }
+    return result.success;
+  }
+
+  /**
    * Wait for navigation to complete
    */
-  async waitForNavigation(options: ActionOptions = {}): Promise<boolean> {
+  async waitForNavigation(
+    options: ActionOptions & { expectedUrl?: string } = {}
+  ): Promise<boolean> {
     const { timeout = DEFAULT_TIMEOUT } = options;
-    const result = await waitForNav(this.cdp, { timeout });
+    const result = await waitForNav(this.cdp, {
+      timeout,
+      waitUntil: options.waitUntil ?? 'load',
+      expectedUrl: options.expectedUrl,
+    });
+    this._lastNavigationMilestone = result.milestone;
 
     if (!result.success && !options.optional) {
       throw new TimeoutError('Navigation timeout');
@@ -3408,7 +3628,8 @@ export class Page {
     nodeId: number,
     objectId: string,
     currentIndex: number,
-    targetIndex: number
+    targetIndex: number,
+    dispatch: ActionDispatch
   ): Promise<boolean> {
     await this.cdp.send('DOM.focus', { nodeId });
 
@@ -3416,14 +3637,14 @@ export class Page {
       let effectiveIndex = currentIndex;
 
       if (effectiveIndex < 0 || targetIndex < effectiveIndex) {
-        await this.dispatchKey('Home');
+        await this.dispatchKey('Home', undefined, dispatch);
         effectiveIndex = 0;
       }
       const steps = targetIndex - effectiveIndex;
       const direction = steps >= 0 ? 'ArrowDown' : 'ArrowUp';
 
       for (let i = 0; i < Math.abs(steps); i++) {
-        await this.dispatchKey(direction);
+        await this.dispatchKey(direction, undefined, dispatch);
       }
     }
 
@@ -3433,27 +3654,32 @@ export class Page {
 
   private async applyNativeSelectFallback(
     objectId: string,
-    targetIndexes: number[]
+    targetIndexes: number[],
+    dispatch: ActionDispatch
   ): Promise<void> {
-    await this.cdp.send('Runtime.callFunctionOn', {
-      objectId,
-      functionDeclaration: `function(indexes) {
-        if (!(this instanceof HTMLSelectElement)) return false;
+    await dispatch.send(
+      () =>
+        this.cdp.send('Runtime.callFunctionOn', {
+          objectId,
+          functionDeclaration: `function(indexes) {
+            if (!(this instanceof HTMLSelectElement)) return false;
 
-        var wanted = new Set(indexes.map(function(index) { return Number(index); }));
-        for (var i = 0; i < this.options.length; i++) {
-          this.options[i].selected = wanted.has(i);
-        }
-        if (!this.multiple && indexes.length === 1) {
-          this.selectedIndex = indexes[0];
-        }
-        this.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
-        this.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
-        return true;
-      }`,
-      arguments: [{ value: targetIndexes }],
-      returnByValue: true,
-    });
+            var wanted = new Set(indexes.map(function(index) { return Number(index); }));
+            for (var i = 0; i < this.options.length; i++) {
+              this.options[i].selected = wanted.has(i);
+            }
+            if (!this.multiple && indexes.length === 1) {
+              this.selectedIndex = indexes[0];
+            }
+            this.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+            this.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+            return true;
+          }`,
+          arguments: [{ value: targetIndexes }],
+          returnByValue: true,
+        }),
+      'selectValue'
+    );
   }
 
   private async selectEditableContent(objectId: string, sessionId?: string): Promise<void> {
@@ -3493,10 +3719,11 @@ export class Page {
 
   private async clearEditableSelection(
     objectId: string,
-    key: 'Backspace' | 'Delete'
+    key: 'Backspace' | 'Delete',
+    dispatch: ActionDispatch
   ): Promise<void> {
     await this.selectEditableContent(objectId);
-    await this.dispatchKey(key);
+    await this.dispatchKey(key, undefined, dispatch);
   }
 
   private async readEditableValue(objectId: string, sessionId?: string): Promise<string> {
@@ -3520,47 +3747,55 @@ export class Page {
   private async typeEditableFallback(
     nodeId: number,
     objectId: string,
-    value: string
+    value: string,
+    dispatch: ActionDispatch
   ): Promise<void> {
     await this.selectEditableContent(objectId);
     await this.cdp.send('DOM.focus', { nodeId });
     for (const char of value) {
-      await this.dispatchKey(char);
+      await this.dispatchKey(char, undefined, dispatch);
     }
   }
 
   private async applyRecordedSelectFallback(
     objectId: string,
-    targetIndexes: number[]
+    targetIndexes: number[],
+    dispatch: ActionDispatch
   ): Promise<boolean> {
-    await this.cdp.send('Runtime.callFunctionOn', {
-      objectId,
-      functionDeclaration: `function(indexes) {
-        if (!(this instanceof HTMLSelectElement)) return false;
+    await dispatch.send(
+      () =>
+        this.cdp.send('Runtime.callFunctionOn', {
+          objectId,
+          functionDeclaration: `function(indexes) {
+            if (!(this instanceof HTMLSelectElement)) return false;
 
-        var wanted = new Set(indexes.map(function(index) { return Number(index); }));
-        for (var i = 0; i < this.options.length; i++) {
-          this.options[i].selected = wanted.has(i);
-        }
-        if (!this.multiple && indexes.length === 1) {
-          this.selectedIndex = indexes[0];
-        }
-        return true;
-      }`,
-      arguments: [{ value: targetIndexes }],
-      returnByValue: true,
-    });
+            var wanted = new Set(indexes.map(function(index) { return Number(index); }));
+            for (var i = 0; i < this.options.length; i++) {
+              this.options[i].selected = wanted.has(i);
+            }
+            if (!this.multiple && indexes.length === 1) {
+              this.selectedIndex = indexes[0];
+            }
+            return true;
+          }`,
+          arguments: [{ value: targetIndexes }],
+          returnByValue: true,
+        }),
+      'selectValue'
+    );
 
-    return this.invokeRecordedEventListeners(objectId, ['input', 'change']);
+    return this.invokeRecordedEventListeners(objectId, ['input', 'change'], dispatch);
   }
 
   private async invokeRecordedEventListeners(
     objectId: string,
-    eventTypes: string[]
+    eventTypes: string[],
+    dispatch?: ActionDispatch
   ): Promise<boolean> {
-    const result = await this.cdp.send<{ result: { value: boolean } }>('Runtime.callFunctionOn', {
-      objectId,
-      functionDeclaration: `function(types) {
+    const operation = () =>
+      this.cdp.send<{ result: { value: boolean } }>('Runtime.callFunctionOn', {
+        objectId,
+        functionDeclaration: `function(types) {
         function buildPath(target) {
           var path = [];
           var node = target;
@@ -3695,9 +3930,10 @@ export class Page {
 
         return invokedAny;
       }`,
-      arguments: [{ value: eventTypes }],
-      returnByValue: true,
-    });
+        arguments: [{ value: eventTypes }],
+        returnByValue: true,
+      });
+    const result = dispatch ? await dispatch.send(operation, 'selectEvents') : await operation();
 
     return result.result.value ?? false;
   }
@@ -3855,6 +4091,11 @@ export class Page {
         node.properties?.find((p) => p.name === 'checked')?.value.value
       );
 
+      const properties = node.properties?.reduce<Record<string, unknown>>((acc, property) => {
+        acc[property.name] = property.value.value;
+        return acc;
+      }, {});
+
       return {
         role,
         name,
@@ -3863,6 +4104,7 @@ export class Page {
         children: children.length > 0 ? children : undefined,
         disabled,
         checked,
+        ...(properties && Object.keys(properties).length > 0 ? { properties } : {}),
       };
     };
 
@@ -4829,7 +5071,7 @@ export class Page {
    */
   private async withStaleNodeRetry<T>(
     fn: () => Promise<T>,
-    options: { retries?: number; delay?: number } = {}
+    options: { retries?: number; delay?: number; dispatch?: ActionDispatch } = {}
   ): Promise<T> {
     const { retries = 2, delay = 50 } = options;
     let lastError: Error | undefined;
@@ -4838,24 +5080,21 @@ export class Page {
       try {
         return await fn();
       } catch (e) {
-        const message = e instanceof Error ? e.message : '';
-        if (
-          e instanceof Error &&
-          (message.includes('Could not find node with given id') ||
-            message.includes('Node with given id does not belong to the document') ||
-            message.includes('No node with given id found') ||
-            message.includes('Could not find object with given id') ||
-            message.includes('Cannot find context with specified id') ||
-            message.includes('Cannot find context with given id') ||
-            message.includes('Execution context was destroyed') ||
-            message.includes('No execution context with given id') ||
-            message.includes('Argument should belong to the same JavaScript world'))
-        ) {
-          lastError = e;
+        if (options.dispatch?.hasPotentiallyDispatched) {
+          throw e;
+        }
+        const stale = classifyStaleError(e);
+        if (stale.stale) {
+          lastError = e instanceof Error ? e : new Error(String(e));
           if (attempt < retries) {
-            // Reset cached DOM/context state so the next attempt re-resolves fresh handles.
+            // Reset every resolution cache so the next attempt uses fresh DOM,
+            // frame, ref, and execution-context handles. Keep lastSnapshot so
+            // semantic recovery can compare the old and new trees.
             this.rootNodeId = null;
             this.currentFrameContextId = null;
+            this.frameContexts.clear();
+            this.frameExecutionContexts.clear();
+            this.refMap.clear();
             await sleep(delay);
             continue;
           }
@@ -4934,18 +5173,22 @@ export class Page {
 
     // Stale ref recovery: if all selectors were refs and none worked, try matching by role+name
     if (selectorList.every((s) => s.startsWith('ref:')) && this.lastSnapshot) {
+      const oldFingerprints = buildFingerprintMap(this.lastSnapshot.accessibilityTree);
       for (const selector of selectorList) {
         const ref = selector.slice(4);
-        const originalElement = this.lastSnapshot.interactiveElements.find((e) => e.ref === ref);
-        if (!originalElement) continue;
+        const staleFingerprint = oldFingerprints.get(ref);
+        if (!staleFingerprint) continue;
 
-        // Take a fresh snapshot to find matching element
+        // Take a fresh snapshot and recover only when the semantic match is
+        // both strong enough and separated from the next candidate.
         const freshSnapshot = await this.snapshot();
-        const match = freshSnapshot.interactiveElements.find(
-          (e) => e.role === originalElement.role && e.name === originalElement.name
-        );
+        const currentFingerprints = buildFingerprintMap(freshSnapshot.accessibilityTree);
+        const recovery = recoverStaleRef(staleFingerprint, currentFingerprints, 0.75, 0.15);
+        const match = recovery
+          ? freshSnapshot.interactiveElements.find((element) => element.ref === recovery.ref)
+          : undefined;
 
-        if (match) {
+        if (match && recovery) {
           const newBackendNodeId = this.refMap.get(match.ref);
           if (newBackendNodeId) {
             try {
@@ -4955,6 +5198,23 @@ export class Page {
                 { backendNodeIds: [newBackendNodeId] }
               );
               if (pushResult.nodeIds?.[0]) {
+                this._lastStaleRecovery = {
+                  oldRef: ref,
+                  newRef: match.ref,
+                  confidence: recovery.confidence,
+                  ambiguityMargin: 0.15,
+                  oldFingerprint: staleFingerprint,
+                  newFingerprint: currentFingerprints.get(match.ref),
+                  alternatives: [...currentFingerprints.entries()]
+                    .map(([candidateRef, fingerprint]) => ({
+                      ref: candidateRef,
+                      confidence:
+                        Math.round(fingerprintSimilarity(staleFingerprint, fingerprint) * 1000) /
+                        1000,
+                    }))
+                    .sort((a, b) => b.confidence - a.confidence)
+                    .slice(0, 5),
+                };
                 this._lastMatchedSelector = `ref:${match.ref}`;
                 return {
                   nodeId: pushResult.nodeIds[0],
@@ -5231,7 +5491,10 @@ export class Page {
     return { nodeId, backendNodeId };
   }
 
-  private async tryClickAssociatedLabel(objectId: string): Promise<boolean> {
+  private async tryClickAssociatedLabel(
+    objectId: string,
+    dispatch: ActionDispatch
+  ): Promise<boolean> {
     const inputType = await this.readInputType(objectId);
     if (inputType !== 'checkbox' && inputType !== 'radio') {
       return false;
@@ -5244,19 +5507,14 @@ export class Page {
 
     try {
       await this.scrollIntoView(labelNodeId);
-      await this.clickElement(labelNodeId);
+      await this.clickElement(labelNodeId, dispatch);
       return true;
-    } catch {
+    } catch (error) {
+      if (dispatch.hasPotentiallyDispatched) {
+        throw error;
+      }
       return false;
     }
-  }
-
-  private async tryToggleViaLabel(objectId: string, desiredChecked: boolean): Promise<boolean> {
-    if (!(await this.tryClickAssociatedLabel(objectId))) {
-      return false;
-    }
-
-    return (await this.readCheckedState(objectId)) === desiredChecked;
   }
 
   /**
@@ -5410,9 +5668,11 @@ export class Page {
    * Click an element by node ID using Playwright's 3-event sequence:
    * mouseMoved → mousePressed → mouseReleased (sequential).
    * Uses DOM.getContentQuads for accurate coordinates (handles CSS transforms).
-   * Falls back to JS this.click() if CDP mouse dispatch fails.
+   * Falls back to JS this.click() only when coordinate dispatch fails before
+   * an effectful mouse event was accepted. Once mousePressed or mouseReleased
+   * may have reached the page, the error is surfaced as uncertain.
    */
-  private async clickElement(nodeId: number): Promise<void> {
+  private async clickElement(nodeId: number, dispatch: ActionDispatch): Promise<void> {
     // Get objectId for getContentQuads
     const { object } = await this.cdp.send<{ object: { objectId: string } }>('DOM.resolveNode', {
       nodeId,
@@ -5441,45 +5701,62 @@ export class Page {
       y = box.content[1]! + box.height / 2;
     }
 
-    // Sequential mouse events (Playwright pattern)
+    // Sequential mouse events (Playwright pattern). mouseMoved is preparatory;
+    // mousePressed and mouseReleased cross the side-effect boundary.
     try {
-      await this.cdp.send('Input.dispatchMouseEvent', {
-        type: 'mouseMoved',
-        x,
-        y,
-        button: 'none',
-        buttons: 0,
-        modifiers: 0,
-      });
-      await this.cdp.send('Input.dispatchMouseEvent', {
-        type: 'mousePressed',
-        x,
-        y,
-        button: 'left',
-        buttons: 1,
-        clickCount: 1,
-        modifiers: 0,
-      });
-      await this.cdp.send('Input.dispatchMouseEvent', {
-        type: 'mouseReleased',
-        x,
-        y,
-        button: 'left',
-        buttons: 0,
-        clickCount: 1,
-        modifiers: 0,
-      });
-    } catch {
-      // Fallback: JS click if CDP mouse dispatch fails
-      await this.cdp.send('Runtime.callFunctionOn', {
-        objectId: object.objectId,
-        functionDeclaration: 'function() { this.click(); }',
-      });
+      await dispatch.send(
+        () =>
+          this.cdp.send('Input.dispatchMouseEvent', {
+            type: 'mouseMoved',
+            x,
+            y,
+            button: 'none',
+            buttons: 0,
+            modifiers: 0,
+          }),
+        'mouseMoved',
+        { effectful: false }
+      );
+      await dispatch.send(
+        () =>
+          this.cdp.send('Input.dispatchMouseEvent', {
+            type: 'mousePressed',
+            x,
+            y,
+            button: 'left',
+            buttons: 1,
+            clickCount: 1,
+            modifiers: 0,
+          }),
+        'mousePressed'
+      );
+      await dispatch.send(
+        () =>
+          this.cdp.send('Input.dispatchMouseEvent', {
+            type: 'mouseReleased',
+            x,
+            y,
+            button: 'left',
+            buttons: 0,
+            clickCount: 1,
+            modifiers: 0,
+          }),
+        'mouseReleased'
+      );
+    } catch (error) {
+      // JS fallback is valid only before an effectful mouse event. In
+      // particular, never turn a failed mousePressed/mouseReleased into a
+      // second click.
+      if (!dispatch.canRetryAction) throw error;
+      await dispatch.send(
+        () =>
+          this.cdp.send('Runtime.callFunctionOn', {
+            objectId: object.objectId,
+            functionDeclaration: 'function() { this.click(); }',
+          }),
+        'javascriptClick'
+      );
     }
-
-    // Force a round-trip to ensure all synchronous event handlers
-    // triggered by the click have completed before we return
-    await this.cdp.send('Runtime.evaluate', { expression: '0' });
   }
 
   /**
@@ -5495,7 +5772,8 @@ export class Page {
   private async dispatchKeyDefinition(
     def: KeyDefinition,
     modifierBitmask = 0,
-    sessionId?: string
+    sessionId?: string,
+    dispatch?: ActionDispatch
   ): Promise<void> {
     const downParams: Record<string, unknown> = {
       type: def.text !== undefined ? 'keyDown' : 'rawKeyDown',
@@ -5513,86 +5791,121 @@ export class Page {
       downParams['unmodifiedText'] = def.text;
     }
 
-    await this.cdp.send('Input.dispatchKeyEvent', downParams, sessionId);
-    await this.cdp.send(
-      'Input.dispatchKeyEvent',
-      {
-        type: 'keyUp',
-        key: def.key,
-        code: def.code,
-        windowsVirtualKeyCode: def.keyCode,
-        modifiers: modifierBitmask,
-        location: def.location ?? 0,
-      },
-      sessionId
+    const send = dispatch
+      ? <T>(operation: () => Promise<T>, eventName: string) => dispatch.send(operation, eventName)
+      : <T>(operation: () => Promise<T>) => operation();
+
+    await send(() => this.cdp.send('Input.dispatchKeyEvent', downParams, sessionId), 'keyDown');
+    await send(
+      () =>
+        this.cdp.send(
+          'Input.dispatchKeyEvent',
+          {
+            type: 'keyUp',
+            key: def.key,
+            code: def.code,
+            windowsVirtualKeyCode: def.keyCode,
+            modifiers: modifierBitmask,
+            location: def.location ?? 0,
+          },
+          sessionId
+        ),
+      'keyUp'
     );
   }
 
-  private async dispatchKey(key: string, sessionId?: string): Promise<void> {
+  private async dispatchKey(
+    key: string,
+    sessionId?: string,
+    dispatch?: ActionDispatch
+  ): Promise<void> {
     const def = US_KEYBOARD[key];
     if (def) {
-      await this.dispatchKeyDefinition(def, 0, sessionId);
+      await this.dispatchKeyDefinition(def, 0, sessionId, dispatch);
       return;
     }
 
     if (key.length === 1) {
-      await this.cdp.send('Input.insertText', { text: key }, sessionId);
+      if (dispatch) {
+        await dispatch.send(
+          () => this.cdp.send('Input.insertText', { text: key }, sessionId),
+          'insertText'
+        );
+      } else {
+        await this.cdp.send('Input.insertText', { text: key }, sessionId);
+      }
       return;
     }
 
-    await this.dispatchKeyDefinition({ key, code: key, keyCode: 0 }, 0, sessionId);
+    await this.dispatchKeyDefinition({ key, code: key, keyCode: 0 }, 0, sessionId, dispatch);
   }
 
   private async dispatchKeyWithModifiers(
     key: string,
     modifiers: ModifierKey[],
-    sessionId?: string
+    sessionId?: string,
+    dispatch?: ActionDispatch
   ): Promise<void> {
     const mask = computeModifierBitmask(modifiers);
 
     // Press modifier keys down
     for (const mod of modifiers) {
-      await this.cdp.send(
-        'Input.dispatchKeyEvent',
-        {
-          type: 'rawKeyDown',
-          key: mod,
-          code: MODIFIER_CODES[mod],
-          windowsVirtualKeyCode: MODIFIER_KEY_CODES[mod],
-          modifiers: mask,
-          location: 1,
-        },
-        sessionId
-      );
+      const params = {
+        type: 'rawKeyDown',
+        key: mod,
+        code: MODIFIER_CODES[mod],
+        windowsVirtualKeyCode: MODIFIER_KEY_CODES[mod],
+        modifiers: mask,
+        location: 1,
+      };
+      if (dispatch) {
+        await dispatch.send(
+          () => this.cdp.send('Input.dispatchKeyEvent', params, sessionId),
+          'modifierKeyDown',
+          { effectful: false }
+        );
+      } else {
+        await this.cdp.send('Input.dispatchKeyEvent', params, sessionId);
+      }
     }
 
     // Dispatch the main key with modifiers held
     const def = US_KEYBOARD[key];
     if (def) {
-      await this.dispatchKeyDefinition(def, mask, sessionId);
+      await this.dispatchKeyDefinition(def, mask, sessionId, dispatch);
     } else if (key.length === 1) {
       // For single characters with modifiers, use dispatchKeyEvent instead of insertText
       // so the modifiers are included in the event
-      await this.dispatchKeyDefinition({ key, code: key, keyCode: 0, text: key }, mask, sessionId);
+      await this.dispatchKeyDefinition(
+        { key, code: key, keyCode: 0, text: key },
+        mask,
+        sessionId,
+        dispatch
+      );
     } else {
-      await this.dispatchKeyDefinition({ key, code: key, keyCode: 0 }, mask, sessionId);
+      await this.dispatchKeyDefinition({ key, code: key, keyCode: 0 }, mask, sessionId, dispatch);
     }
 
     // Release modifier keys (reverse order)
     for (let i = modifiers.length - 1; i >= 0; i--) {
       const mod = modifiers[i]!;
-      await this.cdp.send(
-        'Input.dispatchKeyEvent',
-        {
-          type: 'keyUp',
-          key: mod,
-          code: MODIFIER_CODES[mod],
-          windowsVirtualKeyCode: MODIFIER_KEY_CODES[mod],
-          modifiers: 0,
-          location: 1,
-        },
-        sessionId
-      );
+      const params = {
+        type: 'keyUp',
+        key: mod,
+        code: MODIFIER_CODES[mod],
+        windowsVirtualKeyCode: MODIFIER_KEY_CODES[mod],
+        modifiers: 0,
+        location: 1,
+      };
+      if (dispatch) {
+        await dispatch.send(
+          () => this.cdp.send('Input.dispatchKeyEvent', params, sessionId),
+          'modifierKeyUp',
+          { effectful: false }
+        );
+      } else {
+        await this.cdp.send('Input.dispatchKeyEvent', params, sessionId);
+      }
     }
   }
 

@@ -56,7 +56,7 @@ interface ConnectOptions {
 
 ## Browser Methods
 
-### page(name?)
+### page(name?, options?)
 
 Get or create a page by name.
 
@@ -66,9 +66,27 @@ const page = await browser.page('main');     // Named page
 const page = await browser.page('checkout'); // Another named page
 ```
 
+`options` can pin selection to `targetId` or `targetUrl`. Explicit target selection is strict by
+default; set `fallbackToBestTarget: true` only when best-effort fallback is intentional. Other
+options include `minViewport` (or `false` to disable validation) and `blockNativePrint`.
+
 If the page doesn't exist, it's created. If it exists, the cached instance is returned.
 
 **Returns:** `Promise<Page>`
+
+### expectNewPage(trigger, options?)
+
+Arm a target listener, run a trigger that opens a tab or popup, and attach to the matching page.
+
+```typescript
+const popup = await browser.expectNewPage(
+  () => page.click('a[target=_blank]'),
+  { openerTargetId: page.targetId, url: '/receipt', timeout: 10000 },
+);
+```
+
+URL and title constraints may be strings or regular expressions; `about:blank` and empty titles
+remain pending when those constraints are supplied.
 
 ### newPage(url?)
 

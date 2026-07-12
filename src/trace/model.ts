@@ -26,6 +26,8 @@ export interface CanonicalTraceEvent {
   summary: string;
   data: Record<string, unknown>;
   actionId?: string;
+  executionId?: string;
+  attempt?: number;
   stepIndex?: number;
   requestId?: string;
   connectionId?: string;

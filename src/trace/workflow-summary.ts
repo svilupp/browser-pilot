@@ -19,6 +19,13 @@ export interface WorkflowStepSummary {
   outcomeEvidence?: string[];
   /** Whether safe to retry */
   retrySafe?: boolean;
+  dispatchState?: string;
+  attempts?: number;
+  actionId?: string;
+  executionId?: string;
+  targetId?: string;
+  targetProvenance?: Record<string, unknown>;
+  receipt?: StepResult['receipt'];
   /** Error if failed */
   error?: string;
   /** Suggestion for next action */
@@ -126,6 +133,13 @@ export function buildWorkflowSummary(result: BatchResult): WorkflowSummary {
       step.outcomeStatus = s.outcomeStatus;
       step.retrySafe = s.retrySafe;
     }
+    if (s.dispatchState) step.dispatchState = s.dispatchState;
+    if (s.attempts !== undefined) step.attempts = s.attempts;
+    if (s.actionId) step.actionId = s.actionId;
+    if (s.executionId) step.executionId = s.executionId;
+    if (s.targetId) step.targetId = s.targetId;
+    if (s.targetProvenance) step.targetProvenance = s.targetProvenance;
+    if (s.receipt) step.receipt = s.receipt;
 
     if (s.matchedConditions && s.matchedConditions.length > 0) {
       step.outcomeEvidence = summarizeConditions(s.matchedConditions);
@@ -197,6 +211,13 @@ export function formatWorkflowSummary(summary: WorkflowSummary): string {
         `  Outcome: ${step.outcomeStatus}${step.retrySafe === false ? ' (unsafe to retry)' : ''}`
       );
     }
+    if (step.dispatchState || step.attempts !== undefined) {
+      lines.push(
+        `  Dispatch: ${step.dispatchState ?? 'unknown'} | Attempts: ${step.attempts ?? 'unknown'}`
+      );
+    }
+    if (step.targetId) lines.push(`  Target: ${step.targetId}`);
+    if (step.actionId) lines.push(`  Action: ${step.actionId}`);
 
     if (step.outcomeEvidence) {
       for (const evidence of step.outcomeEvidence) {

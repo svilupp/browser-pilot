@@ -87,6 +87,19 @@ bp exec -s demo '[
 ]'
 ```
 
+Conditions include `urlMatches`, `elementVisible`, `elementHidden`, `textAppears`, `textChanges`,
+`networkResponse`, `stateSignatureChanges`, `selectedTab`, `fieldValue`, `checkbox`, `switch`,
+`elementEnabled`, `targetCount`, `newTarget`, `urlChanged`, and `fieldChanged`. Text and URL
+conditions can use explicit match modes and scoped selectors or landmarks.
+
+For asynchronous pages, a `waitForReady` action can combine `any`/`all`, `loadingHidden`,
+predicates, and DOM-stability requirements. `waitFor: "networkIdle"` only means transport quiet.
+
+If a derived workflow uses retries, remember that retries stop at the dispatch boundary: a
+pre-dispatch failure may retry the action, while a dispatched or uncertain effect is observed and
+its conditions are re-evaluated instead of blindly repeating input. Use `effect` and `dangerous`
+when the action's retry policy matters.
+
 Review page state after a workflow completes:
 
 ```bash

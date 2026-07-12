@@ -7,13 +7,17 @@
 
 // Actions & Batch Execution
 export {
+  type ActionEffect,
   type ActionType,
+  type AssertionBeforeState,
+  type AssertionScope,
   addBatchToPage,
   BatchExecutor,
   type BatchOptions,
   type BatchResult,
   type CombinatorResult,
   type Condition,
+  captureBeforeState,
   captureStateSignature,
   conditionAll,
   conditionAny,
@@ -22,11 +26,18 @@ export {
   evaluateCondition,
   evaluateOutcome,
   type MatchedCondition,
+  matchText,
+  matchUrl,
   NetworkResponseTracker,
   type OutcomeStatus,
   type RecordOptions,
+  type RetryDecision,
+  type ShouldRetryOptions,
   type Step,
   type StepResult,
+  shouldRetry,
+  type TextMatchMode,
+  type UrlMatchMode,
   type ValidationError,
   type ValidationResult,
   validateSteps,
@@ -62,7 +73,9 @@ export {
 // captureStructureSignature, ...). Page.resolveAll / Page.diagnose are methods on the
 // Page class exported in this block.
 export {
+  ActionDispatchUncertainError,
   type ActionOptions,
+  type ActionReceipt,
   type ActionResult,
   Browser,
   type BrowserOptions,
@@ -76,6 +89,7 @@ export {
   type CustomSelectConfig,
   captureStructureSignature,
   chooseOption,
+  classifyStaleError,
   computeDelta,
   connect,
   createFingerprint,
@@ -92,6 +106,7 @@ export {
   type Dialog,
   type DialogHandler,
   type DialogType,
+  type DispatchState,
   type Download,
   detectOverlay,
   diagnoseElement,
@@ -100,6 +115,7 @@ export {
   type ElementState,
   type EmulationState,
   type ErrorHandler,
+  type ExpectNewPageOptions,
   extractPageState,
   extractReview,
   type FileInput,
@@ -114,6 +130,7 @@ export {
   isDestructiveName,
   type KeyValuePair,
   NavigationError,
+  type NavigationMilestone,
   type NetworkIdleOptions,
   type OverlayInfo,
   Page,
@@ -124,6 +141,8 @@ export {
   type PinRecoveryResult,
   type RankCandidatesOptions,
   type RankedCandidate,
+  type ReadinessDiagnostics,
+  type ReadyCondition,
   type ReviewResult,
   type RichSelectorCandidate,
   rankCandidates,
@@ -133,6 +152,9 @@ export {
   type SemanticFingerprint,
   type SnapshotNode,
   type SnapshotOptions,
+  type StaleErrorClassification,
+  type StaleErrorKind,
+  type StaleRecoveryDiagnostics,
   type StructureSignatureOptions,
   type SubmitAndVerifyOptions,
   type SubmitAndVerifyResult,
@@ -142,6 +164,10 @@ export {
   submitAndVerify,
   type TableData,
   type TargetFingerprint,
+  type TargetNotFoundDetails,
+  TargetNotFoundError,
+  type TargetProvenance,
+  type TargetSummary,
   TimeoutError,
   type TypeOptions,
   type UploadConfig,
@@ -151,6 +177,7 @@ export {
   uploadFiles,
   type ViewportOptions,
   type WaitForOptions,
+  type WaitForReadyOptions,
 } from './browser/index.ts';
 // CDP Client (for advanced usage)
 export {
@@ -174,6 +201,8 @@ export {
   type ResourceType,
   type RouteOptions,
 } from './network/index.ts';
+// Build provenance (safe to inspect from library and CLI consumers).
+export { type BuildProvenance, getBuildProvenance } from './provenance.ts';
 // Providers
 export {
   BrowserBaseProvider,
@@ -198,6 +227,20 @@ export {
   resolveBrowserEndpoint,
   resolveChromeUserDataDirs,
 } from './providers/index.ts';
+// Recording/evidence artifacts.
+export {
+  assertRecordingManifestIntegrity,
+  canonicalizeRecordingArtifact,
+  createRecordingManifest,
+  type RecordingAction,
+  type RecordingExecution,
+  type RecordingFrame,
+  type RecordingIntegrityOptions,
+  type RecordingIntegrityResult,
+  type RecordingManifest,
+  type RecordingScreenshot,
+  validateRecordingManifest,
+} from './recording/index.ts';
 // Storage (Cookies)
 export type {
   ClearCookiesOptions,
@@ -229,4 +272,5 @@ export {
   waitForElement,
   waitForNavigation,
   waitForNetworkIdle,
+  waitForReady,
 } from './wait/index.ts';

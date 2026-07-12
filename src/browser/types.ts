@@ -3,6 +3,85 @@
  */
 
 import type { WaitState } from '../wait/index.ts';
+import type { StaleRecoveryDiagnostics } from './stale-errors.ts';
+
+export type NavigationMilestone = 'commit' | 'domcontentloaded' | 'load' | 'networkidle';
+
+export type ReadyCondition =
+  | string
+  | {
+      selector?: string | string[];
+      url?: string;
+      predicate?: string | (() => unknown);
+    };
+
+export interface WaitForReadyOptions extends ActionOptions {
+  /** At least one visible selector/URL/predicate must match. */
+  any?: ReadyCondition[];
+  /** Every supplied selector/URL/predicate must match. */
+  all?: ReadyCondition[];
+  /** Selectors that must be hidden or absent before the page is ready. */
+  loadingHidden?: string | string[];
+  /** URL substring that must match. */
+  url?: string;
+  /** Predicate expression/function that must return truthy. */
+  predicate?: string | (() => unknown);
+  /** Require this long without DOM mutations before reporting ready. */
+  stableForMs?: number;
+  /** Explicit alias for the DOM quiet period. */
+  domQuietForMs?: number;
+  /** Polling interval in milliseconds. */
+  pollInterval?: number;
+  /** Internal execution context for frame-local readiness checks. */
+  contextId?: number;
+}
+
+export interface ReadinessDiagnostics {
+  ready: boolean;
+  waitedMs: number;
+  lastMilestone?: NavigationMilestone;
+  unmetConditions: string[];
+  checkedAt: string;
+}
+
+export type DispatchState = 'not_dispatched' | 'dispatched' | 'uncertain';
+
+/** Evidence about whether a logical action crossed the browser side-effect boundary. */
+export interface ActionReceipt {
+  dispatchState: DispatchState;
+  retrySafe: boolean;
+  inputEventsSent: string[];
+  navigationObserved?: boolean;
+  staleRecovery?: StaleRecoveryDiagnostics;
+  /** Execution metadata added by BatchExecutor when the action is recorded. */
+  executionId?: string;
+  actionId?: string;
+  attempt?: number;
+  targetId?: string;
+}
+
+export interface TargetProvenance {
+  targetId: string;
+  source?: 'selected' | 'new_page' | 'popup' | 'session';
+  type?: string;
+  openerTargetId?: string;
+  createdAt?: string;
+  url?: string;
+  title?: string;
+}
+
+export interface ExpectNewPageOptions {
+  /** Target that must have opened the new page. */
+  openerTargetId?: string;
+  /** Allowed target type(s), defaulting to `page`. */
+  type?: string | string[];
+  /** URL substring or regular expression. about:blank remains pending. */
+  url?: string | RegExp;
+  /** Exact title string or regular expression. Empty titles remain pending. */
+  title?: string | RegExp;
+  /** Maximum time to wait for creation, navigation, and attachment. */
+  timeout?: number;
+}
 
 // Action options
 export interface ActionOptions {
@@ -10,6 +89,8 @@ export interface ActionOptions {
   timeout?: number;
   /** Don't throw on failure, return false instead */
   optional?: boolean;
+  /** Navigation lifecycle milestone to await when this action navigates. */
+  waitUntil?: NavigationMilestone;
 }
 
 export interface FillOptions extends ActionOptions {
@@ -27,7 +108,10 @@ export interface TypeOptions extends ActionOptions {
 }
 
 export interface SubmitOptions extends ActionOptions {
-  /** How to submit: 'enter' | 'click' | 'enter+click' */
+  /**
+   * How to submit: 'enter' | 'click' | 'enter+click'. The combined mode
+   * selects one dispatch (the trusted click path) and never sends both.
+   */
   method?: 'enter' | 'click' | 'enter+click';
   /**
    * Wait for navigation after submit:
@@ -275,6 +359,78 @@ export class NavigationError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'NavigationError';
+  }
+}
+
+/** Raised when an effectful browser dispatch may have reached Chrome. */
+export class ActionDispatchUncertainError extends Error {
+  readonly receipt: ActionReceipt;
+
+  constructor(receipt: ActionReceipt, message = 'Browser action dispatch is uncertain.') {
+    super(`${message} Verify the postcondition before another action.`);
+    this.name = 'ActionDispatchUncertainError';
+    this.receipt = receipt;
+  }
+}
+
+export interface TargetSummary {
+  targetId: string;
+  url: string;
+  title?: string;
+}
+
+export interface TargetNotFoundDetails {
+  targetId?: string;
+  targetUrl?: string;
+  availableTargets?: TargetSummary[];
+  reason?: string;
+}
+
+/**
+ * Raised when an explicitly requested browser target cannot be selected.
+ *
+ * Target selection is intentionally fail-closed: attaching to a different tab
+ * can be a much more dangerous failure than not attaching at all. The
+ * available-target list is metadata only and deliberately excludes page
+ * contents.
+ */
+export class TargetNotFoundError extends Error {
+  readonly targetId?: string;
+  readonly targetUrl?: string;
+  readonly availableTargets: TargetSummary[];
+
+  constructor(details: TargetNotFoundDetails = {}) {
+    const constraints: string[] = [];
+    if (details.targetId !== undefined)
+      constraints.push(`targetId=${JSON.stringify(details.targetId)}`);
+    if (details.targetUrl !== undefined)
+      constraints.push(`targetUrl=${JSON.stringify(details.targetUrl)}`);
+    const requested = constraints.length > 0 ? constraints.join(', ') : 'explicit target';
+    const available = (details.availableTargets ?? []).map((target) => ({
+      targetId: target.targetId,
+      // Query strings and fragments may contain credentials or page state.
+      url: redactTargetUrl(target.url),
+    }));
+    const suffix = details.reason ? ` ${details.reason}` : '';
+    super(
+      `Could not find requested ${requested}.${suffix} ` +
+        `Available page targets: ${available.length > 0 ? JSON.stringify(available) : 'none'}.`
+    );
+    this.name = 'TargetNotFoundError';
+    this.targetId = details.targetId;
+    this.targetUrl = details.targetUrl;
+    this.availableTargets = available;
+  }
+}
+
+function redactTargetUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    parsed.search = '';
+    parsed.hash = '';
+    return parsed.toString();
+  } catch {
+    return url.split(/[?#]/, 1)[0] ?? url;
   }
 }
 

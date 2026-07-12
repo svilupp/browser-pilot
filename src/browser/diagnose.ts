@@ -2,6 +2,7 @@
  * Element diagnostics for debugging selector issues
  */
 
+import { CHECK_HIT_TARGET, type HitElement, type PointerEventsDiagnosis } from './actionability.ts';
 import { fuzzyMatchElements } from './fuzzy-match.ts';
 import type { Page } from './page.ts';
 import { generateSelectorStrings } from './selector-generator.ts';
@@ -32,11 +33,50 @@ export interface DiagnoseExactResult {
     readonly: boolean;
     covered: boolean;
     coveringElement?: CoveringElement;
+    actualHitElement?: HitElement;
+    pointerEvents?: PointerEventsDiagnosis;
     clickable: boolean;
     reason?: string;
   };
   attributes: Record<string, string>;
   suggestedSelectors: string[];
+}
+
+async function inspectHitTarget(
+  cdp: Page['cdpClient'],
+  nodeId: number
+): Promise<{
+  actionable: boolean;
+  hitElement?: HitElement;
+  pointerEvents?: PointerEventsDiagnosis;
+}> {
+  try {
+    const resolved = await cdp.send<{ object?: { objectId?: string } }>('DOM.resolveNode', {
+      nodeId,
+    });
+    if (!resolved.object?.objectId) return { actionable: false };
+    const result = await cdp.send<{
+      result: {
+        value?: {
+          actionable?: boolean;
+          hitElement?: HitElement;
+          pointerEvents?: PointerEventsDiagnosis;
+        };
+      };
+    }>('Runtime.callFunctionOn', {
+      objectId: resolved.object.objectId,
+      functionDeclaration: CHECK_HIT_TARGET,
+      arguments: [{ value: undefined }, { value: undefined }],
+      returnByValue: true,
+    });
+    return {
+      actionable: result.result.value?.actionable === true,
+      hitElement: result.result.value?.hitElement,
+      pointerEvents: result.result.value?.pointerEvents,
+    };
+  } catch {
+    return { actionable: false };
+  }
 }
 
 /**
@@ -227,6 +267,7 @@ export async function diagnoseElement(
       };
 
       const covering = await detectCoveringElement(cdp, match.nodeId);
+      const hit = await inspectHitTarget(cdp, match.nodeId);
       const attributes = await getElementAttributes(page, match.nodeId);
 
       // Find element info from snapshot
@@ -245,9 +286,10 @@ export async function diagnoseElement(
       // Determine clickability
       const disabled = attributes['disabled'] !== undefined || interactiveEl?.disabled === true;
       const readonly = attributes['readonly'] !== undefined;
-      const covered = covering !== null;
+      const covered =
+        covering !== null || (!hit.actionable && hit.pointerEvents?.target !== 'none');
 
-      const clickable = visibility.visible && !disabled && !covered;
+      const clickable = visibility.visible && !disabled && !covered && hit.actionable;
       let reason: string | undefined;
 
       if (!clickable) {
@@ -255,6 +297,10 @@ export async function diagnoseElement(
         if (!visibility.visible) reasons.push('not visible');
         if (disabled) reasons.push('disabled');
         if (covered) reasons.push('covered by another element');
+        if (hit.pointerEvents?.target === 'none') reasons.push('pointer-events:none');
+        if (!hit.actionable && !covered && hit.pointerEvents?.target !== 'none') {
+          reasons.push('actual hit target does not match');
+        }
         reason = reasons.join(', ');
       }
 
@@ -285,6 +331,8 @@ export async function diagnoseElement(
           readonly,
           covered,
           coveringElement: covering ?? undefined,
+          actualHitElement: hit.hitElement,
+          pointerEvents: hit.pointerEvents,
           clickable,
           reason,
         },

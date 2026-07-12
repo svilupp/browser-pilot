@@ -278,6 +278,29 @@ await page.waitFor('.removed', { state: 'detached' });
 - `state?: 'visible' | 'hidden' | 'attached' | 'detached'` (default: 'visible')
 - `timeout?: number`
 - `optional?: boolean`
+- `pollInterval?: number`
+
+### waitForReady(options?)
+
+Wait for semantic readiness instead of treating network quiet as proof that a page is usable.
+
+```typescript
+await page.waitForReady({
+  any: ['main', { selector: '#results' }],
+  loadingHidden: '.spinner',
+  stableForMs: 250,
+});
+```
+
+`any` requires at least one condition; `all` requires every condition. Conditions may be a
+selector, URL, or predicate. `url`, `predicate`, `domQuietForMs`, and `pollInterval` are also
+available. Read `page.getReadinessDiagnostics()` after the wait to inspect unmet conditions and
+the last navigation milestone.
+
+### getReadinessDiagnostics()
+
+Return the latest readiness evidence, including `ready`, `waitedMs`, `lastMilestone`, and any
+unmet conditions. It returns `undefined` before the first `waitForReady` call.
 
 ### waitForNavigation(options?)
 
@@ -286,6 +309,7 @@ Wait for page navigation to complete.
 ```typescript
 await page.waitForNavigation();
 await page.waitForNavigation({ timeout: 60000 });
+await page.waitForNavigation({ waitUntil: 'domcontentloaded' });
 ```
 
 ### waitForNetworkIdle(options?)
@@ -551,6 +575,12 @@ console.log(result.steps[0]?.retrySafe);       // false (dangerous step)
 ```
 
 See [Batch Actions Guide](../guides/batch-actions.md) for details.
+
+Retries are bounded by `retry`/`retryDelay`, but they respect the action's dispatch boundary. A
+step that has already dispatched an effectful input is not blindly re-dispatched after an
+ambiguous result; post-dispatch attempts observe the page and evaluate conditions. Use
+`effect: 'observe' | 'idempotent' | 'at_most_once'` (and `dangerous` for irreversible actions) to
+make the intended retry policy explicit.
 
 ## Emulation
 

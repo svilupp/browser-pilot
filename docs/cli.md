@@ -34,6 +34,7 @@ Global options:
 - `bp review`: inspect structured business state after actions
 - `bp diagnose`: debug missing selectors or targeting failures
 - `bp exec` / `bp run`: act in the browser
+- `bp use-target`: explicitly switch a session to a known tab
 - `bp trace`: inspect time-based behavior
 
 ## Inspect
@@ -127,6 +128,17 @@ Outcome conditions available on any action step:
 
 - `expectAny`, `expectAll`, `failIf` — verify the action's effect
 - `dangerous` — prevent auto-retry on ambiguous outcomes
+
+Supported condition kinds are `urlMatches`, `elementVisible`, `elementHidden`, `textAppears`,
+`textChanges`, `networkResponse`, `stateSignatureChanges`, `selectedTab`, `fieldValue`,
+`checkbox`, `switch`, `elementEnabled`, `targetCount`, `newTarget`, `urlChanged`, and
+`fieldChanged`. Text and URL conditions support explicit match modes and scoped selectors or
+landmarks.
+
+Retries respect the dispatch boundary. A pre-dispatch failure may retry the input; after a
+dispatch or uncertain result, retry attempts observe the page and re-evaluate conditions rather
+than blindly sending the same input again. Set `effect` to `observe`, `idempotent`, or
+`at_most_once` when you need an explicit policy.
 
 Example:
 

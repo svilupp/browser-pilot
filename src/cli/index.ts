@@ -26,6 +26,7 @@ import { snapshotCommand } from './commands/snapshot.ts';
 import { targetsCommand } from './commands/targets.ts';
 import { textCommand } from './commands/text.ts';
 import { traceCommand } from './commands/trace.ts';
+import { useTargetCommand } from './commands/use-target.ts';
 import { getCliVersion } from './version.ts';
 
 function buildRootHelp(): string {
@@ -257,6 +258,10 @@ async function main(): Promise<void> {
 
       case 'targets':
         await targetsCommand(remaining, options);
+        break;
+
+      case 'use-target':
+        await useTargetCommand(remaining, options);
         break;
 
       case 'snapshot':

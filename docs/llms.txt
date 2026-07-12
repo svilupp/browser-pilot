@@ -31,7 +31,6 @@ Inspect and act:
 
 ```bash
 bp exec -s dev '{"action":"goto","url":"https://example.com"}'
-bp exec -s dev '{"action":"goto","url":"https://example.com"}'
 bp snapshot -i -s dev
 bp text -s dev --selector main
 bp review -s dev --json
@@ -95,7 +94,13 @@ Any action step can verify its effect with conditions:
 - `failIf`: failure if any matches (checked first)
 - `dangerous`: never auto-retry on ambiguous outcome
 
-Condition kinds: `urlMatches`, `elementVisible`, `elementHidden`, `textAppears`, `textChanges`, `networkResponse`, `stateSignatureChanges`.
+Condition kinds: `urlMatches`, `elementVisible`, `elementHidden`, `textAppears`, `textChanges`,
+`networkResponse`, `stateSignatureChanges`, `selectedTab`, `fieldValue`, `checkbox`, `switch`,
+`elementEnabled`, `targetCount`, `newTarget`, `urlChanged`, and `fieldChanged`.
+
+Retries respect the dispatch boundary: pre-dispatch failures may retry the action, while
+dispatched or uncertain effects are observed and conditions re-evaluated instead of blindly
+repeating input. Use `effect` and `dangerous` when the retry policy matters.
 
 Example:
 

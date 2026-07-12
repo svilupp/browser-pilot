@@ -209,10 +209,6 @@ Switch context into an iframe with `switchFrame`, then `switchToMain` to return:
 
 Cross-origin (out-of-process) iframes can also be entered. Inside a cross-origin frame the supported subset is `click`, `fill`, `type`, `focus`, `press`, `shortcut`, `text`, `waitFor`, and `evaluate`; other in-frame actions (`select`, `check`, `submit`, `hover`, `scroll`, `snapshot`, `forms`, ...) hard-fail with a clear error and need `switchToMain` first. Cross-origin support requires Chrome site isolation (`--site-per-process`), and a same-origin iframe nested inside a cross-origin frame (e.g. full Stripe Elements) is not yet supported.
 
-## Background tabs
-
-By default a `Page` brings its tab to the foreground on init so background-tab rendering throttling doesn't stall actions, and it re-foregrounds once if an element measures 0x0 (a common symptom of a throttled background tab). Constructing a `Page` directly, you can opt out with `PageInitOptions.bringToFront: false`.
-
 ## Guides
 
 - [CLI guide](./docs/cli.md)

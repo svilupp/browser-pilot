@@ -149,7 +149,12 @@ console.log(result.steps);           // individual results
 { action: 'wait', selector: '.spinner', waitFor: 'hidden' }
 { action: 'wait', waitFor: 'navigation' }
 { action: 'wait', waitFor: 'networkIdle' }
+{ action: 'waitForReady', any: ['main'], loadingHidden: '.spinner', stableForMs: 250 }
 ```
+
+`waitForReady` combines selector/URL/predicate checks with optional loading-hidden and DOM
+stability requirements. `networkIdle` only reports transport quiet; it does not prove that a
+hydrated application has finished rendering.
 
 ### Content Extraction
 
@@ -204,6 +209,11 @@ interface StepResult {
   outcomeStatus?: OutcomeStatus;      // 'success' | 'failed' | 'ambiguous' | 'unsafe_to_retry'
   matchedConditions?: MatchedCondition[];  // Detailed condition results
   retrySafe?: boolean;                // Whether safe to auto-retry
+  effect?: 'observe' | 'idempotent' | 'at_most_once';
+  receipt?: { dispatchState: 'not_dispatched' | 'dispatched' | 'uncertain'; retrySafe: boolean; inputEventsSent: string[] };
+  dispatchState?: 'not_dispatched' | 'dispatched' | 'uncertain';
+  attempts?: number;
+  retryDecisionReason?: string;
 }
 
 type FailureReason =
@@ -327,7 +337,10 @@ const result = await page.batch([
 // result.success is false if any assertion fails
 ```
 
-Available assertions: `assertVisible`, `assertExists`, `assertText`, `assertUrl`, `assertValue`.
+Available page-state assertions include `assertVisible`, `assertExists`, `assertText`,
+`assertUrl`, and `assertValue`. Trace-backed assertions (`assertNoConsoleErrors`,
+`assertTextChanged`, `assertPermission`, and `assertMediaTrackLive`) are also available, as are
+the `review` and `delta` read actions.
 
 ## Outcome Conditions
 
@@ -367,7 +380,16 @@ const result = await page.batch([
 | `textAppears` | `text: string`, optional `selector` | Text substring found |
 | `textChanges` | optional `to`, optional `selector` | Text content changed |
 | `networkResponse` | `urlPattern: string`, optional `status` | HTTP response seen |
-| `stateSignatureChanges` | (none) | Page state fingerprint changed |
+| `stateSignatureChanges` | optional `mode` | Page state fingerprint changed |
+| `selectedTab` | optional `selector`, `name`, `landmark` | Selected tab matches |
+| `fieldValue` | `selector`, `value` | Field has the expected value |
+| `checkbox` | `selector`, `checked` | Checkbox state matches |
+| `switch` | `selector`, `checked` | Switch state matches |
+| `elementEnabled` | `selector`, optional `enabled` | Control enabled/disabled state matches |
+| `targetCount` | `count`, optional `type` | Number of matching browser targets |
+| `newTarget` | optional target/opener/url/type | A new browser target appeared |
+| `urlChanged` | optional `from`, `mode` | URL changed from the prior state |
+| `fieldChanged` | `selector`, optional `from`, `to` | Field value changed |
 
 ### Evaluation Order
 
@@ -420,7 +442,11 @@ const result = await page.batch([
 
 ## Retry
 
-Any step can include `retry` and `retryDelay` to handle flaky async content:
+Any step can include `retry` and `retryDelay` to handle flaky async content. Retries respect the
+dispatch boundary: pre-dispatch failures may retry the action, while dispatched or uncertain
+effects are observed and their conditions re-evaluated instead of blindly re-dispatching input.
+Use `effect: 'observe' | 'idempotent' | 'at_most_once'` and `dangerous: true` to make the policy
+explicit:
 
 ```typescript
 const result = await page.batch([

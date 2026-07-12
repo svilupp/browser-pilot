@@ -70,6 +70,12 @@ export {
   type StructureSignatureOptions,
 } from './signature.ts';
 export {
+  classifyStaleError,
+  type StaleErrorClassification,
+  type StaleErrorKind,
+  type StaleRecoveryDiagnostics,
+} from './stale-errors.ts';
+export {
   createTargetFingerprint,
   type PinRecoveryResult,
   recoverPinnedTarget,

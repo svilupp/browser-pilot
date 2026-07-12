@@ -178,6 +178,14 @@ function createMockPage(
       return lastActionTargetMetadata;
     },
 
+    getLastActionReceipt() {
+      return {
+        dispatchState: 'not_dispatched' as const,
+        retrySafe: true,
+        inputEventsSent: [],
+      };
+    },
+
     resetLastActionPosition() {
       lastActionCoordinates = null;
       lastActionBoundingBox = null;

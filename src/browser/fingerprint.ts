@@ -199,7 +199,8 @@ export function buildFingerprintMap(nodes: SnapshotNode[]): Map<string, Semantic
 export function recoverStaleRef(
   staleFingerprint: SemanticFingerprint,
   currentFingerprints: Map<string, SemanticFingerprint>,
-  threshold = 0.7
+  threshold = 0.7,
+  ambiguityMargin = 0.15
 ): { ref: string; confidence: number } | null {
   let bestRef: string | null = null;
   let bestScore = 0;
@@ -219,7 +220,7 @@ export function recoverStaleRef(
   if (!bestRef || bestScore < threshold) return null;
 
   // Ambiguity check: if second best is too close, don't guess
-  if (secondBestScore > 0 && bestScore - secondBestScore < 0.15) return null;
+  if (secondBestScore > 0 && bestScore - secondBestScore < ambiguityMargin) return null;
 
   return { ref: bestRef, confidence: bestScore };
 }

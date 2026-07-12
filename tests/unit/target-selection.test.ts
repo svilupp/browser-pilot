@@ -3,6 +3,8 @@
  */
 
 import { describe, expect, test } from 'bun:test';
+import type { Browser } from '../../src/browser/browser.ts';
+import { TargetNotFoundError } from '../../src/browser/types.ts';
 import type { TargetInfo } from '../../src/cdp/protocol.ts';
 
 type CDPCall = { method: string; params?: Record<string, unknown> };
@@ -117,9 +119,6 @@ function makeTarget(overrides: Partial<TargetInfo> & { targetId: string }): Targ
   };
 }
 
-// biome-ignore lint/suspicious/noExplicitAny: test helper bypasses private constructor
-type AnyBrowser = any;
-
 async function createBrowserWithTargets(
   targets: TargetInfo[],
   evalResult?: { w: number; h: number }
@@ -140,7 +139,16 @@ async function createBrowserWithTargets(
   }
 
   // Bypass private constructor for testing
-  const browser: AnyBrowser = Object.create(Browser.prototype);
+  type BrowserHarness = Pick<Browser, 'page'> & {
+    cdp: ReturnType<typeof createMockCDPClient>;
+    pages: Map<string, unknown>;
+    providerSession: {
+      wsUrl: string;
+      metadata: Record<string, unknown>;
+      close: () => Promise<void>;
+    };
+  };
+  const browser = Object.create(Browser.prototype) as BrowserHarness;
   browser.cdp = cdp;
   browser.pages = new Map();
   browser.providerSession = {
@@ -250,16 +258,16 @@ describe('Target Selection', () => {
     expect(attachCall?.params?.['targetId']).toBe('app');
   });
 
-  test('falls back to all targets when targetUrl matches nothing', async () => {
+  test('throws when targetUrl matches nothing', async () => {
     const targets = [
       makeTarget({ targetId: 'app', url: 'http://localhost:3000/login', title: 'Login' }),
     ];
 
     const { browser, cdp } = await createBrowserWithTargets(targets);
-    await browser.page(undefined, { targetUrl: 'nonexistent.com' });
-
-    const attachCall = cdp.findCall('Target.attachToTarget');
-    expect(attachCall?.params?.['targetId']).toBe('app');
+    await expect(browser.page(undefined, { targetUrl: 'nonexistent.com' })).rejects.toBeInstanceOf(
+      TargetNotFoundError
+    );
+    expect(cdp.findCall('Target.attachToTarget')).toBeUndefined();
   });
 
   test('uses explicit targetId when provided and valid', async () => {
@@ -275,14 +283,38 @@ describe('Target Selection', () => {
     expect(attachCall?.params?.['targetId']).toBe('second');
   });
 
-  test('falls back when explicit targetId no longer exists', async () => {
+  test('throws when explicit targetId no longer exists', async () => {
     const targets = [makeTarget({ targetId: 'only', url: 'http://example.com', title: 'Page' })];
 
     const { browser, cdp } = await createBrowserWithTargets(targets);
-    await browser.page(undefined, { targetId: 'gone-target' });
+    await expect(browser.page(undefined, { targetId: 'gone-target' })).rejects.toBeInstanceOf(
+      TargetNotFoundError
+    );
+    expect(cdp.findCall('Target.attachToTarget')).toBeUndefined();
+  });
+
+  test('allows an explicit compatibility fallback only when requested', async () => {
+    const targets = [makeTarget({ targetId: 'only', url: 'http://example.com', title: 'Page' })];
+
+    const { browser, cdp } = await createBrowserWithTargets(targets);
+    await browser.page(undefined, { targetId: 'gone-target', fallbackToBestTarget: true });
 
     const attachCall = cdp.findCall('Target.attachToTarget');
     expect(attachCall?.params?.['targetId']).toBe('only');
+  });
+
+  test('does not return a cached page for mismatched explicit constraints', async () => {
+    const targets = [
+      makeTarget({ targetId: 'first', url: 'http://example.com/first', title: 'First' }),
+      makeTarget({ targetId: 'second', url: 'http://example.com/second', title: 'Second' }),
+    ];
+
+    const { browser } = await createBrowserWithTargets(targets);
+    await browser.page(undefined, { targetId: 'first' });
+
+    await expect(browser.page(undefined, { targetId: 'second' })).rejects.toBeInstanceOf(
+      TargetNotFoundError
+    );
   });
 });
 

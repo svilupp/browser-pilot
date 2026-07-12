@@ -5,7 +5,7 @@
  * from AI agents with actionable, specific feedback.
  */
 
-import type { ActionType } from './types.ts';
+import type { ActionEffect, ActionType } from './types.ts';
 
 // --- Types ---
 
@@ -124,7 +124,14 @@ const PROPERTY_ALIASES: Record<string, string> = {
 
 // --- Action rules ---
 
-type FieldType = 'string' | 'string|string[]' | 'number' | 'boolean' | 'boolean|auto' | 'object';
+type FieldType =
+  | 'string'
+  | 'string|string[]'
+  | 'number'
+  | 'boolean'
+  | 'boolean|auto'
+  | 'object'
+  | 'array';
 
 interface FieldRule {
   type: FieldType;
@@ -139,12 +146,15 @@ interface ActionRule {
 const ACTION_RULES: Record<ActionType, ActionRule> = {
   goto: {
     required: { url: { type: 'string' } },
-    optional: {},
+    optional: {
+      waitUntil: { type: 'string', enum: ['commit', 'domcontentloaded', 'load', 'networkidle'] },
+    },
   },
   click: {
     required: { selector: { type: 'string|string[]' } },
     optional: {
       waitForNavigation: { type: 'boolean|auto' },
+      waitUntil: { type: 'string', enum: ['commit', 'domcontentloaded', 'load', 'networkidle'] },
     },
   },
   fill: {
@@ -183,6 +193,7 @@ const ACTION_RULES: Record<ActionType, ActionRule> = {
     optional: {
       method: { type: 'string', enum: ['enter', 'click', 'enter+click'] },
       waitForNavigation: { type: 'boolean|auto' },
+      waitUntil: { type: 'string', enum: ['commit', 'domcontentloaded', 'load', 'networkidle'] },
     },
   },
   press: {
@@ -219,8 +230,22 @@ const ACTION_RULES: Record<ActionType, ActionRule> = {
       selector: { type: 'string|string[]' },
       waitFor: {
         type: 'string',
-        enum: ['visible', 'hidden', 'attached', 'detached', 'navigation', 'networkIdle'],
+        enum: ['visible', 'hidden', 'attached', 'detached', 'navigation', 'networkIdle', 'ready'],
       },
+      waitUntil: { type: 'string', enum: ['commit', 'domcontentloaded', 'load', 'networkidle'] },
+    },
+  },
+  waitForReady: {
+    required: {},
+    optional: {
+      selector: { type: 'string|string[]' },
+      any: { type: 'array' },
+      all: { type: 'array' },
+      loadingHidden: { type: 'string|string[]' },
+      predicate: { type: 'string' },
+      stableForMs: { type: 'number' },
+      domQuietForMs: { type: 'number' },
+      pollInterval: { type: 'number' },
     },
   },
   snapshot: {
@@ -283,6 +308,9 @@ const ACTION_RULES: Record<ActionType, ActionRule> = {
       selector: { type: 'string|string[]' },
       expect: { type: 'string' },
       value: { type: 'string' },
+      textMode: { type: 'string', enum: ['exact', 'contains', 'regex'] },
+      landmark: { type: 'string' },
+      scope: { type: 'object' },
     },
   },
   assertUrl: {
@@ -290,6 +318,7 @@ const ACTION_RULES: Record<ActionType, ActionRule> = {
     optional: {
       expect: { type: 'string' },
       url: { type: 'string' },
+      urlMode: { type: 'string', enum: ['exact', 'origin_path', 'glob', 'contains'] },
     },
   },
   assertValue: {
@@ -297,6 +326,8 @@ const ACTION_RULES: Record<ActionType, ActionRule> = {
     optional: {
       expect: { type: 'string' },
       value: { type: 'string' },
+      landmark: { type: 'string' },
+      scope: { type: 'object' },
     },
   },
   waitForWsMessage: {
@@ -316,6 +347,9 @@ const ACTION_RULES: Record<ActionType, ActionRule> = {
     optional: {
       selector: { type: 'string|string[]' },
       from: { type: 'string' },
+      textMode: { type: 'string', enum: ['exact', 'contains', 'regex'] },
+      landmark: { type: 'string' },
+      scope: { type: 'object' },
     },
   },
   assertPermission: {
@@ -377,6 +411,7 @@ const KNOWN_STEP_FIELDS = new Set([
   'blur',
   'delay',
   'waitForNavigation',
+  'waitUntil',
   'trigger',
   'option',
   'match',
@@ -401,7 +436,24 @@ const KNOWN_STEP_FIELDS = new Set([
   'expectAll',
   'failIf',
   'dangerous',
+  'effect',
+  'anchor',
   'files',
+  'any',
+  'all',
+  'loadingHidden',
+  'predicate',
+  'stableForMs',
+  'domQuietForMs',
+  'pollInterval',
+  'urlMode',
+  'textMode',
+  'landmark',
+  'scope',
+  'checked',
+  'enabled',
+  'targetCount',
+  'transition',
 ]);
 
 // --- Action resolution ---
@@ -494,6 +546,9 @@ function checkFieldType(value: unknown, rule: FieldRule): string | null {
       if (!value || typeof value !== 'object' || Array.isArray(value)) {
         return `expected object, got ${Array.isArray(value) ? 'array' : typeof value}`;
       }
+      return null;
+    case 'array':
+      if (!Array.isArray(value)) return `expected array, got ${typeof value}`;
       return null;
     default: {
       const _exhaustive: never = rule.type;
@@ -673,6 +728,46 @@ export function validateSteps(steps: unknown[]): ValidationResult {
         });
       }
     }
+    if ('effect' in obj && obj['effect'] !== undefined) {
+      const validEffects: ActionEffect[] = ['observe', 'idempotent', 'at_most_once'];
+      if (
+        typeof obj['effect'] !== 'string' ||
+        !validEffects.includes(obj['effect'] as ActionEffect)
+      ) {
+        errors.push({
+          stepIndex: i,
+          field: 'effect',
+          message: `"effect" must be one of: ${validEffects.join(', ')}.`,
+        });
+      }
+    }
+    if (
+      'anchor' in obj &&
+      obj['anchor'] !== undefined &&
+      (typeof obj['anchor'] !== 'string' || obj['anchor'].trim() === '')
+    ) {
+      errors.push({
+        stepIndex: i,
+        field: 'anchor',
+        message: '"anchor" must be a non-empty string when provided.',
+      });
+    }
+    for (const [field, allowed] of [
+      ['urlMode', ['exact', 'origin_path', 'glob', 'contains']],
+      ['textMode', ['exact', 'contains', 'regex']],
+    ] as const) {
+      if (
+        field in obj &&
+        obj[field] !== undefined &&
+        !(allowed as readonly string[]).includes(String(obj[field]))
+      ) {
+        errors.push({
+          stepIndex: i,
+          field,
+          message: `"${field}" must be one of: ${(allowed as readonly string[]).join(', ')}.`,
+        });
+      }
+    }
     for (const condField of ['expectAny', 'expectAll', 'failIf'] as const) {
       if (condField in obj && obj[condField] !== undefined) {
         if (!Array.isArray(obj[condField])) {
@@ -709,6 +804,15 @@ export function validateSteps(steps: unknown[]): ValidationResult {
                 'textChanges',
                 'networkResponse',
                 'stateSignatureChanges',
+                'selectedTab',
+                'fieldValue',
+                'checkbox',
+                'switch',
+                'elementEnabled',
+                'targetCount',
+                'newTarget',
+                'urlChanged',
+                'fieldChanged',
               ];
               if (!validKinds.includes(condObj['kind'])) {
                 errors.push({

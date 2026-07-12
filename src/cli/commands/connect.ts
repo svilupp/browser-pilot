@@ -6,6 +6,7 @@
  */
 
 import { type BrowserOptions, connect } from '../../index.ts';
+import { getBuildProvenance } from '../../runtime/provenance.ts';
 import { formatBrowserDiscoveryError, resolveCLIEndpoint } from '../browser-endpoint.ts';
 import { spawnDaemon, waitForDaemonReady } from '../daemon-spawn.ts';
 import { output } from '../index.ts';
@@ -323,7 +324,7 @@ export async function connectCommand(
     ? await browser.newPage(pageUrl ?? 'about:blank')
     : await browser.page(
         undefined,
-        options.targetUrl ? { targetUrl: options.targetUrl } : undefined
+        options.targetUrl !== undefined ? { targetUrl: options.targetUrl } : undefined
       );
   const currentUrl = await resolveInitialPageUrl(page, pageUrl);
 
@@ -360,6 +361,7 @@ export async function connectCommand(
       ...(resolvedChannel ? { resolvedChannel } : {}),
       ...(resolvedUserDataDir ? { resolvedUserDataDir } : {}),
       ...(recordSettings ? { record: recordSettings } : {}),
+      provenance: getBuildProvenance(),
     },
   };
   const outputMetadata = session.metadata;
@@ -407,6 +409,7 @@ export async function connectCommand(
       connectionSource,
       resolvedChannel,
       resolvedUserDataDir,
+      provenance: getBuildProvenance(),
       metadata: outputMetadata,
       daemon: daemonResult,
     },

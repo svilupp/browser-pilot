@@ -421,6 +421,13 @@ export async function execCommand(
       ...(s.outcomeStatus !== undefined ? { outcomeStatus: s.outcomeStatus } : {}),
       ...(s.matchedConditions !== undefined ? { matchedConditions: s.matchedConditions } : {}),
       ...(s.retrySafe !== undefined ? { retrySafe: s.retrySafe } : {}),
+      ...(s.dispatchState !== undefined ? { dispatchState: s.dispatchState } : {}),
+      ...(s.receipt !== undefined ? { receipt: s.receipt } : {}),
+      ...(s.attempts !== undefined ? { attempts: s.attempts } : {}),
+      ...(s.actionId !== undefined ? { actionId: s.actionId } : {}),
+      ...(s.executionId !== undefined ? { executionId: s.executionId } : {}),
+      ...(s.targetId !== undefined ? { targetId: s.targetId } : {}),
+      ...(s.targetProvenance !== undefined ? { targetProvenance: s.targetProvenance } : {}),
     }));
 
     const payload = {

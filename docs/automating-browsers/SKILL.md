@@ -157,7 +157,18 @@ Any action step can include outcome conditions:
 - `failIf`: failure if any condition matches (checked first)
 - `dangerous`: never auto-retry on ambiguous outcome
 
-Condition kinds: `urlMatches`, `elementVisible`, `elementHidden`, `textAppears`, `textChanges`, `networkResponse`, `stateSignatureChanges`.
+Condition kinds: `urlMatches`, `elementVisible`, `elementHidden`, `textAppears`, `textChanges`,
+`networkResponse`, `stateSignatureChanges`, `selectedTab`, `fieldValue`, `checkbox`, `switch`,
+`elementEnabled`, `targetCount`, `newTarget`, `urlChanged`, and `fieldChanged`. Text and URL
+conditions accept explicit match modes; text conditions can also be scoped by selector or landmark.
+
+For semantic readiness, use a `waitForReady` action with `any`/`all`, `loadingHidden`, `predicate`,
+or stability options instead of assuming `networkIdle` means that a hydrated page is ready.
+
+Retries stop at the dispatch boundary: a pre-dispatch failure may retry the action, while a
+dispatched or uncertain effect is observed and its conditions are re-evaluated instead of blindly
+repeating input. Set `effect` to `observe`, `idempotent`, or `at_most_once` when the retry policy
+needs to be explicit.
 
 ## Quick command map
 

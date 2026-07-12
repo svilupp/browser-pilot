@@ -50,7 +50,7 @@ Entry: `src/index.ts` exports `Browser`, `Page`, types, providers.
 One WebSocket per browser, but each `Page` is pinned to its own flat CDP session via `createSessionScopedCDP` (`src/cdp/session-scope.ts`). Session-omitting `send`/`on` calls resolve against the page's own target instead of the client's mutable "current default session", so a page's reads, actions, and events stay on its own target even after other targets attach. Explicit session ids (OOPIF children) and `null` (browser-level) pass through unchanged; `setSessionId` on a scoped view throws. The daemon fast-path (`src/cli/attach.ts`) is pinned the same way.
 
 ### Page Lifecycle
-`Page.init()` brings the tab to front via `Page.bringToFront` (opt out with `PageInitOptions.bringToFront: false`). `ensureActionable` does a one-shot `bringToFront` + re-measure when an element first measures 0x0 — fixes rAF-throttled background-tab 30s hangs. `Page.dispose()`/`close()` cleans up event listeners; `Browser.closePage`/`close`/`disconnect` dispose their pages.
+`Page.dispose()`/`close()` cleans up event listeners; `Browser.closePage`/`close`/`disconnect` dispose their pages. Browser automation never activates a tab or forces the browser application into the foreground.
 
 ### Target Selection & Viewport Validation
 When `browser.page()` picks a target, it scores candidates (prefers http URLs, unattached targets, targets with titles; penalizes chrome://, devtools://, extensions). After attaching, validates the viewport — if dimensions are pathological (e.g. 56px height from a side panel), auto-applies 1280x720 override with a warning.
@@ -267,15 +267,21 @@ const result = await page.batch([
 ```
 
 ### Assertion Steps
-Batch steps support 5 assertion actions for verifying page state:
+Batch steps support page-state assertion actions for verifying page state:
 - `assertVisible` — requires `selector`, waits for element to be visible
 - `assertExists` — requires `selector`, waits for element to be attached to DOM
 - `assertText` — requires `expect` (or `value`), optional `selector` (defaults to full page text), substring match
 - `assertUrl` — requires `expect` (or `url`), checks current URL contains expected substring
 - `assertValue` — requires `selector` and `expect` (or `value`), waits for element then checks its value (exact match)
+Trace-backed assertions include `assertNoConsoleErrors`, `assertTextChanged`, `assertPermission`,
+and `assertMediaTrackLive`; `review` and `delta` expose structured/read-diff surfaces.
 
 ### Retry Support
-Any step can include `retry` (number, default 0) and `retryDelay` (ms, default 500). Retries wrap the full step execution including waits.
+Any step can include `retry` (number, default 0) and `retryDelay` (ms, default 500). Retries are
+bounded by the dispatch boundary: pre-dispatch failures may retry the action, while dispatched or
+uncertain effects are observed and conditions re-evaluated instead of blindly re-dispatching input.
+Use `effect` (`observe`, `idempotent`, or `at_most_once`) and `dangerous` to make the intended
+policy explicit.
 
 ```typescript
 { action: 'click', selector: '#flaky-btn', retry: 3, retryDelay: 1000 }
@@ -301,7 +307,9 @@ await page.batch([
 ]);
 ```
 
-Condition kinds: `urlMatches`, `elementVisible`, `elementHidden`, `textAppears`, `textChanges`, `networkResponse`, `stateSignatureChanges`.
+Condition kinds: `urlMatches`, `elementVisible`, `elementHidden`, `textAppears`, `textChanges`,
+`networkResponse`, `stateSignatureChanges`, `selectedTab`, `fieldValue`, `checkbox`, `switch`,
+`elementEnabled`, `targetCount`, `newTarget`, `urlChanged`, and `fieldChanged`.
 
 Evaluation order: `failIf` (any match = failed) → `expectAll` (all must match) → `expectAny` (any match = success).
 

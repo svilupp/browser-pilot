@@ -5,9 +5,41 @@
 ```ts
 
 // @public
+export class ActionDispatchUncertainError extends Error {
+    constructor(receipt: ActionReceipt, message?: string);
+    // (undocumented)
+    readonly receipt: ActionReceipt;
+}
+
+// @public (undocumented)
+export type ActionEffect = 'observe' | 'idempotent' | 'at_most_once';
+
+// @public (undocumented)
 export interface ActionOptions {
     optional?: boolean;
     timeout?: number;
+    waitUntil?: NavigationMilestone;
+}
+
+// @public
+export interface ActionReceipt {
+    // (undocumented)
+    actionId?: string;
+    // (undocumented)
+    attempt?: number;
+    // (undocumented)
+    dispatchState: DispatchState;
+    executionId?: string;
+    // (undocumented)
+    inputEventsSent: string[];
+    // (undocumented)
+    navigationObserved?: boolean;
+    // (undocumented)
+    retrySafe: boolean;
+    // (undocumented)
+    staleRecovery?: StaleRecoveryDiagnostics;
+    // (undocumented)
+    targetId?: string;
 }
 
 // @public (undocumented)
@@ -22,12 +54,36 @@ export interface ActionResult {
 }
 
 // @public (undocumented)
-export type ActionType = 'goto' | 'click' | 'fill' | 'type' | 'select' | 'check' | 'uncheck' | 'submit' | 'press' | 'shortcut' | 'focus' | 'hover' | 'scroll' | 'wait' | 'snapshot' | 'forms' | 'screenshot' | 'evaluate' | 'text' | 'newTab' | 'closeTab' | 'switchFrame' | 'switchToMain' | 'assertVisible' | 'assertExists' | 'assertText' | 'assertUrl' | 'assertValue' | 'waitForWsMessage' | 'assertNoConsoleErrors' | 'assertTextChanged' | 'assertPermission' | 'assertMediaTrackLive' | 'delta' | 'review' | 'chooseOption' | 'upload';
+export type ActionType = 'goto' | 'click' | 'fill' | 'type' | 'select' | 'check' | 'uncheck' | 'submit' | 'press' | 'shortcut' | 'focus' | 'hover' | 'scroll' | 'wait' | 'waitForReady' | 'snapshot' | 'forms' | 'screenshot' | 'evaluate' | 'text' | 'newTab' | 'closeTab' | 'switchFrame' | 'switchToMain' | 'assertVisible' | 'assertExists' | 'assertText' | 'assertUrl' | 'assertValue' | 'waitForWsMessage' | 'assertNoConsoleErrors' | 'assertTextChanged' | 'assertPermission' | 'assertMediaTrackLive' | 'delta' | 'review' | 'chooseOption' | 'upload';
 
 // @public
 export function addBatchToPage(page: Page): Page & {
     batch: (steps: Step[], options?: BatchOptions) => Promise<BatchResult>;
 };
+
+// @public (undocumented)
+export interface AssertionBeforeState {
+    // (undocumented)
+    capturedAt: string;
+    // (undocumented)
+    fields: Record<string, string | null>;
+    // (undocumented)
+    targetIds: string[];
+    // (undocumented)
+    texts: Record<string, string>;
+    // (undocumented)
+    url: string;
+}
+
+// @public (undocumented)
+export interface AssertionScope {
+    landmark?: string;
+    // (undocumented)
+    selector?: string | string[];
+}
+
+// @public (undocumented)
+export function assertRecordingManifestIntegrity(manifest: RecordingManifest, artifactDir?: string): void;
 
 // @public
 export interface AudioChunk {
@@ -106,6 +162,7 @@ export class Browser {
     closePage(name: string): Promise<void>;
     static connect(options: BrowserOptions): Promise<Browser>;
     disconnect(): Promise<void>;
+    expectNewPage<T>(trigger: () => Promise<T> | T, options?: ExpectNewPageOptions): Promise<Page>;
     static fromCDP(cdp: CDPClient, sessionInfo: {
         wsUrl: string;
         provider?: string;
@@ -117,6 +174,7 @@ export class Browser {
     get metadata(): Record<string, unknown> | undefined;
     newPage(url?: string): Promise<Page>;
     page(name?: string, options?: PageOptions): Promise<Page>;
+    get provenance(): BuildProvenance;
     get sessionId(): string | undefined;
     get wsUrl(): string;
 }
@@ -218,6 +276,16 @@ export function buildFingerprintMap(nodes: SnapshotNode[]): Map<string, Semantic
 export function buildLocalBrowserScanTargets(options?: DiscoverLocalBrowsersOptions): LocalBrowserScanTarget[];
 
 // @public
+export interface BuildProvenance {
+    // (undocumented)
+    buildHash: string;
+    // (undocumented)
+    gitSourceHash: string;
+    // (undocumented)
+    packageVersion: string;
+}
+
+// @public
 export function buildWorkflowSummary(result: BatchResult): WorkflowSummary;
 
 // @public
@@ -225,6 +293,12 @@ export function calculateRMS(samples: Float32Array): number;
 
 // @public
 export type CandidateStrategy = 'testid' | 'role_name' | 'label' | 'scoped_text' | 'structural_fingerprint' | 'css';
+
+// @public (undocumented)
+export function canonicalizeRecordingArtifact(value: unknown): RecordingManifest;
+
+// @public
+export function captureBeforeState(page: Page, conditions: Condition[]): Promise<AssertionBeforeState>;
 
 // @public
 export interface CaptureOptions {
@@ -299,6 +373,9 @@ export function chooseOption(page: Page, config: ComboboxConfig): Promise<Combob
 // @public (undocumented)
 export type ChromeChannel = 'stable' | 'beta' | 'dev' | 'canary';
 
+// @public
+export function classifyStaleError(error: unknown): StaleErrorClassification;
+
 // @public (undocumented)
 export interface ClearCookiesOptions {
     domain?: string;
@@ -339,6 +416,8 @@ export function computeDelta(before: PageState, after: PageState): DeltaResult;
 export type Condition = {
     kind: 'urlMatches';
     pattern: string;
+    mode?: UrlMatchMode;
+    match?: UrlMatchMode;
 } | {
     kind: 'elementVisible';
     selector: string | string[];
@@ -349,10 +428,19 @@ export type Condition = {
     kind: 'textAppears';
     selector?: string | string[];
     text: string;
+    mode?: TextMatchMode;
+    match?: TextMatchMode;
+    scope?: AssertionScope;
+    landmark?: string;
 } | {
     kind: 'textChanges';
     selector?: string | string[];
+    from?: string;
     to?: string;
+    mode?: TextMatchMode;
+    match?: TextMatchMode;
+    scope?: AssertionScope;
+    landmark?: string;
 } | {
     kind: 'networkResponse';
     urlPattern: string;
@@ -360,6 +448,51 @@ export type Condition = {
 } | {
     kind: 'stateSignatureChanges';
     mode?: 'text' | 'structure';
+} | {
+    kind: 'selectedTab';
+    selector?: string | string[];
+    name?: string;
+    landmark?: string;
+} | {
+    kind: 'fieldValue';
+    selector: string | string[];
+    value: string;
+    landmark?: string;
+} | {
+    kind: 'checkbox';
+    selector: string | string[];
+    checked: boolean;
+    landmark?: string;
+} | {
+    kind: 'switch';
+    selector: string | string[];
+    checked: boolean;
+    landmark?: string;
+} | {
+    kind: 'elementEnabled';
+    selector: string | string[];
+    enabled?: boolean;
+    landmark?: string;
+} | {
+    kind: 'targetCount';
+    count: number;
+    type?: string;
+} | {
+    kind: 'newTarget';
+    targetId?: string;
+    openerTargetId?: string;
+    url?: string;
+    type?: string;
+} | {
+    kind: 'urlChanged';
+    from?: string;
+    mode?: UrlMatchMode;
+} | {
+    kind: 'fieldChanged';
+    selector: string | string[];
+    from?: string;
+    to?: string;
+    landmark?: string;
 };
 
 // @public
@@ -463,6 +596,25 @@ export function createFingerprint(node: SnapshotNode, context: {
 export function createProvider(options: ConnectOptions): Provider;
 
 // @public (undocumented)
+export function createRecordingManifest(input: {
+    recordedAt: string;
+    sessionId: string;
+    startUrl: string;
+    endUrl: string;
+    targetId?: string;
+    profile?: string;
+    steps: Step[];
+    frames: RecordingFrame[];
+    traceEvents: CanonicalTraceEvent[];
+    assertions?: Step[];
+    notes?: string[];
+    recordingManifest?: string;
+    screenshotDir?: string;
+    executionId?: string;
+    executions?: RecordingExecution[];
+}): RecordingManifest;
+
+// @public (undocumented)
 export interface CreateSessionOptions {
     [key: string]: unknown;
     height?: number;
@@ -563,6 +715,8 @@ export interface DiagnoseExactResult {
         readonly: boolean;
         covered: boolean;
         coveringElement?: CoveringElement;
+        actualHitElement?: HitElement;
+        pointerEvents?: PointerEventsDiagnosis;
         clickable: boolean;
         reason?: string;
     };
@@ -641,6 +795,9 @@ export function discoverTargets(host?: string): Promise<Array<{
 }>>;
 
 // @public (undocumented)
+export type DispatchState = 'not_dispatched' | 'dispatched' | 'uncertain';
+
+// @public (undocumented)
 export interface Download {
     content(): Promise<ArrayBuffer>;
     filename: string;
@@ -706,6 +863,7 @@ export function evaluateCondition(condition: Condition, page: Page, context?: {
     networkTracker?: NetworkResponseTracker;
     beforeSignature?: string;
     beforeStructureSignature?: string;
+    beforeState?: AssertionBeforeState;
 }): Promise<MatchedCondition>;
 
 // @public
@@ -717,11 +875,21 @@ export function evaluateOutcome(page: Page, options: {
     networkTracker?: NetworkResponseTracker;
     beforeSignature?: string;
     beforeStructureSignature?: string;
+    beforeState?: AssertionBeforeState;
 }): Promise<{
     outcomeStatus: OutcomeStatus;
     matchedConditions: MatchedCondition[];
     retrySafe: boolean;
 }>;
+
+// @public (undocumented)
+export interface ExpectNewPageOptions {
+    openerTargetId?: string;
+    timeout?: number;
+    title?: string | RegExp;
+    type?: string | string[];
+    url?: string | RegExp;
+}
 
 // @public
 export function extractPageState(url: string, title: string, snapshot: PageSnapshot, forms: FormField[], pageText: string): PageState;
@@ -838,6 +1006,9 @@ export function getAudioChromeFlags(options?: AudioFlagOptions): string[];
 // @public
 export function getBrowserWebSocketUrl(host?: string): Promise<string>;
 
+// @public (undocumented)
+export function getBuildProvenance(): BuildProvenance;
+
 // @public
 export function getTracer(): Tracer;
 
@@ -895,9 +1066,18 @@ export interface MatchedCondition {
 }
 
 // @public (undocumented)
+export function matchText(actual: string, expected: string, mode?: TextMatchMode): boolean;
+
+// @public (undocumented)
+export function matchUrl(actual: string, expected: string, mode?: UrlMatchMode): boolean;
+
+// @public (undocumented)
 export class NavigationError extends Error {
     constructor(message: string);
 }
+
+// @public
+export type NavigationMilestone = 'commit' | 'domcontentloaded' | 'load' | 'networkidle';
 
 // @public (undocumented)
 export interface NetworkIdleOptions extends ActionOptions {
@@ -961,7 +1141,9 @@ export class Page {
     deleteCookies(cookies: DeleteCookieOptions[]): Promise<void>;
     delta(before?: PageState): Promise<DeltaResult | PageState>;
     diagnose(selectorOrIntent: string, opts?: DiagnoseOptions): Promise<DiagnoseResult>;
+    diagnoseReadiness(): ReadinessDiagnostics | undefined;
     disableInterception(): Promise<void>;
+    dispose(): void;
     elementState(selector: string): Promise<ElementState>;
     emulate(device: DeviceDescriptor): Promise<void>;
     evaluate<T = unknown, Args extends unknown[] = unknown[]>(expression: string | ((...args: Args) => T), ...args: Args): Promise<T>;
@@ -983,13 +1165,21 @@ export class Page {
         x: number;
         y: number;
     } | null;
+    // (undocumented)
+    getLastActionReceipt(): ActionReceipt | undefined;
     // Warning: (ae-forgotten-export) The symbol "ActionTargetMetadata" needs to be exported by the entry point index.d.ts
     //
     // (undocumented)
     getLastActionTargetMetadata(): ActionTargetMetadata | null;
     getLastMatchedSelector(): string | undefined;
+    getLastNavigationMilestone(): NavigationMilestone | undefined;
+    // (undocumented)
+    getLastStaleRecovery(): StaleRecoveryDiagnostics | undefined;
     getLocalStorage(key: string): Promise<string | null>;
+    getReadinessDiagnostics(): ReadinessDiagnostics | undefined;
     getSessionStorage(key: string): Promise<string | null>;
+    // (undocumented)
+    getTargetProvenance(): TargetProvenance;
     goBack(options?: ActionOptions): Promise<void>;
     goForward(options?: ActionOptions): Promise<void>;
     goto(url: string, options?: ActionOptions): Promise<void>;
@@ -998,6 +1188,8 @@ export class Page {
     init(): Promise<void>;
     intercept(pattern: string | RequestPattern, handler: RequestHandler): Promise<() => void>;
     locateSelectorFrame(selector: string): Promise<'main' | 'iframe' | 'none'>;
+    // (undocumented)
+    markLastActionNavigationObserved(): void;
     onConsole(handler: ConsoleHandler): Promise<() => void>;
     onDialog(handler: DialogHandler | null): Promise<void>;
     onError(handler: ErrorHandler): Promise<() => void>;
@@ -1009,6 +1201,8 @@ export class Page {
     removeSessionStorage(key: string): Promise<void>;
     reset(): Promise<void>;
     resetLastActionPosition(): void;
+    // (undocumented)
+    resetLastActionReceipt(): void;
     resolveAll(intent: string, opts?: {
         snapshot?: PageSnapshot;
         action?: string;
@@ -1056,8 +1250,11 @@ export class Page {
     url(): Promise<string>;
     waitFor(selector: string | string[], options?: WaitForOptions): Promise<boolean>;
     waitForDownload(trigger: () => Promise<void>, options?: ActionOptions): Promise<Download>;
-    waitForNavigation(options?: ActionOptions): Promise<boolean>;
+    waitForNavigation(options?: ActionOptions & {
+        expectedUrl?: string;
+    }): Promise<boolean>;
     waitForNetworkIdle(options?: NetworkIdleOptions): Promise<boolean>;
+    waitForReady(options?: WaitForReadyOptions): Promise<boolean>;
 }
 
 // @public (undocumented)
@@ -1073,6 +1270,7 @@ export interface PageError {
 // @public (undocumented)
 export interface PageOptions {
     blockNativePrint?: boolean;
+    fallbackToBestTarget?: boolean;
     minViewport?: {
         width: number;
         height: number;
@@ -1202,6 +1400,249 @@ export function rankSelectorCandidates(el: InteractiveElement, options?: {
 }[];
 
 // @public (undocumented)
+export interface ReadinessDiagnostics {
+    // (undocumented)
+    checkedAt: string;
+    // (undocumented)
+    lastMilestone?: NavigationMilestone;
+    // (undocumented)
+    ready: boolean;
+    // (undocumented)
+    unmetConditions: string[];
+    // (undocumented)
+    waitedMs: number;
+}
+
+// @public (undocumented)
+export type ReadyCondition = string | {
+    selector?: string | string[];
+    url?: string;
+    predicate?: string | (() => unknown);
+};
+
+// @public (undocumented)
+export interface RecordingAction {
+    // (undocumented)
+    action: string;
+    // (undocumented)
+    anchor?: string;
+    // (undocumented)
+    attempt?: number;
+    // (undocumented)
+    boundingBox?: {
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+    };
+    // (undocumented)
+    coordinates?: {
+        x: number;
+        y: number;
+    };
+    // (undocumented)
+    dispatchState?: string;
+    // (undocumented)
+    durationMs: number;
+    // (undocumented)
+    effect?: string;
+    // (undocumented)
+    error?: string;
+    // (undocumented)
+    executionId?: string;
+    // (undocumented)
+    id: string;
+    // (undocumented)
+    pageTitle?: string;
+    // (undocumented)
+    pageUrl?: string;
+    // (undocumented)
+    retrySafe?: boolean;
+    // (undocumented)
+    selector?: string;
+    // (undocumented)
+    selectorUsed?: string;
+    // (undocumented)
+    stepIndex: number;
+    // (undocumented)
+    success: boolean;
+    // (undocumented)
+    targetId?: string;
+    // (undocumented)
+    ts: string;
+    // (undocumented)
+    url?: string;
+    // (undocumented)
+    value?: string;
+}
+
+// @public (undocumented)
+export interface RecordingExecution {
+    // (undocumented)
+    executionId: string;
+    // (undocumented)
+    startedAt: string;
+    // (undocumented)
+    steps: Step[];
+    // (undocumented)
+    success: boolean;
+}
+
+// @public (undocumented)
+export interface RecordingFrame {
+    // (undocumented)
+    action: string;
+    // (undocumented)
+    actionId?: string;
+    // (undocumented)
+    anchor?: string;
+    // (undocumented)
+    attempt?: number;
+    // (undocumented)
+    boundingBox?: {
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+    };
+    // (undocumented)
+    coordinates?: {
+        x: number;
+        y: number;
+    };
+    // (undocumented)
+    dispatchState?: string;
+    // (undocumented)
+    durationMs: number;
+    // (undocumented)
+    effect?: string;
+    // (undocumented)
+    error?: string;
+    // (undocumented)
+    executionId?: string;
+    // (undocumented)
+    pageTitle?: string;
+    // (undocumented)
+    pageUrl?: string;
+    // (undocumented)
+    retrySafe?: boolean;
+    // (undocumented)
+    screenshot: string;
+    // (undocumented)
+    selector?: string;
+    // (undocumented)
+    selectorUsed?: string;
+    // (undocumented)
+    seq: number;
+    // (undocumented)
+    stepIndex?: number;
+    // (undocumented)
+    success: boolean;
+    // (undocumented)
+    targetId?: string;
+    // (undocumented)
+    timestamp: number;
+    // (undocumented)
+    url?: string;
+    // (undocumented)
+    value?: string;
+}
+
+// @public (undocumented)
+export interface RecordingIntegrityOptions {
+    fileSize?: (path: string) => number | undefined;
+}
+
+// @public (undocumented)
+export interface RecordingIntegrityResult {
+    // (undocumented)
+    errors: string[];
+    // (undocumented)
+    valid: boolean;
+}
+
+// @public (undocumented)
+export interface RecordingManifest {
+    // (undocumented)
+    actions: RecordingAction[];
+    // (undocumented)
+    artifacts: {
+        recordingManifest: string;
+        screenshotDir: string;
+    };
+    // (undocumented)
+    assertions: Step[];
+    // (undocumented)
+    notes: string[];
+    // (undocumented)
+    recipe: {
+        steps: Step[];
+        executions?: RecordingExecution[];
+    };
+    // (undocumented)
+    recordedAt: string;
+    // (undocumented)
+    screenshots: RecordingScreenshot[];
+    // (undocumented)
+    session: {
+        id: string;
+        startUrl: string;
+        endUrl: string;
+        targetId?: string;
+        profile?: string;
+    };
+    // (undocumented)
+    trace: {
+        events: CanonicalTraceEvent[];
+        summaries: Record<string, unknown>;
+    };
+    // (undocumented)
+    version: 2;
+}
+
+// @public (undocumented)
+export interface RecordingScreenshot {
+    // (undocumented)
+    actionId: string;
+    // (undocumented)
+    anchor?: string;
+    // (undocumented)
+    attempt?: number;
+    // (undocumented)
+    boundingBox?: {
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+    };
+    // (undocumented)
+    coordinates?: {
+        x: number;
+        y: number;
+    };
+    // (undocumented)
+    effect?: string;
+    // (undocumented)
+    executionId?: string;
+    // (undocumented)
+    file: string;
+    // (undocumented)
+    id: string;
+    // (undocumented)
+    pageTitle?: string;
+    // (undocumented)
+    pageUrl?: string;
+    // (undocumented)
+    stepIndex: number;
+    // (undocumented)
+    success: boolean;
+    // (undocumented)
+    targetId?: string;
+    // (undocumented)
+    ts: string;
+}
+
+// @public (undocumented)
 export interface RecordOptions {
     format?: 'png' | 'jpeg' | 'webp';
     highlights?: boolean;
@@ -1217,7 +1658,7 @@ export interface RecordOptions {
 export function recoverPinnedTarget(pin: TargetFingerprint, targets: TargetInfo_2[], threshold?: number): PinRecoveryResult | null;
 
 // @public
-export function recoverStaleRef(staleFingerprint: SemanticFingerprint, currentFingerprints: Map<string, SemanticFingerprint>, threshold?: number): {
+export function recoverStaleRef(staleFingerprint: SemanticFingerprint, currentFingerprints: Map<string, SemanticFingerprint>, threshold?: number, ambiguityMargin?: number): {
     ref: string;
     confidence: number;
 } | null;
@@ -1274,6 +1715,16 @@ export type ResolvedBrowserSource = 'explicit-ws' | 'devtools-active-port' | 'js
 
 // @public
 export type ResourceType = 'Document' | 'Stylesheet' | 'Image' | 'Media' | 'Font' | 'Script' | 'TextTrack' | 'XHR' | 'Fetch' | 'Prefetch' | 'EventSource' | 'WebSocket' | 'Manifest' | 'SignedExchange' | 'Ping' | 'CSPViolationReport' | 'Preflight' | 'Other';
+
+// @public
+export interface RetryDecision {
+    // Warning: (ae-forgotten-export) The symbol "RetryDecisionReason" needs to be exported by the entry point index.d.ts
+    //
+    // (undocumented)
+    reason: RetryDecisionReason;
+    // (undocumented)
+    retry: boolean;
+}
 
 // @public (undocumented)
 export interface ReviewResult {
@@ -1363,6 +1814,23 @@ export interface SetCookieOptions {
     value: string;
 }
 
+// @public
+export function shouldRetry(options: ShouldRetryOptions): RetryDecision;
+
+// @public (undocumented)
+export interface ShouldRetryOptions {
+    attempt: number;
+    // (undocumented)
+    dangerous: boolean;
+    // (undocumented)
+    dispatchState?: DispatchState;
+    // (undocumented)
+    effect: ActionEffect;
+    maxAttempts: number;
+    // (undocumented)
+    retrySafe?: boolean;
+}
+
 // @public (undocumented)
 export interface SnapshotNode {
     checked?: boolean;
@@ -1383,14 +1851,58 @@ export interface SnapshotOptions {
 }
 
 // @public (undocumented)
+export interface StaleErrorClassification {
+    // (undocumented)
+    kind?: StaleErrorKind;
+    // (undocumented)
+    message: string;
+    // (undocumented)
+    stale: boolean;
+}
+
+// @public
+export type StaleErrorKind = 'detached' | 'replaced' | 'context';
+
+// @public (undocumented)
+export interface StaleRecoveryDiagnostics {
+    // (undocumented)
+    alternatives: Array<{
+        ref: string;
+        confidence: number;
+    }>;
+    // (undocumented)
+    ambiguityMargin: number;
+    // (undocumented)
+    confidence: number;
+    // (undocumented)
+    newFingerprint: unknown;
+    // (undocumented)
+    newRef: string;
+    // (undocumented)
+    oldFingerprint: unknown;
+    // (undocumented)
+    oldRef: string;
+}
+
+// @public (undocumented)
 export interface Step {
     action: ActionType;
+    // (undocumented)
+    all?: ReadyCondition[];
     amount?: number;
+    anchor?: string;
+    any?: ReadyCondition[];
     blur?: boolean;
+    checked?: boolean;
     combo?: string;
     dangerous?: boolean;
     delay?: number;
     direction?: 'up' | 'down' | 'left' | 'right';
+    // (undocumented)
+    domQuietForMs?: number;
+    effect?: ActionEffect;
+    // (undocumented)
+    enabled?: boolean;
     expect?: string;
     expectAll?: Condition[];
     expectAny?: Condition[];
@@ -1402,6 +1914,9 @@ export interface Step {
     fullPage?: boolean;
     key?: string;
     kind?: 'audio' | 'video';
+    landmark?: string;
+    // (undocumented)
+    loadingHidden?: string | string[];
     match?: string;
     method?: 'enter' | 'click' | 'enter+click';
     modifiers?: Array<'Control' | 'Shift' | 'Alt' | 'Meta'>;
@@ -1409,19 +1924,31 @@ export interface Step {
     option?: string | string[];
     optional?: boolean;
     // (undocumented)
+    pollInterval?: number;
+    // (undocumented)
+    predicate?: string;
+    // (undocumented)
     quality?: number;
     retry?: number;
     retryDelay?: number;
+    scope?: AssertionScope;
     selector?: string | string[];
+    // (undocumented)
+    stableForMs?: number;
     state?: string;
+    targetCount?: number;
     targetId?: string;
+    textMode?: TextMatchMode;
     timeout?: number;
     to?: string;
+    transition?: 'urlChanged' | 'fieldChanged';
     trigger?: string | string[];
     url?: string;
+    urlMode?: UrlMatchMode;
     value?: string | string[];
-    waitFor?: 'visible' | 'hidden' | 'attached' | 'detached' | 'navigation' | 'networkIdle';
+    waitFor?: 'visible' | 'hidden' | 'attached' | 'detached' | 'navigation' | 'networkIdle' | 'ready';
     waitForNavigation?: boolean | 'auto';
+    waitUntil?: 'commit' | 'domcontentloaded' | 'load' | 'networkidle';
     where?: Record<string, unknown>;
     windowMs?: number;
     x?: number;
@@ -1432,6 +1959,10 @@ export interface Step {
 // @public (undocumented)
 export interface StepResult {
     action: ActionType;
+    actionId?: string;
+    anchor?: string;
+    attempt?: number;
+    attempts?: number;
     boundingBox?: {
         x: number;
         y: number;
@@ -1447,8 +1978,11 @@ export interface StepResult {
         id?: string;
         className?: string;
     };
+    dispatchState?: DispatchState;
     durationMs: number;
+    effect?: ActionEffect;
     error?: string;
+    executionId?: string;
     failedSelectors?: Array<{
         selector: string;
         reason: string;
@@ -1459,13 +1993,17 @@ export interface StepResult {
     index: number;
     matchedConditions?: MatchedCondition[];
     outcomeStatus?: OutcomeStatus;
+    receipt?: ActionReceipt;
     result?: unknown;
+    retryDecisionReason?: RetryDecisionReason;
     retrySafe?: boolean;
     screenshotPath?: string;
     selector?: string | string[];
     selectorUsed?: string;
     success: boolean;
     suggestion?: string;
+    targetId?: string;
+    targetProvenance?: Record<string, unknown>;
     text?: string;
     timestamp?: number;
 }
@@ -1532,6 +2070,60 @@ export interface TargetFingerprint {
     title: string;
     url: string;
 }
+
+// @public (undocumented)
+export interface TargetNotFoundDetails {
+    // (undocumented)
+    availableTargets?: TargetSummary[];
+    // (undocumented)
+    reason?: string;
+    // (undocumented)
+    targetId?: string;
+    // (undocumented)
+    targetUrl?: string;
+}
+
+// @public
+export class TargetNotFoundError extends Error {
+    constructor(details?: TargetNotFoundDetails);
+    // (undocumented)
+    readonly availableTargets: TargetSummary[];
+    // (undocumented)
+    readonly targetId?: string;
+    // (undocumented)
+    readonly targetUrl?: string;
+}
+
+// @public (undocumented)
+export interface TargetProvenance {
+    // (undocumented)
+    createdAt?: string;
+    // (undocumented)
+    openerTargetId?: string;
+    // (undocumented)
+    source?: 'selected' | 'new_page' | 'popup' | 'session';
+    // (undocumented)
+    targetId: string;
+    // (undocumented)
+    title?: string;
+    // (undocumented)
+    type?: string;
+    // (undocumented)
+    url?: string;
+}
+
+// @public (undocumented)
+export interface TargetSummary {
+    // (undocumented)
+    targetId: string;
+    // (undocumented)
+    title?: string;
+    // (undocumented)
+    url: string;
+}
+
+// @public (undocumented)
+export type TextMatchMode = 'exact' | 'contains' | 'regex';
 
 // @public (undocumented)
 export class TimeoutError extends Error {
@@ -1628,6 +2220,9 @@ export interface UploadResult {
     visibleInUI?: boolean;
 }
 
+// @public
+export type UrlMatchMode = 'exact' | 'origin_path' | 'glob' | 'contains';
+
 // @public (undocumented)
 export interface UserAgentMetadata {
     // (undocumented)
@@ -1665,6 +2260,9 @@ export interface UserAgentOptions {
     userAgent: string;
     userAgentMetadata?: UserAgentMetadata;
 }
+
+// @public
+export function validateRecordingManifest(manifest: RecordingManifest, artifactDir?: string, options?: RecordingIntegrityOptions): RecordingIntegrityResult;
 
 // @public (undocumented)
 export function validateSteps(steps: unknown[]): ValidationResult;
@@ -1728,6 +2326,24 @@ export interface WaitForOptions extends ActionOptions {
     state?: WaitState;
 }
 
+// @public
+export function waitForReady(cdp: CDPClient, options?: WaitForReadyOptions & {
+    refMap?: Record<string, number>;
+}): Promise<WaitResult>;
+
+// @public (undocumented)
+export interface WaitForReadyOptions extends ActionOptions {
+    all?: ReadyCondition[];
+    any?: ReadyCondition[];
+    contextId?: number;
+    domQuietForMs?: number;
+    loadingHidden?: string | string[];
+    pollInterval?: number;
+    predicate?: string | (() => unknown);
+    stableForMs?: number;
+    url?: string;
+}
+
 // @public (undocumented)
 export interface WaitOptions {
     contextId?: number;
@@ -1739,6 +2355,10 @@ export interface WaitOptions {
 // @public (undocumented)
 export interface WaitResult {
     // (undocumented)
+    diagnostics?: ReadinessDiagnostics;
+    // (undocumented)
+    milestone?: NavigationMilestone;
+    // (undocumented)
     success: boolean;
     // (undocumented)
     waitedMs: number;
@@ -1749,15 +2369,29 @@ export type WaitState = 'visible' | 'hidden' | 'attached' | 'detached';
 
 // @public
 export interface WorkflowStepSummary {
+    // (undocumented)
+    actionId?: string;
+    // (undocumented)
+    attempts?: number;
     description: string;
+    // (undocumented)
+    dispatchState?: string;
     durationMs: number;
     error?: string;
+    // (undocumented)
+    executionId?: string;
     outcomeEvidence?: string[];
     outcomeStatus?: string;
+    // (undocumented)
+    receipt?: StepResult['receipt'];
     retrySafe?: boolean;
     step: number;
     success: boolean;
     suggestion?: string;
+    // (undocumented)
+    targetId?: string;
+    // (undocumented)
+    targetProvenance?: Record<string, unknown>;
 }
 
 // @public (undocumented)
@@ -1774,7 +2408,10 @@ export interface WorkflowSummary {
 
 // Warnings were encountered during analysis:
 //
-// dist/page-DvcsWJqm.d.ts:871:9 - (ae-forgotten-export) The symbol "CoveringElement" needs to be exported by the entry point index.d.ts
+// dist/index.d.ts:361:5 - (ae-forgotten-export) The symbol "CanonicalTraceEvent" needs to be exported by the entry point index.d.ts
+// dist/page-LVBmxA-p.d.ts:1025:9 - (ae-forgotten-export) The symbol "CoveringElement" needs to be exported by the entry point index.d.ts
+// dist/page-LVBmxA-p.d.ts:1026:9 - (ae-forgotten-export) The symbol "HitElement" needs to be exported by the entry point index.d.ts
+// dist/page-LVBmxA-p.d.ts:1027:9 - (ae-forgotten-export) The symbol "PointerEventsDiagnosis" needs to be exported by the entry point index.d.ts
 // dist/types-D2pJQpWs.d.ts:67:9 - (ae-forgotten-export) The symbol "LocalBrowserCandidate" needs to be exported by the entry point index.d.ts
 // dist/types-D2pJQpWs.d.ts:68:9 - (ae-forgotten-export) The symbol "LocalDiscoveryFailure" needs to be exported by the entry point index.d.ts
 

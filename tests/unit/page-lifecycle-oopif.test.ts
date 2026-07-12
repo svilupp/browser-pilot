@@ -237,36 +237,13 @@ describe('Page OOPIF attach fan-out (BUG B: cross-page isolation)', () => {
   });
 });
 
-describe('Page foreground (BUG F: bringToFront on init)', () => {
-  it('sends Page.bringToFront on init by default', async () => {
+describe('Page foreground behavior', () => {
+  it('does not activate the tab during init', async () => {
     const mockClient = createMockCDPClient();
     const page = new Page(mockClient.client, 'target-A');
-    await page.init();
-
-    expect(mockClient.sends.some((s) => s.method === 'Page.bringToFront')).toBe(true);
-  });
-
-  it('does NOT send Page.bringToFront when bringToFront:false', async () => {
-    const mockClient = createMockCDPClient();
-    const page = new Page(mockClient.client, 'target-A', { bringToFront: false });
     await page.init();
 
     expect(mockClient.sends.some((s) => s.method === 'Page.bringToFront')).toBe(false);
-  });
-
-  it('swallows a bringToFront failure (headless) during init', async () => {
-    const mockClient = createMockCDPClient();
-    const original = mockClient.client.send as unknown as (
-      m: string,
-      ...rest: unknown[]
-    ) => Promise<unknown>;
-    (mockClient.client as { send: unknown }).send = mock((method: string, ...rest: unknown[]) => {
-      if (method === 'Page.bringToFront') return Promise.reject(new Error('not supported'));
-      return original(method, ...rest);
-    });
-
-    const page = new Page(mockClient.client, 'target-A');
-    await expect(page.init()).resolves.toBeUndefined();
   });
 });
 
