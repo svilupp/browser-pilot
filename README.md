@@ -42,18 +42,10 @@ For multiple local Chrome profiles, use `--channel` or `--user-data-dir`. Use
 `bp connect --new-tab --page-url <url>` to start from a fresh tab. New tabs stay in the background
 unless `--foreground` is passed.
 
-## Known issues
+## Known issue
 
-- Keyboard actions in background tabs: `type`, `press`, and `shortcut` can report success without
-  changing the field. Use `fill`, or create the tab with `--foreground`:
-  `bp connect --new-tab --foreground --page-url <url>`.
-- Modifier shortcuts in macOS Chrome: `Control+a` and `Meta+a` may not select field text in live
-  CDP sessions. Typing after them can append instead of replace. Use `fill` to replace a value.
-- Native selects: `select` can emit a synthetic `change` event before the final browser event. Apps
-  that reject untrusted events may observe an intermediate rejected event; the final selection is
-  correct in the tested case.
-- Wait result metadata: `selectorUsed` in a `wait` result can contain the selector from the previous
-  action. Use the wait result and page state as the source of truth.
+Native `select` can emit a synthetic untrusted `change` event before the final event. Apps that
+reject untrusted events may observe an intermediate rejected event; the final selection is correct.
 
 ## Library quick start
 

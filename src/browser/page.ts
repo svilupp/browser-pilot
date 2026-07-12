@@ -1398,6 +1398,7 @@ export class Page {
           this._lastActionTargetMetadata = await this.getActionTargetMetadata({ objectId });
 
           await this.cdp.send('DOM.focus', { nodeId: element.nodeId });
+          const beforeState = await this.readEditableState(objectId);
 
           for (const char of text) {
             const def = US_KEYBOARD[char];
@@ -1415,6 +1416,19 @@ export class Page {
             if (delay > 0) {
               await sleep(delay);
             }
+          }
+
+          // Input.dispatchKeyEvent can acknowledge successfully without
+          // editing a background target. Input.insertText works without
+          // activating the tab, so use it only when the key path had no effect.
+          const afterState = await this.readEditableState(objectId);
+          if (
+            text.length > 0 &&
+            beforeState.value === afterState.value &&
+            beforeState.selectionStart === afterState.selectionStart &&
+            beforeState.selectionEnd === afterState.selectionEnd
+          ) {
+            await dispatch.send(() => this.cdp.send('Input.insertText', { text }), 'insertText');
           }
 
           // Optionally trigger blur
@@ -1985,12 +1999,18 @@ export class Page {
     return this.withActionDispatch(async (dispatch) => {
       const { modifiers, key } = parseShortcut(combo);
       // Route to the active OOPIF child session when inside a cross-origin frame.
-      await this.dispatchKeyWithModifiers(
-        key,
-        modifiers,
-        this.currentFrameSession ?? undefined,
-        dispatch
-      );
+      const sessionId = this.currentFrameSession ?? undefined;
+      await this.dispatchKeyWithModifiers(key, modifiers, sessionId, dispatch);
+
+      // Chrome does not consistently apply modifier selection shortcuts to a
+      // CDP-controlled background target. Preserve the browser shortcut event,
+      // then repair the common editable-field case without activating the tab.
+      if (
+        key.toLowerCase() === 'a' &&
+        (modifiers.includes('Control') || modifiers.includes('Meta'))
+      ) {
+        await this.selectAllActiveEditable(sessionId);
+      }
     });
   }
 
@@ -2896,6 +2916,7 @@ export class Page {
     this._lastMatchedSelector = found.selector;
 
     await this.cdp.send('DOM.focus', { nodeId: found.nodeId }, sessionId);
+    const beforeState = await this.readEditableState(found.objectId, sessionId);
 
     for (const char of text) {
       const def = US_KEYBOARD[char];
@@ -2911,6 +2932,19 @@ export class Page {
       if (delay > 0) {
         await sleep(delay);
       }
+    }
+
+    const afterState = await this.readEditableState(found.objectId, sessionId);
+    if (
+      text.length > 0 &&
+      beforeState.value === afterState.value &&
+      beforeState.selectionStart === afterState.selectionStart &&
+      beforeState.selectionEnd === afterState.selectionEnd
+    ) {
+      await dispatch.send(
+        () => this.cdp.send('Input.insertText', { text }, sessionId),
+        'insertText'
+      );
     }
 
     if (options.blur) {
@@ -3742,6 +3776,75 @@ export class Page {
       sessionId
     );
     return result.result.value ?? '';
+  }
+
+  private async readEditableState(
+    objectId: string,
+    sessionId?: string
+  ): Promise<{ value: string; selectionStart: number | null; selectionEnd: number | null }> {
+    const result = await this.cdp.send<{
+      result: {
+        value: { value: string; selectionStart: number | null; selectionEnd: number | null };
+      };
+    }>(
+      'Runtime.callFunctionOn',
+      {
+        objectId,
+        functionDeclaration: `function() {
+          return {
+            value: this.isContentEditable ? (this.textContent || '') : (this.value || ''),
+            selectionStart: typeof this.selectionStart === 'number' ? this.selectionStart : null,
+            selectionEnd: typeof this.selectionEnd === 'number' ? this.selectionEnd : null,
+          };
+        }`,
+        returnByValue: true,
+      },
+      sessionId
+    );
+    return (
+      result.result.value ?? {
+        value: '',
+        selectionStart: null,
+        selectionEnd: null,
+      }
+    );
+  }
+
+  private async selectAllActiveEditable(sessionId?: string): Promise<boolean> {
+    const params: Record<string, unknown> = {
+      expression: `(() => {
+        const active = document.activeElement;
+        if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) {
+          active.select();
+          return true;
+        }
+        if (active instanceof HTMLElement && active.isContentEditable) {
+          const range = document.createRange();
+          range.selectNodeContents(active);
+          const selection = window.getSelection();
+          if (!selection) return false;
+          selection.removeAllRanges();
+          selection.addRange(range);
+          return true;
+        }
+        return false;
+      })()`,
+      returnByValue: true,
+    };
+    if (sessionId === undefined && this.currentFrameContextId !== null) {
+      params['contextId'] = this.currentFrameContextId;
+    }
+
+    try {
+      const result = await this.cdp.send<{ result: { value: boolean } }>(
+        'Runtime.evaluate',
+        params,
+        sessionId
+      );
+      return result.result.value === true;
+    } catch {
+      return false;
+    }
   }
 
   private async typeEditableFallback(

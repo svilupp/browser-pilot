@@ -1284,7 +1284,9 @@ export class BatchExecutor {
           optional,
           state: step.waitFor ?? 'visible',
         });
-        return { selectorUsed: this.getUsedSelector(step.selector) };
+        return {
+          selectorUsed: Array.isArray(step.selector) ? step.selector[0]! : step.selector,
+        };
       }
 
       case 'waitForReady': {

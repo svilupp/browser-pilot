@@ -25,6 +25,19 @@ describe('Multi-tab browser operations', () => {
     expect(targetsBefore.some((target) => target.targetId === pageOne.targetId)).toBe(true);
     expect(targetsBefore.some((target) => target.targetId === pageTwo.targetId)).toBe(true);
 
+    await pageTwo.type('#name', 'background', { delay: 0 });
+    expect(
+      await pageTwo.evaluate(() => (document.getElementById('name') as HTMLInputElement).value)
+    ).toBe('background');
+
+    await pageTwo.fill('#name', 'initial');
+    await pageTwo.shortcut('Meta+a');
+    const selection = await pageTwo.evaluate(() => {
+      const input = document.getElementById('name') as HTMLInputElement;
+      return { start: input.selectionStart, end: input.selectionEnd };
+    });
+    expect(selection).toEqual({ start: 0, end: 7 });
+
     await browser.closePage('page-2');
 
     const targetsAfter = await browser.listTargets();

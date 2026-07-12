@@ -1,87 +1,17 @@
 # Changelog
 
-## [Unreleased]
+## [0.1.0] - 2026-07-12
 
-## [0.0.1] - 2026-07-12
+- Added cross-origin iframe, worker/service-worker, multi-tab, and popup support.
+- Improved reliability with per-page session isolation, background-safe tabs, smarter waits,
+  selector diagnostics, and safer retries.
+- Added structured page review and delta reads, assertions, workflow summaries, recording v2,
+  tracing, audio tools, and browser-state controls.
+- Expanded the CLI and API for Node.js, Bun, and Cloudflare Workers, including daemon transport
+  and page/target inspection.
 
-Initial public release of the current browser-pilot automation, CLI, and packaging surface.
-
-### Added
-
-- **Safer browser control** — per-page target isolation, explicit target and popup handling,
-  cross-origin iframe support, worker support, and session-aware daemon events keep automation on
-  the intended page and frame.
-- **Outcome-aware automation** — semantic readiness waits, assertions, state/delta and review
-  surfaces, target recovery, workflow summaries, safe-submit handling, and smart widget helpers
-  make browser outcomes observable and verifiable.
-- **Selector and recording workflows** — richer snapshots, attribute-aware selectors, fuzzy
-  diagnostics, candidate ranking, structural signatures, and canonical recording artifacts with
-  summary, inspection, and derivation commands.
-- **Public CLI and API surfaces** — routed discovery commands, page and target inspection,
-  recording and tracing workflows, browser-condition controls, voice/media tooling, multi-selector
-  actions, and expanded library exports for Node.js, Bun, and Cloudflare Workers.
-
-### Changed
-
-- **Background-safe automation** — new and fallback tabs stay in the background by default,
-  background and hidden tabs remain actionable without tab activation, and foregrounding is an
-  explicit opt-in.
-- **Effect-aware retries and results** — actions now respect the dispatch boundary, observe
-  dispatched or uncertain effects instead of blindly repeating input, and report outcome, receipt,
-  dispatch, attempt, and target provenance information.
-- **Recording guidance** — capture now uses an existing named session and a known artifact path;
-  summary and inspection precede derivation, which produces browser-pilot workflow JSON for replay.
-
-### Fixed
-
-- **Interaction reliability** — background and occluded pages no longer hang on actionability,
-  click dispatch avoids duplicate side effects, and selector recovery and failure hints are more
-  robust across rerenders and ambiguous controls.
-- **Lifecycle reliability** — iframe and worker targets are resumed correctly, daemon routing and
-  target errors preserve page state, page listeners are cleaned up, and stale frame state is reset.
-- Recording manifests now normalize screenshot paths consistently across Node and Bun runtimes.
-
-### Packaging
-
-- **Portable distribution** — the package ships public ESM, CommonJS, browser-pilot subpath, and
-  CLI entry points for supported runtimes, with package metadata, version reporting, build
-  provenance, clean deterministic builds, and npm-ready lifecycle scripts.
-- **Documentation and release workflow** — user documentation, automation guidance, API reports,
-  and the release checklist now describe the supported package, CLI, recording, and replay flows.
-
-### Breaking changes
-
-- **Custom `CDPClient` implementers only** — session-routing members were added to the interface,
-  `onAny` handlers receive a session identifier, and session-scoped views reject session mutation.
-  Users of the bundled client are unaffected.
-
-## [0.1.0] - 2026-07-03
-
-Additive for library and CLI users; one narrow breaking change affects only custom `CDPClient` implementers (see Breaking changes).
-
-### Added
-
-- **Cross-origin iframe (OOPIF) support** — `page.switchToFrame(selector)` can now enter genuine cross-origin iframes (e.g. payment widgets). Inside the frame: `fill`, `type`, `click`, `focus`, `press`, `text`, `waitFor`, and `evaluate` work; `switchToMain()` exits. Unsupported methods fail with a clear error instead of silently acting on the parent page. Requires Chrome site isolation (`--site-per-process`). Nested cross-origin frames (e.g. Stripe-like payment forms) are supported.
-- **CDP session multiplexing** (`browser-pilot/cdp`) — multi-session support over a single WebSocket (Workers-safe): `setAutoAttach()`, `onTargetAttached()`, `onSessionEvent()`, and friends. Cross-origin iframes, workers, and service workers auto-attach and are unpaused automatically (no start-up hang).
-- **Per-page CDP session isolation** — each `Page` is pinned to its own CDP session, so actions and events no longer leak between tabs when multiple targets are attached (also applied to the `bp` daemon fast-path).
-- **Element diagnostics** — `page.diagnose(selectorOrIntent)` explains why a selector does or doesn't resolve, with ranked fuzzy candidates. Fuzzy matching is configurable (`FuzzyMatchOptions`) and normalizes dashed/underscored/camelCase intents to human labels.
-- **Candidate ranking** — `page.resolveAll(intent)` scores every plausible target for an intent and returns ranked candidates (read-only, executes nothing).
-- **Snapshot attribute enrichment** — `snapshot({ attributes: true })` adds real `id`/`data-testid`/`name`/`type` attributes to interactive elements.
-- **Structural page signatures** — the `stateSignatureChanges` outcome condition gains `mode: 'structure'` to detect layout changes instead of text changes.
-
-### Changed
-
-- `bp exec --json` failure `hints[]` now normalize dashed/underscored/camelCase intents (e.g. `create-order` matches a `Create Order` element).
-
-### Fixed
-
-- No more 30-second hangs on hidden or occluded tabs — actionability checks now self-heal when a throttled background tab reports zero-size elements.
-- Daemon session-scoped events now route correctly, and iframes/workers no longer stay frozen (paused) after a CLI command exits — the daemon auto-resumes them.
-- Page listeners are cleaned up on close (no leaks under heavy tab churn), stale frame state is fully reset when a cross-origin frame detaches, and unhandled promise rejections in `reload`, `goBack`, and `goForward` are fixed.
-
-### Breaking changes
-
-- **Custom `CDPClient` implementers only** — the `CDPClient` interface gained session-routing members (`onSessionEvent`, `onTargetAttached`, `setAutoAttach`, `runIfWaitingForDebugger`, `sessions`, `hasSession`), `onAny` handlers now receive a third `sessionId` argument, and calling `setSessionId` on a session-scoped view throws. Users of the bundled client are unaffected.
+Breaking change: custom `CDPClient` implementations must support the new session-routing API;
+users of the bundled client are unaffected.
 
 ## [0.0.18] - 2026-03-22
 
