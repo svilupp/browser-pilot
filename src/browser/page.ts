@@ -5902,10 +5902,12 @@ export class Page {
     def: KeyDefinition,
     modifierBitmask = 0,
     sessionId?: string,
-    dispatch?: ActionDispatch
+    dispatch?: ActionDispatch,
+    suppressText = false
   ): Promise<void> {
+    const hasText = def.text !== undefined && !suppressText;
     const downParams: Record<string, unknown> = {
-      type: def.text !== undefined ? 'keyDown' : 'rawKeyDown',
+      type: hasText ? 'keyDown' : 'rawKeyDown',
       key: def.key,
       code: def.code,
       windowsVirtualKeyCode: def.keyCode,
@@ -5915,7 +5917,7 @@ export class Page {
       isKeypad: false,
     };
 
-    if (def.text !== undefined) {
+    if (hasText) {
       downParams['text'] = def.text;
       downParams['unmodifiedText'] = def.text;
     }
@@ -5998,10 +6000,14 @@ export class Page {
       }
     }
 
-    // Dispatch the main key with modifiers held
+    // Dispatch the main key with modifiers held. A printable `text` payload
+    // can turn a modified key into an insertion on some Chrome versions
+    // (for example, Meta+a inserts `a` before the select-all fallback runs).
+    // Control/Meta/Alt combinations are commands, so omit printable text.
+    const suppressText = modifiers.some((mod) => mod !== 'Shift');
     const def = US_KEYBOARD[key];
     if (def) {
-      await this.dispatchKeyDefinition(def, mask, sessionId, dispatch);
+      await this.dispatchKeyDefinition(def, mask, sessionId, dispatch, suppressText);
     } else if (key.length === 1) {
       // For single characters with modifiers, use dispatchKeyEvent instead of insertText
       // so the modifiers are included in the event
@@ -6009,7 +6015,8 @@ export class Page {
         { key, code: key, keyCode: 0, text: key },
         mask,
         sessionId,
-        dispatch
+        dispatch,
+        suppressText
       );
     } else {
       await this.dispatchKeyDefinition({ key, code: key, keyCode: 0 }, mask, sessionId, dispatch);
