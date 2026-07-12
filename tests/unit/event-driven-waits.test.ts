@@ -13,7 +13,12 @@
  */
 
 import { describe, expect, mock, test } from 'bun:test';
-import { waitForAnyElement, waitForElement } from '../../src/wait/strategies.ts';
+import {
+  waitForAnyElement,
+  waitForElement,
+  waitForNavigation,
+  waitForReady,
+} from '../../src/wait/strategies.ts';
 
 /**
  * Create a mock CDP client.
@@ -257,5 +262,259 @@ describe('waitForAnyElement edge cases', () => {
 
     expect(result.success).toBe(true);
     expect(result.selector).toBe('#el');
+  });
+});
+
+describe('semantic readiness and correlated navigation', () => {
+  function createReadinessCDP() {
+    const handlers = new Map<string, Set<(params: Record<string, unknown>) => void>>();
+    let hydrationChecks = 0;
+    let quietChecks = 0;
+    const cdp = {
+      send: mock((method: string, params?: Record<string, unknown>) => {
+        if (method === 'Page.getFrameTree') {
+          return Promise.resolve({ frameTree: { frame: { id: 'main', loaderId: 'old-loader' } } });
+        }
+        if (method === 'Runtime.evaluate') {
+          const expression = String(params?.['expression'] ?? '');
+          if (expression === 'location.href') {
+            return Promise.resolve({ result: { value: 'https://example.test/start' } });
+          }
+          if (expression.includes('__browserPilotReadinessState')) {
+            quietChecks++;
+            return Promise.resolve({ result: { value: quietChecks > 3 ? 50 : 0 } });
+          }
+          if (expression.includes('deepQuery')) {
+            hydrationChecks++;
+            return Promise.resolve({ result: { value: hydrationChecks >= 3 } });
+          }
+          return Promise.resolve({ result: { value: true } });
+        }
+        return Promise.resolve({});
+      }),
+      on: mock((event: string, handler: (params: Record<string, unknown>) => void) => {
+        let bucket = handlers.get(event);
+        if (!bucket) {
+          bucket = new Set();
+          handlers.set(event, bucket);
+        }
+        bucket.add(handler);
+      }),
+      off: mock((event: string, handler: (params: Record<string, unknown>) => void) => {
+        handlers.get(event)?.delete(handler);
+      }),
+      emit(event: string, params: Record<string, unknown>) {
+        for (const handler of handlers.get(event) ?? []) handler(params);
+      },
+    };
+    return cdp;
+  }
+
+  test('keeps polling through an empty initial snapshot until delayed hydration is visible', async () => {
+    const cdp = createReadinessCDP();
+    const result = await waitForReady(cdp as never, {
+      any: ['#hydrated-control'],
+      timeout: 200,
+      pollInterval: 5,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.waitedMs).toBeGreaterThanOrEqual(5);
+  });
+
+  test('requires a DOM quiet period while the page continues polling', async () => {
+    const cdp = createReadinessCDP();
+    const result = await waitForReady(cdp as never, {
+      any: ['#hydrated-control'],
+      stableForMs: 20,
+      timeout: 200,
+      pollInterval: 5,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.waitedMs).toBeGreaterThanOrEqual(15);
+  });
+
+  test('ignores child-frame lifecycle events when waiting for the main page load', async () => {
+    const cdp = createReadinessCDP();
+    const navigation = waitForNavigation(cdp as never, {
+      timeout: 200,
+      waitUntil: 'load',
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    cdp.emit('Page.frameNavigated', {
+      frame: { id: 'child', parentId: 'main', url: 'https://child.test', loaderId: 'child-loader' },
+    });
+    cdp.emit('Page.lifecycleEvent', {
+      frameId: 'child',
+      loaderId: 'child-loader',
+      name: 'load',
+    });
+    let settled = false;
+    void navigation.then(() => {
+      settled = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(settled).toBe(false);
+
+    cdp.emit('Page.frameNavigated', {
+      frame: { id: 'main', url: 'https://example.test/next', loaderId: 'main-loader' },
+    });
+    cdp.emit('Page.lifecycleEvent', {
+      frameId: 'main',
+      loaderId: 'main-loader',
+      name: 'load',
+    });
+    await expect(navigation).resolves.toMatchObject({ success: true, milestone: 'load' });
+  });
+});
+
+describe('navigation metadata races', () => {
+  type EventHandler = (params: Record<string, unknown>) => void;
+
+  function createDelayedNavigationCDP() {
+    const handlers = new Map<string, Set<EventHandler>>();
+    let releaseFrame!: (value: unknown) => void;
+    const frameResponse = new Promise<unknown>((resolve) => {
+      releaseFrame = resolve;
+    });
+    const cdp = {
+      send: mock((method: string, params?: Record<string, unknown>) => {
+        if (method === 'Page.getFrameTree') return frameResponse;
+        if (method === 'Runtime.evaluate' && params?.['expression'] === 'location.href') {
+          return Promise.resolve({ result: { value: 'https://example.test/start' } });
+        }
+        return Promise.resolve({});
+      }),
+      on: mock((event: string, handler: EventHandler) => {
+        const bucket = handlers.get(event) ?? new Set<EventHandler>();
+        bucket.add(handler);
+        handlers.set(event, bucket);
+      }),
+      off: mock((event: string, handler: EventHandler) => {
+        handlers.get(event)?.delete(handler);
+      }),
+      emit(event: string, params: Record<string, unknown>) {
+        for (const handler of handlers.get(event) ?? []) handler(params);
+      },
+      releaseMetadata() {
+        releaseFrame({ frameTree: { frame: { id: 'main', loaderId: 'old-loader' } } });
+      },
+    };
+    return cdp;
+  }
+
+  async function flushMetadataRequest(): Promise<void> {
+    await Promise.resolve();
+    await Promise.resolve();
+  }
+
+  test('goto replays a main-frame lifecycle load seen before metadata is ready', async () => {
+    const cdp = createDelayedNavigationCDP();
+    const navigation = waitForNavigation(cdp as never, { timeout: 200, waitUntil: 'load' });
+    await flushMetadataRequest();
+
+    cdp.emit('Page.lifecycleEvent', {
+      frameId: 'main',
+      loaderId: 'new-loader',
+      name: 'load',
+    });
+    cdp.releaseMetadata();
+
+    await expect(navigation).resolves.toMatchObject({ success: true, milestone: 'load' });
+  });
+
+  test('history BFCache restore and frame navigation satisfy the load milestone', async () => {
+    const cdp = createDelayedNavigationCDP();
+    const navigation = waitForNavigation(cdp as never, {
+      timeout: 200,
+      waitUntil: 'load',
+      expectedUrl: 'https://example.test/previous',
+    });
+    await flushMetadataRequest();
+
+    cdp.emit('Page.frameNavigated', {
+      frame: {
+        id: 'main',
+        url: 'https://example.test/previous',
+        loaderId: 'old-loader',
+      },
+    });
+    cdp.emit('Page.lifecycleEvent', {
+      frameId: 'main',
+      loaderId: 'old-loader',
+      name: 'BackForwardCacheRestore',
+    });
+    cdp.releaseMetadata();
+
+    await expect(navigation).resolves.toMatchObject({ success: true, milestone: 'load' });
+  });
+
+  test('history BFCache frameNavigated can satisfy load when no lifecycle pair fires', async () => {
+    const cdp = createDelayedNavigationCDP();
+    const navigation = waitForNavigation(cdp as never, {
+      timeout: 200,
+      waitUntil: 'load',
+      expectedUrl: 'https://example.test/previous',
+    });
+    await flushMetadataRequest();
+    cdp.releaseMetadata();
+    await flushMetadataRequest();
+
+    cdp.emit('Page.frameNavigated', {
+      frame: {
+        id: 'main',
+        url: 'https://example.test/previous',
+        loaderId: 'old-loader',
+      },
+    });
+
+    await expect(navigation).resolves.toMatchObject({ success: true, milestone: 'load' });
+  });
+
+  test('link-click Page.loadEventFired is replayed after delayed metadata', async () => {
+    const cdp = createDelayedNavigationCDP();
+    const navigation = waitForNavigation(cdp as never, { timeout: 200, waitUntil: 'load' });
+    await flushMetadataRequest();
+
+    cdp.emit('Page.frameNavigated', {
+      frame: { id: 'main', url: 'https://example.test/next', loaderId: 'new-loader' },
+    });
+    cdp.emit('Page.loadEventFired', {});
+    cdp.releaseMetadata();
+
+    await expect(navigation).resolves.toMatchObject({ success: true, milestone: 'load' });
+  });
+
+  test('delayed metadata buffers child milestones without satisfying the main-frame wait', async () => {
+    const cdp = createDelayedNavigationCDP();
+    const navigation = waitForNavigation(cdp as never, { timeout: 200, waitUntil: 'load' });
+    await flushMetadataRequest();
+
+    cdp.emit('Page.lifecycleEvent', {
+      frameId: 'child',
+      loaderId: 'child-loader',
+      name: 'load',
+    });
+    cdp.releaseMetadata();
+
+    let settled = false;
+    void navigation.then(() => {
+      settled = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(settled).toBe(false);
+
+    cdp.emit('Page.frameNavigated', {
+      frame: { id: 'main', url: 'https://example.test/next', loaderId: 'new-loader' },
+    });
+    cdp.emit('Page.lifecycleEvent', {
+      frameId: 'main',
+      loaderId: 'new-loader',
+      name: 'load',
+    });
+    await expect(navigation).resolves.toMatchObject({ success: true, milestone: 'load' });
   });
 });

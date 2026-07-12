@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test';
 import { classifyFailure, getSuggestion } from '../../src/actions/executor.ts';
 import type { FailureReason } from '../../src/actions/types.ts';
 import { ActionabilityError } from '../../src/browser/actionability.ts';
+import { classifyStaleError } from '../../src/browser/stale-errors.ts';
 import { ElementNotFoundError, NavigationError, TimeoutError } from '../../src/browser/types.ts';
 import { CDPError } from '../../src/cdp/protocol.ts';
 
@@ -68,6 +69,11 @@ describe('classifyFailure', () => {
   it('stale node "does not belong" message -> detached', () => {
     const error = new Error('Node does not belong to the document');
     expect(classifyFailure(error).reason).toBe('detached');
+  });
+
+  it('classifies detached/context wording variants centrally', () => {
+    expect(classifyStaleError(new Error('Node is detached from document')).kind).toBe('detached');
+    expect(classifyStaleError(new Error('Execution context was destroyed')).kind).toBe('context');
   });
 
   it('unknown error -> unknown', () => {

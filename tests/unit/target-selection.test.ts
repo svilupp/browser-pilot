@@ -3,14 +3,22 @@
  */
 
 import { describe, expect, test } from 'bun:test';
+import type { Browser } from '../../src/browser/browser.ts';
+import { TargetNotFoundError } from '../../src/browser/types.ts';
 import type { TargetInfo } from '../../src/cdp/protocol.ts';
 
 type CDPCall = { method: string; params?: Record<string, unknown> };
 type EventHandler = (params: Record<string, unknown>) => void;
+type AnyEventHandler = (
+  method: string,
+  params: Record<string, unknown>,
+  sessionId?: string
+) => void;
 
 function createMockCDPClient() {
   const responses = new Map<string, unknown>();
   const eventHandlers = new Map<string, Set<EventHandler>>();
+  const anyHandlers = new Set<AnyEventHandler>();
 
   return {
     sent: [] as CDPCall[],
@@ -41,6 +49,42 @@ function createMockCDPClient() {
 
     off(_event: string, _handler: EventHandler) {
       eventHandlers.get(_event)?.delete(_handler);
+    },
+
+    // Firehose used by the session-scoped view that Browser.page() wraps a page
+    // in; the scope routes on()/off() through onAny()/offAny().
+    onAny(handler: AnyEventHandler) {
+      anyHandlers.add(handler);
+    },
+
+    offAny(handler: AnyEventHandler) {
+      anyHandlers.delete(handler);
+    },
+
+    onSessionEvent(_sessionId: string, _event: string, _handler: EventHandler) {
+      return () => {};
+    },
+
+    onTargetAttached(_handler: (info: unknown) => void) {
+      return () => {};
+    },
+
+    async setAutoAttach() {},
+
+    async runIfWaitingForDebugger() {},
+
+    hasSession(_sessionId: string) {
+      return false;
+    },
+
+    get sessions() {
+      return new Set<string>();
+    },
+
+    sessionId: 'mock-session-id' as string | undefined,
+
+    setSessionId(sessionId: string | undefined) {
+      this.sessionId = sessionId;
     },
 
     mockResponse(method: string, response: unknown) {
@@ -75,9 +119,6 @@ function makeTarget(overrides: Partial<TargetInfo> & { targetId: string }): Targ
   };
 }
 
-// biome-ignore lint/suspicious/noExplicitAny: test helper bypasses private constructor
-type AnyBrowser = any;
-
 async function createBrowserWithTargets(
   targets: TargetInfo[],
   evalResult?: { w: number; h: number }
@@ -98,7 +139,16 @@ async function createBrowserWithTargets(
   }
 
   // Bypass private constructor for testing
-  const browser: AnyBrowser = Object.create(Browser.prototype);
+  type BrowserHarness = Pick<Browser, 'page' | 'newPage'> & {
+    cdp: ReturnType<typeof createMockCDPClient>;
+    pages: Map<string, unknown>;
+    providerSession: {
+      wsUrl: string;
+      metadata: Record<string, unknown>;
+      close: () => Promise<void>;
+    };
+  };
+  const browser = Object.create(Browser.prototype) as BrowserHarness;
   browser.cdp = cdp;
   browser.pages = new Map();
   browser.providerSession = {
@@ -179,7 +229,7 @@ describe('Target Selection', () => {
     expect(attachCall?.params?.['targetId']).toBe('titled');
   });
 
-  test('creates new target when no page targets exist', async () => {
+  test('creates a background target when no page targets exist', async () => {
     const targets = [
       makeTarget({
         targetId: 'worker',
@@ -193,6 +243,40 @@ describe('Target Selection', () => {
 
     const createCall = cdp.findCall('Target.createTarget');
     expect(createCall).toBeDefined();
+    expect(createCall?.params).toEqual({ url: 'about:blank', background: true });
+  });
+
+  test('allows foreground behavior for a fallback-created target', async () => {
+    const targets = [
+      makeTarget({
+        targetId: 'worker',
+        type: 'service_worker',
+        url: 'http://localhost:3000/sw.js',
+      }),
+    ];
+
+    const { browser, cdp } = await createBrowserWithTargets(targets);
+    await browser.page(undefined, { background: false });
+
+    const createCall = cdp.findCall('Target.createTarget');
+    expect(createCall?.params).toEqual({ url: 'about:blank', background: false });
+  });
+
+  test('creates new pages in the background by default and supports foreground opt-in', async () => {
+    const { browser, cdp } = await createBrowserWithTargets([]);
+
+    await browser.newPage('https://example.com');
+    expect(cdp.findCall('Target.createTarget')?.params).toEqual({
+      url: 'https://example.com',
+      background: true,
+    });
+
+    cdp.sent.length = 0;
+    await browser.newPage('https://example.com/foreground', { background: false });
+    expect(cdp.findCall('Target.createTarget')?.params).toEqual({
+      url: 'https://example.com/foreground',
+      background: false,
+    });
   });
 
   test('filters by targetUrl when provided', async () => {
@@ -208,16 +292,16 @@ describe('Target Selection', () => {
     expect(attachCall?.params?.['targetId']).toBe('app');
   });
 
-  test('falls back to all targets when targetUrl matches nothing', async () => {
+  test('throws when targetUrl matches nothing', async () => {
     const targets = [
       makeTarget({ targetId: 'app', url: 'http://localhost:3000/login', title: 'Login' }),
     ];
 
     const { browser, cdp } = await createBrowserWithTargets(targets);
-    await browser.page(undefined, { targetUrl: 'nonexistent.com' });
-
-    const attachCall = cdp.findCall('Target.attachToTarget');
-    expect(attachCall?.params?.['targetId']).toBe('app');
+    await expect(browser.page(undefined, { targetUrl: 'nonexistent.com' })).rejects.toBeInstanceOf(
+      TargetNotFoundError
+    );
+    expect(cdp.findCall('Target.attachToTarget')).toBeUndefined();
   });
 
   test('uses explicit targetId when provided and valid', async () => {
@@ -233,14 +317,38 @@ describe('Target Selection', () => {
     expect(attachCall?.params?.['targetId']).toBe('second');
   });
 
-  test('falls back when explicit targetId no longer exists', async () => {
+  test('throws when explicit targetId no longer exists', async () => {
     const targets = [makeTarget({ targetId: 'only', url: 'http://example.com', title: 'Page' })];
 
     const { browser, cdp } = await createBrowserWithTargets(targets);
-    await browser.page(undefined, { targetId: 'gone-target' });
+    await expect(browser.page(undefined, { targetId: 'gone-target' })).rejects.toBeInstanceOf(
+      TargetNotFoundError
+    );
+    expect(cdp.findCall('Target.attachToTarget')).toBeUndefined();
+  });
+
+  test('allows an explicit compatibility fallback only when requested', async () => {
+    const targets = [makeTarget({ targetId: 'only', url: 'http://example.com', title: 'Page' })];
+
+    const { browser, cdp } = await createBrowserWithTargets(targets);
+    await browser.page(undefined, { targetId: 'gone-target', fallbackToBestTarget: true });
 
     const attachCall = cdp.findCall('Target.attachToTarget');
     expect(attachCall?.params?.['targetId']).toBe('only');
+  });
+
+  test('does not return a cached page for mismatched explicit constraints', async () => {
+    const targets = [
+      makeTarget({ targetId: 'first', url: 'http://example.com/first', title: 'First' }),
+      makeTarget({ targetId: 'second', url: 'http://example.com/second', title: 'Second' }),
+    ];
+
+    const { browser } = await createBrowserWithTargets(targets);
+    await browser.page(undefined, { targetId: 'first' });
+
+    await expect(browser.page(undefined, { targetId: 'second' })).rejects.toBeInstanceOf(
+      TargetNotFoundError
+    );
   });
 });
 

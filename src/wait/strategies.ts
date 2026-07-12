@@ -3,6 +3,12 @@
  */
 
 import { buildSpecialSelectorPredicateExpression } from '../browser/special-selectors.ts';
+import type {
+  NavigationMilestone,
+  ReadinessDiagnostics,
+  ReadyCondition,
+  WaitForReadyOptions,
+} from '../browser/types.ts';
 import type { CDPClient } from '../cdp/client.ts';
 
 export type WaitState = 'visible' | 'hidden' | 'attached' | 'detached';
@@ -21,6 +27,8 @@ export interface WaitOptions {
 export interface WaitResult {
   success: boolean;
   waitedMs: number;
+  milestone?: NavigationMilestone;
+  diagnostics?: ReadinessDiagnostics;
 }
 
 /**
@@ -61,6 +69,27 @@ function deepQuery(selector, root = document) {
 `;
 
 /**
+ * Shared visibility predicate, as a JS function declaration string so it can be
+ * inlined into `Runtime.evaluate` expressions. Defines `bpElementVisible(el)`:
+ * an element is visible when it exists AND its computed style is not
+ * display:none / visibility:hidden / opacity:0 AND its bounding box has
+ * non-zero width and height. Reused by the wait subsystem and
+ * `Page.elementState` so the notion of "visible" stays identical across both.
+ * Exported for use in page.ts and other modules.
+ */
+export const VISIBLE_PREDICATE_SCRIPT = `
+function bpElementVisible(el) {
+  if (!el) return false;
+  const style = getComputedStyle(el);
+  if (style.display === 'none') return false;
+  if (style.visibility === 'hidden') return false;
+  if (parseFloat(style.opacity) === 0) return false;
+  const rect = el.getBoundingClientRect();
+  return rect.width > 0 && rect.height > 0;
+}
+`;
+
+/**
  * Check if an element is visible in the viewport
  * Pierces shadow DOM boundaries automatically
  */
@@ -75,14 +104,8 @@ async function isElementVisible(
       specialExpression ??
       `(() => {
         ${DEEP_QUERY_SCRIPT}
-        const el = deepQuery(${JSON.stringify(selector)});
-        if (!el) return false;
-        const style = getComputedStyle(el);
-        if (style.display === 'none') return false;
-        if (style.visibility === 'hidden') return false;
-        if (parseFloat(style.opacity) === 0) return false;
-        const rect = el.getBoundingClientRect();
-        return rect.width > 0 && rect.height > 0;
+        ${VISIBLE_PREDICATE_SCRIPT}
+        return bpElementVisible(deepQuery(${JSON.stringify(selector)}));
       })()`,
     returnByValue: true,
   };
@@ -312,6 +335,29 @@ export interface NavigationOptions {
   timeout?: number;
   /** Include same-document navigation (pushState, anchors) */
   allowSameDocument?: boolean;
+  /** Lifecycle milestone correlated to the main-frame navigation. */
+  waitUntil?: NavigationMilestone;
+  /** Snapshot refs can be checked by backend node ID when supplied by Page. */
+  refMap?: Record<string, number>;
+  /** Optional destination URL used to reject late events from the old document. */
+  expectedUrl?: string;
+}
+
+async function getMainFrame(cdp: CDPClient): Promise<{
+  id?: string;
+  loaderId?: string;
+}> {
+  try {
+    const result = await cdp.send<{
+      frameTree?: { frame?: { id?: string; loaderId?: string } };
+    }>('Page.getFrameTree');
+    return {
+      id: result.frameTree?.frame?.id,
+      loaderId: result.frameTree?.frame?.loaderId,
+    };
+  } catch {
+    return {};
+  }
 }
 
 /**
@@ -337,64 +383,208 @@ export async function waitForNavigation(
   cdp: CDPClient,
   options: NavigationOptions = {}
 ): Promise<WaitResult> {
-  const { timeout = 30000, allowSameDocument = true } = options;
+  const { timeout = 30000, allowSameDocument = true, waitUntil = 'load', expectedUrl } = options;
 
   const startTime = Date.now();
-  let startUrl: string;
-
-  try {
-    startUrl = await getCurrentUrl(cdp);
-  } catch {
-    // If we can't get the URL, still try to wait for events
-    startUrl = '';
-  }
+  let startUrl = '';
+  let startLoaderId: string | undefined;
+  const initialUrl = getCurrentUrl(cdp).catch(() => '');
+  const initialFrame = getMainFrame(cdp);
 
   return new Promise<WaitResult>((resolve) => {
     let resolved = false;
+    let navigationStarted = false;
+    let metadataReady = false;
+    let mainFrameId: string | undefined;
+    let navigationLoaderId: string | undefined;
+    let lastMilestone: NavigationMilestone | undefined;
+    let pendingMilestone: NavigationMilestone | undefined;
+    const pendingLifecycleEvents: Record<string, unknown>[] = [];
     const cleanup: (() => void)[] = [];
 
-    const done = (success: boolean) => {
+    const done = (success: boolean, milestone?: NavigationMilestone) => {
       if (resolved) return;
       resolved = true;
+      lastMilestone = milestone ?? lastMilestone;
       for (const fn of cleanup) fn();
-      resolve({ success, waitedMs: Date.now() - startTime });
+      resolve({ success, waitedMs: Date.now() - startTime, milestone: lastMilestone });
+    };
+
+    const isMainFrame = (frameId?: unknown, parentId?: unknown): boolean => {
+      if (mainFrameId) return frameId === mainFrameId;
+      return parentId === undefined || parentId === null;
+    };
+
+    const recordNavigation = (loaderId?: unknown) => {
+      navigationStarted = true;
+      if (typeof loaderId === 'string' && loaderId !== startLoaderId) {
+        navigationLoaderId = loaderId;
+      }
+    };
+
+    const reached = (milestone: NavigationMilestone): boolean => {
+      const order: NavigationMilestone[] = ['commit', 'domcontentloaded', 'load', 'networkidle'];
+      return order.indexOf(milestone) >= order.indexOf(waitUntil);
+    };
+
+    const mark = (milestone: NavigationMilestone) => {
+      if (reached(milestone)) done(true, milestone);
+      else lastMilestone = milestone;
+    };
+
+    const isBackForwardCacheRestore = (name: string): boolean =>
+      name.toLowerCase().replace(/[_-]/g, '') === 'backforwardcacherestore';
+
+    const bufferMilestone = (milestone: NavigationMilestone) => {
+      const order: NavigationMilestone[] = ['commit', 'domcontentloaded', 'load', 'networkidle'];
+      if (!pendingMilestone || order.indexOf(milestone) > order.indexOf(pendingMilestone)) {
+        pendingMilestone = milestone;
+      }
     };
 
     // Timeout handler
     const timer = setTimeout(() => done(false), timeout);
     cleanup.push(() => clearTimeout(timer));
 
-    // Event: Full page load
-    const onLoad = () => done(true);
+    // Main-target load events are scoped by the Page's CDP view. They still
+    // require an observed navigation so a stale load event from the previous
+    // document cannot satisfy a new wait.
+    const onLoad = () => {
+      if (!navigationStarted) return;
+      if (!metadataReady) {
+        bufferMilestone('load');
+        return;
+      }
+      mark('load');
+    };
     cdp.on('Page.loadEventFired', onLoad);
     cleanup.push(() => cdp.off('Page.loadEventFired', onLoad));
 
-    // Event: Frame navigation (covers history.back/forward for cross-document)
-    const onFrameNavigated = (params: Record<string, unknown>) => {
-      const frame = params['frame'] as { url: string; parentId?: string } | undefined;
-      // Only trigger for main frame (no parentId means main frame)
-      if (frame && !frame.parentId && frame.url !== startUrl) {
-        done(true);
+    const onDomContentLoaded = () => {
+      if (!navigationStarted) return;
+      if (!metadataReady) {
+        bufferMilestone('domcontentloaded');
+        return;
       }
+      mark('domcontentloaded');
+    };
+    cdp.on('Page.domContentEventFired', onDomContentLoaded);
+    cleanup.push(() => cdp.off('Page.domContentEventFired', onDomContentLoaded));
+
+    // A main-frame frameNavigated is the commit boundary. Child frame events
+    // are intentionally ignored, even when they carry a newer loaderId.
+    const onFrameNavigated = (params: Record<string, unknown>) => {
+      const frame = params['frame'] as
+        | { id?: string; url?: string; parentId?: string; loaderId?: string }
+        | undefined;
+      if (!frame || !isMainFrame(frame.id, frame.parentId)) return;
+      if (expectedUrl && frame.url && frame.url !== expectedUrl) return;
+      if (isBackForwardCacheRestore(String(params['type'] ?? ''))) {
+        mainFrameId = frame.id ?? mainFrameId;
+        recordNavigation(frame.loaderId);
+        if (!metadataReady) bufferMilestone('load');
+        else mark('load');
+        return;
+      }
+      if (frame.loaderId && startLoaderId && frame.loaderId === startLoaderId) {
+        // A BFCache history restore can reuse the starting document's loader.
+        // With an exact expected URL, the main-frame frameNavigated event is
+        // sufficient to treat the restored document as loaded.
+        if (expectedUrl && frame.url === expectedUrl) {
+          mainFrameId = frame.id ?? mainFrameId;
+          recordNavigation(frame.loaderId);
+          mark('load');
+        }
+        return;
+      }
+      mainFrameId = frame.id ?? mainFrameId;
+      recordNavigation(frame.loaderId);
+      if (frame.loaderId && frame.loaderId !== startLoaderId) navigationLoaderId = frame.loaderId;
+      mark('commit');
     };
     cdp.on('Page.frameNavigated', onFrameNavigated);
     cleanup.push(() => cdp.off('Page.frameNavigated', onFrameNavigated));
 
     // Event: Same-document navigation (pushState, anchors)
     if (allowSameDocument) {
-      const onSameDoc = () => done(true);
+      const onSameDoc = (params: Record<string, unknown>) => {
+        if (!isMainFrame(params['frameId'])) return;
+        recordNavigation();
+        // Same-document navigation has no new DOMContentLoaded/load lifecycle;
+        // commit is the only meaningful milestone for it.
+        mark('commit');
+      };
       cdp.on('Page.navigatedWithinDocument', onSameDoc);
       cleanup.push(() => cdp.off('Page.navigatedWithinDocument', onSameDoc));
     }
 
-    // Event: Network idle lifecycle (catches SPAs that don't fire loadEventFired)
+    // Lifecycle events are accepted only for the main frame and the loader
+    // observed at commit. This prevents a busy child frame from satisfying a
+    // main-page networkidle wait.
     const onLifecycle = (params: Record<string, unknown>) => {
-      if (params['name'] === 'networkIdle') {
-        done(true);
+      if (!metadataReady) {
+        // Lifecycle events include a frameId, but they can arrive before the
+        // initial frame-tree response identifies the main frame. Keep them
+        // until that identity is known so a child frame cannot win the wait.
+        pendingLifecycleEvents.push(params);
+        return;
       }
+      if (!mainFrameId || params['frameId'] !== mainFrameId) return;
+      const loaderId = params['loaderId'];
+      if (navigationLoaderId && loaderId && loaderId !== navigationLoaderId) return;
+      if (!navigationStarted && typeof loaderId === 'string' && loaderId !== startLoaderId) {
+        recordNavigation(loaderId);
+      }
+      const name = String(params['name'] ?? '');
+      if (isBackForwardCacheRestore(name)) {
+        // BFCache restores do not necessarily emit a new loader or the normal
+        // DOMContentLoaded/load pair. The event is main-frame scoped above and
+        // therefore is safe to use as the load milestone.
+        if (!navigationStarted) recordNavigation(loaderId);
+        mark('load');
+        return;
+      }
+      if (!navigationStarted) return;
+      if (name === 'DOMContentLoaded') mark('domcontentloaded');
+      else if (name === 'load') mark('load');
+      else if (name === 'networkIdle') mark('networkidle');
     };
     cdp.on('Page.lifecycleEvent', onLifecycle);
     cleanup.push(() => cdp.off('Page.lifecycleEvent', onLifecycle));
+
+    const replayPendingMilestones = () => {
+      if (!metadataReady || resolved) return;
+
+      const lifecycleEvents = pendingLifecycleEvents.splice(0);
+      for (const params of lifecycleEvents) {
+        onLifecycle(params);
+        if (resolved) return;
+      }
+
+      if (pendingMilestone) {
+        const milestone = pendingMilestone;
+        pendingMilestone = undefined;
+        mark(milestone);
+      }
+    };
+
+    // The metadata requests were started before event registration, so their
+    // CDP messages are already queued before the caller triggers navigation.
+    // The handlers above are nevertheless installed first from the caller's
+    // perspective, preserving the arm-before-trigger contract.
+    void initialUrl.then((url) => {
+      startUrl = url;
+    });
+    void initialFrame.then((frame) => {
+      if (!mainFrameId) mainFrameId = frame.id;
+      // If the frame-tree response raced with navigation, it may already
+      // describe the new document. Keep the loader observed at the main-frame
+      // commit as the navigation loader instead of mistaking it for the
+      // starting loader.
+      if (frame.loaderId !== navigationLoaderId) startLoaderId = frame.loaderId;
+      metadataReady = true;
+      replayPendingMilestones();
+    });
 
     // Fallback: URL polling (catches edge cases)
     const pollUrl = async () => {
@@ -403,8 +593,12 @@ export async function waitForNavigation(
         if (resolved) return;
         try {
           const currentUrl = await getCurrentUrl(cdp);
-          if (startUrl && currentUrl !== startUrl) {
-            done(true);
+          const destinationReached = expectedUrl
+            ? currentUrl === expectedUrl
+            : startUrl && currentUrl !== startUrl;
+          if (destinationReached) {
+            recordNavigation();
+            mark('commit');
             return;
           }
         } catch {
@@ -414,6 +608,209 @@ export async function waitForNavigation(
     };
     void pollUrl();
   });
+}
+
+interface ReadyCheckResult {
+  matched: boolean;
+  label: string;
+}
+
+async function evaluateReadyPredicate(
+  cdp: CDPClient,
+  predicate: string | (() => unknown),
+  contextId?: number
+): Promise<boolean> {
+  const expression = typeof predicate === 'function' ? `(${predicate.toString()})()` : predicate;
+  const params: Record<string, unknown> = { expression, returnByValue: true };
+  if (contextId !== undefined) params['contextId'] = contextId;
+  try {
+    const result = await cdp.send<{ result: { value?: unknown } }>('Runtime.evaluate', params);
+    return result.result.value === true;
+  } catch {
+    return false;
+  }
+}
+
+async function checkReadyCondition(
+  cdp: CDPClient,
+  condition: ReadyCondition,
+  options: { contextId?: number; refMap?: Record<string, number> }
+): Promise<ReadyCheckResult> {
+  if (typeof condition === 'string') {
+    const selector = condition;
+    if (selector.startsWith('ref:') && options.refMap) {
+      const backendNodeId = options.refMap[selector.slice(4)];
+      if (backendNodeId !== undefined) {
+        try {
+          const pushed = await cdp.send<{ nodeIds?: number[] }>(
+            'DOM.pushNodesByBackendIdsToFrontend',
+            { backendNodeIds: [backendNodeId] }
+          );
+          const nodeId = pushed.nodeIds?.[0];
+          if (nodeId) {
+            const resolved = await cdp.send<{ object?: { objectId?: string } }>('DOM.resolveNode', {
+              nodeId,
+            });
+            if (resolved.object?.objectId) {
+              const checked = await cdp.send<{ result: { value?: boolean } }>(
+                'Runtime.callFunctionOn',
+                {
+                  objectId: resolved.object.objectId,
+                  functionDeclaration: `function() {
+                    if (!this || !this.isConnected) return false;
+                    var style = getComputedStyle(this);
+                    var rect = this.getBoundingClientRect();
+                    return style.display !== 'none' && style.visibility !== 'hidden' &&
+                      parseFloat(style.opacity || '1') !== 0 && rect.width > 0 && rect.height > 0;
+                  }`,
+                  returnByValue: true,
+                }
+              );
+              return { matched: checked.result.value === true, label: selector };
+            }
+          }
+        } catch {
+          // A stale ref remains unmet; callers can use a selector/role fallback.
+        }
+      }
+      return { matched: false, label: selector };
+    }
+    try {
+      const matched = await isElementVisible(cdp, selector, options.contextId);
+      return { matched, label: `visible ${selector}` };
+    } catch {
+      return { matched: false, label: `visible ${selector}` };
+    }
+  }
+
+  if (condition.selector !== undefined) {
+    const selectors = Array.isArray(condition.selector) ? condition.selector : [condition.selector];
+    for (const selector of selectors) {
+      const result = await checkReadyCondition(cdp, selector, options);
+      if (result.matched) return { matched: true, label: `visible ${selector}` };
+    }
+    return { matched: false, label: `visible ${selectors.join(' or ')}` };
+  }
+  if (condition.url !== undefined) {
+    const current = await getCurrentUrl(cdp).catch(() => '');
+    return { matched: current.includes(condition.url), label: `url includes ${condition.url}` };
+  }
+  if (condition.predicate !== undefined) {
+    return {
+      matched: await evaluateReadyPredicate(cdp, condition.predicate, options.contextId),
+      label: 'predicate',
+    };
+  }
+  return { matched: false, label: 'empty readiness condition' };
+}
+
+async function readDomQuietFor(cdp: CDPClient, contextId?: number): Promise<number> {
+  const params: Record<string, unknown> = {
+    expression: `(() => {
+      const key = '__browserPilotReadinessState';
+      const state = globalThis[key] || (globalThis[key] = { lastMutation: performance.now() });
+      if (!state.observer && document.documentElement) {
+        state.observer = new MutationObserver(() => { state.lastMutation = performance.now(); });
+        state.observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true, characterData: true });
+      }
+      return performance.now() - state.lastMutation;
+    })()`,
+    returnByValue: true,
+  };
+  if (contextId !== undefined) params['contextId'] = contextId;
+  try {
+    const result = await cdp.send<{ result: { value?: number } }>('Runtime.evaluate', params);
+    return typeof result.result.value === 'number' ? result.result.value : 0;
+  } catch {
+    return 0;
+  }
+}
+
+async function clearDomQuietState(cdp: CDPClient, contextId?: number): Promise<void> {
+  const params: Record<string, unknown> = {
+    expression: `(() => {
+      const state = globalThis.__browserPilotReadinessState;
+      state?.observer?.disconnect?.();
+      try { delete globalThis.__browserPilotReadinessState; } catch {}
+    })()`,
+    returnByValue: true,
+  };
+  if (contextId !== undefined) params['contextId'] = contextId;
+  try {
+    await cdp.send('Runtime.evaluate', params);
+  } catch {}
+}
+
+/** Wait for SPA/application conditions after a browser navigation milestone. */
+export async function waitForReady(
+  cdp: CDPClient,
+  options: WaitForReadyOptions & { refMap?: Record<string, number> } = {}
+): Promise<WaitResult> {
+  const timeout = options.timeout ?? 30000;
+  const pollInterval = options.pollInterval ?? 100;
+  const startTime = Date.now();
+  const deadline = startTime + timeout;
+  const anyConditions = options.any ?? [];
+  const allConditions = options.all ?? [];
+  const loadingSelectors = options.loadingHidden
+    ? Array.isArray(options.loadingHidden)
+      ? options.loadingHidden
+      : [options.loadingHidden]
+    : [];
+  const quietFor = options.domQuietForMs ?? options.stableForMs ?? 0;
+  let unmet: string[] = [];
+
+  try {
+    while (Date.now() <= deadline) {
+      const checks: ReadyCheckResult[] = [];
+      if (options.url !== undefined)
+        checks.push(await checkReadyCondition(cdp, { url: options.url }, options));
+      if (options.predicate !== undefined)
+        checks.push(await checkReadyCondition(cdp, { predicate: options.predicate }, options));
+      if (anyConditions.length > 0) {
+        const results = await Promise.all(
+          anyConditions.map((condition) => checkReadyCondition(cdp, condition, options))
+        );
+        checks.push({
+          matched: results.some((result) => result.matched),
+          label: `any(${results.map((r) => r.label).join(', ')})`,
+        });
+      }
+      if (allConditions.length > 0)
+        checks.push(
+          ...(await Promise.all(
+            allConditions.map((condition) => checkReadyCondition(cdp, condition, options))
+          ))
+        );
+      for (const selector of loadingSelectors) {
+        const hidden = !(await isElementVisible(cdp, selector, options.contextId).catch(
+          () => false
+        ));
+        checks.push({ matched: hidden, label: `loading hidden ${selector}` });
+      }
+      const missing = checks.filter((check) => !check.matched).map((check) => check.label);
+      const quiet = quietFor <= 0 || (await readDomQuietFor(cdp, options.contextId)) >= quietFor;
+      if (!quiet) missing.push(`DOM quiet for ${quietFor}ms`);
+      unmet = missing;
+      if (missing.length === 0) {
+        return { success: true, waitedMs: Date.now() - startTime };
+      }
+      if (Date.now() >= deadline) break;
+      await sleep(Math.min(pollInterval, Math.max(0, deadline - Date.now())));
+    }
+    return {
+      success: false,
+      waitedMs: Date.now() - startTime,
+      diagnostics: {
+        ready: false,
+        waitedMs: Date.now() - startTime,
+        unmetConditions: unmet,
+        checkedAt: new Date().toISOString(),
+      },
+    };
+  } finally {
+    if (quietFor > 0) await clearDomQuietState(cdp, options.contextId);
+  }
 }
 
 /**

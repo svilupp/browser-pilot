@@ -6,6 +6,7 @@
  */
 
 import { type BrowserOptions, connect } from '../../index.ts';
+import { getBuildProvenance } from '../../runtime/provenance.ts';
 import { formatBrowserDiscoveryError, resolveCLIEndpoint } from '../browser-endpoint.ts';
 import { spawnDaemon, waitForDaemonReady } from '../daemon-spawn.ts';
 import { output } from '../index.ts';
@@ -48,6 +49,7 @@ Local options:
   -r, --resume <id>       Resume an existing session by ID
   -s, --session <id>      Alias for --resume
   --new-tab               Create and attach to a fresh tab instead of reusing an existing one
+  --foreground            With --new-tab, opt into foregrounding the created tab
   --target-url <str>      Filter targets to those whose URL contains this string
   --api-key <key>         API key for cloud providers
   --project-id <id>       Project ID for BrowserBase provider
@@ -100,6 +102,7 @@ interface ConnectOptions {
   name?: string;
   resume?: string;
   newTab?: boolean;
+  foreground?: boolean;
   targetUrl?: string;
   apiKey?: string;
   projectId?: string;
@@ -171,6 +174,8 @@ function parseConnectArgs(args: string[]): ConnectOptions {
       options.resume = args[++i];
     } else if (arg === '--new-tab') {
       options.newTab = true;
+    } else if (arg === '--foreground') {
+      options.foreground = true;
     } else if (arg === '--target-url') {
       options.targetUrl = args[++i];
     } else if (arg === '--api-key') {
@@ -320,10 +325,10 @@ export async function connectCommand(
   // Connect to browser
   const browser = await connect(connectOptions);
   const page = options.newTab
-    ? await browser.newPage(pageUrl ?? 'about:blank')
+    ? await browser.newPage(pageUrl ?? 'about:blank', { background: options.foreground !== true })
     : await browser.page(
         undefined,
-        options.targetUrl ? { targetUrl: options.targetUrl } : undefined
+        options.targetUrl !== undefined ? { targetUrl: options.targetUrl } : undefined
       );
   const currentUrl = await resolveInitialPageUrl(page, pageUrl);
 
@@ -360,6 +365,7 @@ export async function connectCommand(
       ...(resolvedChannel ? { resolvedChannel } : {}),
       ...(resolvedUserDataDir ? { resolvedUserDataDir } : {}),
       ...(recordSettings ? { record: recordSettings } : {}),
+      provenance: getBuildProvenance(),
     },
   };
   const outputMetadata = session.metadata;
@@ -407,6 +413,7 @@ export async function connectCommand(
       connectionSource,
       resolvedChannel,
       resolvedUserDataDir,
+      provenance: getBuildProvenance(),
       metadata: outputMetadata,
       daemon: daemonResult,
     },

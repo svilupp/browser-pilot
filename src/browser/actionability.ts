@@ -11,26 +11,45 @@ import type { CDPClient } from '../cdp/client.ts';
 
 export type ActionabilityCheck = 'visible' | 'enabled' | 'stable' | 'hitTarget' | 'editable';
 
+export interface HitElement {
+  tag: string;
+  id?: string;
+  className?: string;
+}
+
+export interface PointerEventsDiagnosis {
+  target: string;
+  ancestorChain: string[];
+}
+
 export interface ActionabilityResult {
   actionable: boolean;
   reason?: string;
   failureType?: ActionabilityCheck;
   coveringElement?: { tag: string; id?: string; className?: string };
+  hitElement?: HitElement;
+  pointerEvents?: PointerEventsDiagnosis;
 }
 
 export class ActionabilityError extends Error {
   failureType?: ActionabilityCheck;
   coveringElement?: ActionabilityResult['coveringElement'];
+  hitElement?: ActionabilityResult['hitElement'];
+  pointerEvents?: ActionabilityResult['pointerEvents'];
 
   constructor(
     message: string,
     failureType?: ActionabilityCheck,
-    coveringElement?: ActionabilityResult['coveringElement']
+    coveringElement?: ActionabilityResult['coveringElement'],
+    hitElement?: ActionabilityResult['hitElement'],
+    pointerEvents?: ActionabilityResult['pointerEvents']
   ) {
     super(message);
     this.name = 'ActionabilityError';
     this.failureType = failureType;
     this.coveringElement = coveringElement;
+    this.hitElement = hitElement;
+    this.pointerEvents = pointerEvents;
   }
 }
 
@@ -207,6 +226,49 @@ export const CHECK_HIT_TARGET = `function(x, y) {
     y = rect.y + rect.height / 2;
   }
 
+  function describe(element) {
+    if (!element || !element.tagName) return undefined;
+    return {
+      tag: element.tagName.toLowerCase(),
+      id: element.id || undefined,
+      className: (typeof element.className === 'string' && element.className) || undefined
+    };
+  }
+
+  function composedParent(element) {
+    if (!element) return null;
+    if (element.parentElement) return element.parentElement;
+    var root = element.getRootNode && element.getRootNode();
+    return root && root.host ? root.host : null;
+  }
+
+  function isComposedDescendant(ancestor, element) {
+    var current = element;
+    while (current) {
+      if (current === ancestor) return true;
+      current = composedParent(current);
+    }
+    return false;
+  }
+
+  var pointerEvents = [];
+  var pointerNode = this;
+  while (pointerNode && pointerNode.nodeType === 1) {
+    var pointerValue = getComputedStyle(pointerNode).pointerEvents;
+    pointerEvents.push(pointerNode.tagName.toLowerCase() + ': ' + pointerValue);
+    pointerNode = composedParent(pointerNode);
+  }
+  var targetPointerEvents = getComputedStyle(this).pointerEvents;
+  var pointerDiagnosis = { target: targetPointerEvents, ancestorChain: pointerEvents };
+  if (targetPointerEvents === 'none') {
+    return {
+      actionable: false,
+      reason: 'Element has pointer-events:none and cannot receive the coordinate event. ' +
+        'Target its associated label or an interactive descendant instead.',
+      pointerEvents: pointerDiagnosis
+    };
+  }
+
   function checkPoint(root, px, py) {
     var method = root.elementsFromPoint || root.msElementsFromPoint;
     if (!method) return [];
@@ -231,11 +293,13 @@ export const CHECK_HIT_TARGET = `function(x, y) {
     break;
   }
 
-  // Target must be the top-most hit element or an ancestor/descendant
+  // The actual hit may be the target itself or a descendant inside it. An
+  // ancestor hit is not accepted: it can be a covering/overlay element that
+  // merely contains the intended target.
   for (var j = 0; j < topHits.length; j++) {
     var hit = topHits[j];
-    if (hit === this || this.contains(hit) || hit.contains(this)) {
-      return { actionable: true };
+    if (hit === this || isComposedDescendant(this, hit)) {
+      return { actionable: true, hitElement: describe(hit), pointerEvents: pointerDiagnosis };
     }
   }
 
@@ -252,11 +316,17 @@ export const CHECK_HIT_TARGET = `function(x, y) {
         tag: top.tagName.toLowerCase(),
         id: top.id || undefined,
         className: (typeof top.className === 'string' && top.className) || undefined
-      }
+      },
+      hitElement: describe(top),
+      pointerEvents: pointerDiagnosis
     };
   }
 
-  return { actionable: false, reason: 'No element found at click point (' + x + ', ' + y + '). Try scrolling the element into view first.' };
+  return {
+    actionable: false,
+    reason: 'No element found at click point (' + x + ', ' + y + '). Try scrolling the element into view first.',
+    pointerEvents: pointerDiagnosis
+  };
 }`;
 
 /**
@@ -449,7 +519,9 @@ export async function ensureActionable(
       throw new ActionabilityError(
         `Element not actionable: ${result.reason}`,
         result.failureType,
-        result.coveringElement
+        result.coveringElement,
+        result.hitElement,
+        result.pointerEvents
       );
     }
 

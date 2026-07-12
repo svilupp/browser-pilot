@@ -12,8 +12,24 @@ export {
   generateAnnotation,
   selectBestSelectors,
 } from './aggregator.ts';
+export type {
+  RecordingAction,
+  RecordingExecution,
+  RecordingFrame,
+  RecordingIntegrityOptions,
+  RecordingIntegrityResult,
+  RecordingManifest,
+  RecordingScreenshot,
+} from './manifest.ts';
 // Export recording manifest types
-export type { RecordingFrame, RecordingManifest } from './manifest.ts';
+export {
+  assertRecordingManifestIntegrity,
+  canonicalizeRecordingArtifact,
+  createRecordingManifest,
+  isCanonicalRecordingManifest,
+  isLegacyRecordingManifest,
+  validateRecordingManifest,
+} from './manifest.ts';
 export type { ListenMode, RecorderListenOptions, RecorderOptions } from './recorder.ts';
 // Export Recorder class and options
 export { Recorder } from './recorder.ts';

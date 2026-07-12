@@ -234,6 +234,49 @@ describe('Browser Integration', () => {
     });
   });
 
+  test('should select all with modifier shortcuts', async () => {
+    const { page, baseUrl } = ctx.get();
+
+    await page.goto(`${baseUrl}/form.html`);
+    await page.fill('#name', 'initial');
+    await page.shortcut('Meta+a');
+
+    const selection = await page.evaluate(() => {
+      const input = document.getElementById('name') as HTMLInputElement;
+      return { start: input.selectionStart, end: input.selectionEnd };
+    });
+
+    expect(selection).toEqual({ start: 0, end: 7 });
+    await page.press('Backspace');
+    expect(
+      await page.evaluate(() => (document.getElementById('name') as HTMLInputElement).value)
+    ).toBe('');
+  });
+
+  test('should expose dispatch receipts for fill, type, and native select', async () => {
+    const { page, baseUrl } = ctx.get();
+
+    await page.goto(`${baseUrl}/react-form.html`);
+
+    await page.fill('#username', 'receipt');
+    expect(page.getLastActionReceipt()).toMatchObject({
+      dispatchState: 'dispatched',
+      retrySafe: false,
+    });
+
+    await page.type('#username', 'x', { delay: 0 });
+    expect(page.getLastActionReceipt()).toMatchObject({
+      dispatchState: 'dispatched',
+      retrySafe: false,
+    });
+
+    await page.select('#country', 'ca');
+    expect(page.getLastActionReceipt()).toMatchObject({
+      dispatchState: 'dispatched',
+      retrySafe: false,
+    });
+  });
+
   // Navigation test last since it changes page state
   test('should click elements and navigate', async () => {
     const { page, baseUrl } = ctx.get();

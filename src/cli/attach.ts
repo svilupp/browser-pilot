@@ -9,6 +9,7 @@
 import type { BatchOptions, BatchResult, Step } from '../actions/types.ts';
 import type { Browser } from '../browser/browser.ts';
 import type { Page } from '../browser/page.ts';
+import { TargetNotFoundError } from '../browser/types.ts';
 import { clearDaemonFromSession, isDaemonAlive } from '../daemon/lifecycle.ts';
 import { DAEMON_MAX_AGE_MS } from '../daemon/types.ts';
 import { addBatchToPage, connect } from '../index.ts';
@@ -142,6 +143,7 @@ export async function attachSession(
         : 'daemon expired (>60min)';
       await cleanupStaleDaemon(session, reason);
     } else {
+      let closeDaemonClient: (() => Promise<void>) | undefined;
       try {
         const { createDaemonTransport } = await import('../daemon/transport.ts');
         const { createCDPClientFromTransport } = await import('../cdp/client.ts');
@@ -150,16 +152,37 @@ export async function attachSession(
         const cdp = createCDPClientFromTransport(transport, {
           debug: options.trace,
         });
+        closeDaemonClient = () => cdp.close();
 
         const { Browser: BrowserClass } = await import('../browser/browser.ts');
         const { Page: PageClass } = await import('../browser/page.ts');
+        const { createSessionScopedCDP } = await import('../cdp/session-scope.ts');
         const browser = BrowserClass.fromCDP(cdp, session);
+        if (session.targetId) {
+          const { targetInfos } = await cdp.send<{
+            targetInfos: Array<{ type: string; targetId: string; url: string; title?: string }>;
+          }>('Target.getTargets', undefined, null);
+          const pageTargets = targetInfos.filter((target) => target.type === 'page');
+          if (!pageTargets.some((target) => target.targetId === session.targetId)) {
+            throw new TargetNotFoundError({
+              targetId: session.targetId,
+              availableTargets: pageTargets,
+              reason: 'The persisted session target is no longer attached.',
+            });
+          }
+        }
         const page =
           session.daemon.cdpSessionId && session.targetId
             ? addBatchToPage(
                 await (async () => {
-                  cdp.setSessionId(session.daemon?.cdpSessionId);
-                  const attachedPage = new PageClass(cdp, session.targetId!);
+                  const cdpSessionId = session.daemon?.cdpSessionId as string;
+                  // Keep the raw client's default session in sync for any code
+                  // that reads it, but pin the Page to a scoped view so its
+                  // session-omitting sends/events stay on ITS target even if
+                  // another target is later attached on the shared client.
+                  cdp.setSessionId(cdpSessionId);
+                  const scoped = createSessionScopedCDP(cdp, cdpSessionId);
+                  const attachedPage = new PageClass(scoped, session.targetId!);
                   await attachedPage.init();
                   return attachedPage;
                 })()
@@ -176,6 +199,13 @@ export async function attachSession(
 
         return { session, browser, page, viaDaemon: true };
       } catch (err) {
+        if (err instanceof TargetNotFoundError) {
+          // Target selection failures are deterministic, not stale-daemon
+          // evidence. Preserve the healthy daemon/session metadata and close
+          // only this client connection before surfacing the error.
+          await closeDaemonClient?.();
+          throw err;
+        }
         const reason = err instanceof Error ? err.message : String(err);
         await cleanupStaleDaemon(session, reason);
         // Fall through to direct WebSocket

@@ -23,6 +23,26 @@ const ACTION_ROLE_MAP: Record<string, string[]> = {
 };
 
 /**
+ * Normalize a slug-like token into a space-separated, human-readable phrase
+ * so it can be fuzzy-matched against accessible names.
+ *
+ * - `create-order`  -> `create order`   (hyphen/underscore separators)
+ * - `createOrder`   -> `create order`   (camelCase boundary)
+ * - `create_OrderId`-> `create order id`
+ *
+ * This is what lets dash-y / camelCase testid & id intents clear the fuzzy
+ * threshold against names like `Create Order`.
+ */
+export function normalizeSlug(token: string): string {
+  return token
+    .replace(/[-_]+/g, ' ') // hyphen/underscore separators -> spaces
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2') // camelCase -> camel Case
+    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2') // ACRONYMWord -> ACRONYM Word
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
  * Extract search intent from failed selectors
  */
 function extractIntent(selectors: string[]): { text: string; patterns: string[] } {
@@ -39,25 +59,25 @@ function extractIntent(selectors: string[]): { text: string; patterns: string[] 
     // #id-name -> id-name
     const idMatch = selector.match(/#([a-zA-Z0-9_-]+)/);
     if (idMatch) {
-      patterns.push(idMatch[1]!);
+      patterns.push(normalizeSlug(idMatch[1]!));
     }
 
     // [aria-label="text"] -> text
     const ariaMatch = selector.match(/\[aria-label=["']([^"']+)["']\]/);
     if (ariaMatch) {
-      patterns.push(ariaMatch[1]!);
+      patterns.push(normalizeSlug(ariaMatch[1]!));
     }
 
-    // [data-testid="name"] -> name
-    const testidMatch = selector.match(/\[data-testid=["']([^"']+)["']\]/);
+    // [data-testid="name"] / data-test / data-qa -> name
+    const testidMatch = selector.match(/\[data-(?:testid|test-id|test|qa)=["']([^"']+)["']\]/);
     if (testidMatch) {
-      patterns.push(testidMatch[1]!);
+      patterns.push(normalizeSlug(testidMatch[1]!));
     }
 
     // .class-name -> class-name
     const classMatch = selector.match(/\.([a-zA-Z0-9_-]+)/);
     if (classMatch) {
-      patterns.push(classMatch[1]!);
+      patterns.push(normalizeSlug(classMatch[1]!));
     }
   }
 
@@ -150,7 +170,8 @@ export async function generateHints(
   page: Page,
   failedSelectors: string[],
   actionType: string,
-  maxHints: number = 3
+  maxHints: number = 3,
+  options: { minScore?: number } = {}
 ): Promise<FailureHint[]> {
   // Take a snapshot to get current page state
   let snapshot: PageSnapshot;
@@ -158,6 +179,31 @@ export async function generateHints(
     snapshot = await page.snapshot();
   } catch {
     return []; // Can't generate hints if snapshot fails
+  }
+
+  // We're already on the cold not-found path. If a plain CSS selector matches
+  // only inside a (same-origin) iframe, snapshot()/CSS resolution can't see it
+  // — surface a distinct hint so callers know to switchToFrame() rather than
+  // chasing a look-alike parent match. Best-effort; never throws.
+  const cssSelector = failedSelectors.find(
+    (s) => !s.startsWith('ref:') && !s.startsWith('text:') && !s.startsWith('role:')
+  );
+  let iframeHint: FailureHint | undefined;
+  if (cssSelector) {
+    try {
+      if ((await page.locateSelectorFrame(cssSelector)) === 'iframe') {
+        iframeHint = {
+          selector: cssSelector,
+          reason:
+            `Selector matches only inside an iframe. Call switchToFrame(<iframe selector>) ` +
+            'before acting on it (snapshot/CSS resolution does not pierce iframes).',
+          confidence: 'high',
+          element: { ref: '', role: 'iframe', name: cssSelector },
+        };
+      }
+    } catch {
+      // Detection is advisory only.
+    }
   }
 
   // Extract search intent from failed selectors
@@ -172,14 +218,18 @@ export async function generateHints(
   }
 
   // Fuzzy match against candidates
-  const matches = fuzzyMatchElements(intent.text, candidates, maxHints * 2);
+  const matches = fuzzyMatchElements(intent.text, candidates, {
+    maxResults: maxHints * 2,
+    minScore: options.minScore,
+  });
 
   if (matches.length === 0) {
-    return [];
+    return iframeHint ? [iframeHint] : [];
   }
 
   // Diversify hints
-  return diversifyHints(matches, maxHints);
+  const diversified = diversifyHints(matches, maxHints);
+  return iframeHint ? [iframeHint, ...diversified] : diversified;
 }
 
 /**
@@ -189,7 +239,8 @@ export function generateHintsFromSnapshot(
   snapshot: PageSnapshot,
   failedSelectors: string[],
   actionType: string,
-  maxHints: number = 3
+  maxHints: number = 3,
+  options: { minScore?: number } = {}
 ): FailureHint[] {
   const intent = extractIntent(failedSelectors);
 
@@ -200,7 +251,10 @@ export function generateHintsFromSnapshot(
     candidates = candidates.filter((el) => roleFilter.includes(el.role));
   }
 
-  const matches = fuzzyMatchElements(intent.text, candidates, maxHints * 2);
+  const matches = fuzzyMatchElements(intent.text, candidates, {
+    maxResults: maxHints * 2,
+    minScore: options.minScore,
+  });
 
   if (matches.length === 0) {
     return [];

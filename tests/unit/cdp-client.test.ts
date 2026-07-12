@@ -3,6 +3,7 @@
  */
 
 import { describe, expect, mock, test } from 'bun:test';
+import { createCDPClientFromTransport } from '../../src/cdp/client.ts';
 import { CDPError } from '../../src/cdp/protocol.ts';
 
 describe('CDPError', () => {
@@ -146,5 +147,76 @@ describe('Mock CDP Client', () => {
     client.emit('Page.loadEventFired', { timestamp: 123 });
 
     expect(handler).not.toHaveBeenCalled();
+  });
+});
+
+describe('CDPClient per-call timeout override', () => {
+  // A transport that captures outgoing frames and lets the test decide when (or
+  // whether) to reply, so we can observe timeout behavior deterministically.
+  function createFakeTransport() {
+    let onMsg: ((m: string) => void) | undefined;
+    return {
+      sent: [] as Array<{ id: number; method: string; sessionId?: string }>,
+      send(message: string) {
+        this.sent.push(JSON.parse(message));
+      },
+      async close() {},
+      onMessage(handler: (m: string) => void) {
+        onMsg = handler;
+      },
+      onClose() {},
+      onError() {},
+      reply(id: number, result: unknown) {
+        onMsg?.(JSON.stringify({ id, result }));
+      },
+    };
+  }
+
+  test('per-call timeout fires faster than the client-wide default', async () => {
+    const transport = createFakeTransport();
+    const client = createCDPClientFromTransport(transport, { timeout: 30000 });
+
+    const start = Date.now();
+    let message = '';
+    try {
+      // No reply is ever sent, so this can only resolve by timing out.
+      await client.send('Page.navigate', { url: 'about:blank' }, undefined, { timeout: 40 });
+      throw new Error('expected timeout');
+    } catch (e) {
+      message = e instanceof Error ? e.message : String(e);
+    }
+    const elapsed = Date.now() - start;
+
+    expect(message).toContain('timed out after 40ms');
+    // Must reflect the per-call override, not the 30s client-wide default.
+    expect(elapsed).toBeLessThan(1000);
+  });
+
+  test('falls back to the client-wide timeout when no per-call option is given', async () => {
+    const transport = createFakeTransport();
+    const client = createCDPClientFromTransport(transport, { timeout: 25 });
+
+    let message = '';
+    try {
+      await client.send('Page.navigate', { url: 'about:blank' });
+      throw new Error('expected timeout');
+    } catch (e) {
+      message = e instanceof Error ? e.message : String(e);
+    }
+
+    expect(message).toContain('timed out after 25ms');
+  });
+
+  test('per-call timeout does not fire when a response arrives in time', async () => {
+    const transport = createFakeTransport();
+    const client = createCDPClientFromTransport(transport, { timeout: 30000 });
+
+    const p = client.send<{ ok: boolean }>('Runtime.evaluate', {}, undefined, { timeout: 500 });
+    // Reply to the just-sent message id before the short timeout elapses.
+    const sent = transport.sent.at(-1);
+    if (!sent) throw new Error('no frame sent');
+    transport.reply(sent.id, { ok: true });
+
+    expect(await p).toEqual({ ok: true });
   });
 });

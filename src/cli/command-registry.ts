@@ -20,6 +20,7 @@ export const CLI_COMMANDS: readonly CLICommandMeta[] = [
   { name: 'page', description: 'Compact page overview', showInRootHelp: true },
   { name: 'forms', description: 'List form controls', showInRootHelp: true },
   { name: 'targets', description: 'List available browser tabs', showInRootHelp: true },
+  { name: 'use-target', description: 'Explicitly switch a session to a tab', showInRootHelp: true },
   { name: 'diagnose', description: 'Debug selectors and targeting failures', showInRootHelp: true },
   { name: 'review', description: 'Structured business state after actions', showInRootHelp: true },
   { name: 'screenshot', description: 'Capture a page screenshot', showInRootHelp: true },

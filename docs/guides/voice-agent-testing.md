@@ -51,9 +51,11 @@ Rule:
 ## Capture the session as an artifact
 
 ```bash
+bp connect --name vt
 bp record -s vt --profile voice -f ./artifacts/voice.recording.json
 # exercise the app manually, then stop with Ctrl+C
 bp record summary ./artifacts/voice.recording.json
+bp record inspect ./artifacts/voice.recording.json
 bp trace summary ./artifacts/voice.recording.json --view voice
 ```
 

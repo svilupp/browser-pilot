@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Icon toolbar (unnamed buttons)</title>
+  <style>
+    body { font-family: sans-serif; padding: 40px; }
+    .toolbar { display: flex; gap: 8px; margin: 12px 0; }
+    button { width: 40px; height: 40px; }
+    #clicked { margin-top: 24px; font-weight: bold; }
+  </style>
+</head>
+<body>
+  <h1>Editor</h1>
+
+  <!-- The benchmark case: an icon toolbar of 8 <button>s with NO data-testid,
+       NO aria-label, NO text, and an aria-hidden SVG (empty accessible name).
+       Each is deterministically distinguished ONLY by a unique data-cmd. -->
+  <div class="toolbar editor" id="editor-toolbar">
+    <button type="button" data-cmd="c1"><svg aria-hidden="true" width="16" height="16"></svg></button>
+    <button type="button" data-cmd="c2"><svg aria-hidden="true" width="16" height="16"></svg></button>
+    <button type="button" data-cmd="c3"><svg aria-hidden="true" width="16" height="16"></svg></button>
+    <button type="button" data-cmd="c4"><svg aria-hidden="true" width="16" height="16"></svg></button>
+    <button type="button" data-cmd="c5"><svg aria-hidden="true" width="16" height="16"></svg></button>
+    <button type="button" data-cmd="c6"><svg aria-hidden="true" width="16" height="16"></svg></button>
+    <button type="button" data-cmd="c7"><svg aria-hidden="true" width="16" height="16"></svg></button>
+    <button type="button" data-cmd="c8"><svg aria-hidden="true" width="16" height="16"></svg></button>
+  </div>
+
+  <!-- A second toolbar to prove container scoping restricts the search. -->
+  <div class="toolbar other" id="other-toolbar">
+    <button type="button" data-cmd="x1"><svg aria-hidden="true" width="16" height="16"></svg></button>
+    <button type="button" data-cmd="x2"><svg aria-hidden="true" width="16" height="16"></svg></button>
+    <button type="button" data-cmd="x3"><svg aria-hidden="true" width="16" height="16"></svg></button>
+  </div>
+
+  <div id="clicked">none</div>
+
+  <script>
+    const result = document.getElementById('clicked');
+    for (const button of document.querySelectorAll('button[data-cmd]')) {
+      button.addEventListener('click', () => {
+        result.textContent = button.getAttribute('data-cmd');
+      });
+    }
+  </script>
+</body>
+</html>

@@ -7,6 +7,9 @@ description: Record browser workflows and convert them into reliable automation.
 
 This skill is for the manual-demo-to-automation pipeline.
 
+For simple, reusable, low-cost automation on top of browser-pilot, use the companion
+[Flightplan](https://github.com/svilupp/flightplan) package when it is released.
+
 For local Chrome on Chrome 144+, try plain `bp connect` first after enabling remote debugging in `chrome://inspect/#remote-debugging`. Only add `--channel` or `--user-data-dir` if auto-discovery is ambiguous.
 
 ## Core rule
@@ -31,6 +34,7 @@ Start with:
 ## Capture
 
 ```bash
+bp connect --name demo
 bp record -s demo --profile automation -f ./artifacts/demo.recording.json
 # perform the flow manually, then stop with Ctrl+C
 ```
@@ -57,9 +61,12 @@ Use `trace summary` to inspect network/runtime behavior inside the same artifact
 ## Derive and run
 
 ```bash
-bp record derive ./artifacts/demo.recording.json -o workflow.json
-bp run workflow.json --json
+bp record derive ./artifacts/demo.recording.json -o ./artifacts/demo.workflow.json
+jq . ./artifacts/demo.workflow.json
+bp run ./artifacts/demo.workflow.json -s demo --json
 ```
+
+`bp record derive` writes browser-pilot workflow JSON for `bp run`. Use Flightplan for simple reusable workflows.
 
 ## Harden the automation
 
@@ -86,6 +93,19 @@ bp exec -s demo '[
    "dangerous":true}
 ]'
 ```
+
+Conditions include `urlMatches`, `elementVisible`, `elementHidden`, `textAppears`, `textChanges`,
+`networkResponse`, `stateSignatureChanges`, `selectedTab`, `fieldValue`, `checkbox`, `switch`,
+`elementEnabled`, `targetCount`, `newTarget`, `urlChanged`, and `fieldChanged`. Text and URL
+conditions can use explicit match modes and scoped selectors or landmarks.
+
+For asynchronous pages, a `waitForReady` action can combine `any`/`all`, `loadingHidden`,
+predicates, and DOM-stability requirements. `waitFor: "networkIdle"` only means transport quiet.
+
+If a derived workflow uses retries, remember that retries stop at the dispatch boundary: a
+pre-dispatch failure may retry the action, while a dispatched or uncertain effect is observed and
+its conditions are re-evaluated instead of blindly repeating input. Use `effect` and `dangerous`
+when the action's retry policy matters.
 
 Review page state after a workflow completes:
 

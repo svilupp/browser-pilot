@@ -80,21 +80,38 @@ COMMON ACTIONS
   screenshot  {"action":"screenshot"}
 
 RECORDING (FOR HUMANS)
-  Want to create automations by demonstrating instead of coding?
-  Use 'bp record' to capture your browser interactions as replayable JSON:
+  To turn a manual demo into a replayable browser-pilot workflow:
 
-    bp record                 # Record from local Chrome
-    bp exec --file login.json # Replay the recording
+  1. Start or connect a named session:
+       bp connect --name demo
 
-  Great for creating initial automation scripts that AI agents can refine.
+  2. Record the existing session to a named artifact:
+       bp record -s demo --profile automation -f ./artifacts/demo.recording.json
+       # Perform the flow in the attached browser, then stop with Ctrl+C.
+
+  3. Summarize and inspect the recording:
+       bp record summary ./artifacts/demo.recording.json
+       bp record inspect ./artifacts/demo.recording.json
+
+  4. Derive replayable JSON steps:
+       bp record derive ./artifacts/demo.recording.json -o ./artifacts/demo.workflow.json
+
+  5. Review the derived JSON, then run it:
+       jq . ./artifacts/demo.workflow.json
+       bp run ./artifacts/demo.workflow.json -s demo
+
+  'bp record' captures an existing session; it does not create a named session.
+  'bp record derive' writes JSON steps for 'bp run'. It does not emit Flightplan TOML.
+  Translate the derived steps into Flightplan manually when you need a Flightplan flow.
 
 RECORDING (DURING REPLAY)
   Need a screenshot trail while replaying a workflow?
 
-    bp exec --record --file login.json
-    bp exec --record --record-dir ./artifacts/replay '[{"action":"click","selector":"ref:e2"}]'
+    bp exec --record -s demo -f ./artifacts/demo.workflow.json
+    bp exec --record --record-dir ./artifacts/replay -s demo '[{"action":"click","selector":"ref:e2"}]'
 
   Saves recording.json + screenshots for the latest run.
+  The workflow input is not replaced or renamed by --record.
   Sensitive fields (passwords, OTPs, card inputs) are redacted automatically.
 
 DEBUGGING

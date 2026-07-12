@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Click semantics — form controls fire input/change</title>
+  <style>
+    /* A checkbox whose real <input> is not pointer-hittable; a real user drives
+       it through its <label>. A coordinate-based click on the input alone will
+       not toggle it, so this exercises the click recovery path. */
+    .label-driven input { pointer-events: none; }
+    body { font-family: sans-serif; padding: 16px; }
+    label { margin-left: 6px; }
+  </style>
+</head>
+<body>
+  <h1>Click semantics</h1>
+
+  <!-- Checkbox: UI is driven purely off the native `change` event -->
+  <div>
+    <input type="checkbox" id="cb">
+    <label for="cb">Toggle me</label>
+    <span id="cb-status">unset</span>
+    <span id="cb-change-count">0</span>
+    <span id="cb-input-count">0</span>
+  </div>
+
+  <!-- Radio group: change handler records the selected value -->
+  <div>
+    <input type="radio" name="opt" id="r1" value="one"><label for="r1">one</label>
+    <input type="radio" name="opt" id="r2" value="two"><label for="r2">two</label>
+    <input type="radio" name="opt" id="r3" value="three"><label for="r3">three</label>
+    <span id="radio-status">none</span>
+    <span id="radio-change-count">0</span>
+  </div>
+
+  <!-- pointer-events:none input, toggled via its label (recovery path) -->
+  <div class="label-driven">
+    <input type="checkbox" id="pen">
+    <label for="pen" id="pen-label">Label-driven</label>
+    <span id="pen-status">unset</span>
+  </div>
+
+  <!-- Plain button: click handler must still fire (regression guard) -->
+  <div>
+    <button type="button" id="btn">Press</button>
+    <span id="btn-status">unset</span>
+    <span id="btn-click-count">0</span>
+  </div>
+
+  <script>
+    const cb = document.getElementById('cb');
+    let cbChanges = 0;
+    let cbInputs = 0;
+    cb.addEventListener('change', (e) => {
+      cbChanges++;
+      document.getElementById('cb-status').textContent = e.target.checked ? 'checked' : 'unchecked';
+      document.getElementById('cb-change-count').textContent = String(cbChanges);
+    });
+    cb.addEventListener('input', () => {
+      cbInputs++;
+      document.getElementById('cb-input-count').textContent = String(cbInputs);
+    });
+
+    let radioChanges = 0;
+    document.querySelectorAll('input[name="opt"]').forEach((r) => {
+      r.addEventListener('change', (e) => {
+        radioChanges++;
+        document.getElementById('radio-status').textContent = e.target.value;
+        document.getElementById('radio-change-count').textContent = String(radioChanges);
+      });
+    });
+
+    const pen = document.getElementById('pen');
+    pen.addEventListener('change', (e) => {
+      document.getElementById('pen-status').textContent = e.target.checked ? 'checked' : 'unchecked';
+    });
+
+    let btnClicks = 0;
+    document.getElementById('btn').addEventListener('click', () => {
+      btnClicks++;
+      document.getElementById('btn-status').textContent = 'clicked';
+      document.getElementById('btn-click-count').textContent = String(btnClicks);
+    });
+  </script>
+</body>
+</html>

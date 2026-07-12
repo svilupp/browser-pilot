@@ -166,9 +166,7 @@ describe('Multi-Page Wizard Flow', () => {
       // Navigate to page2 - the page's script will check sessionStorage and redirect
       await page.goto(`${baseUrl}/multi-page/page2.html`);
 
-      // Wait for redirect to complete (page2's script redirects if no wizard data)
-      await page.waitForNavigation({ timeout: 5000, optional: true });
-
+      // goto() now waits for the final load milestone, including this redirect.
       await expectPageUrl(page, '/page1.html');
     });
   });

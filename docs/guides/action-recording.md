@@ -4,6 +4,9 @@ Use `bp record` to capture a human workflow into the canonical Browser Pilot art
 
 Use `bp exec --record` when you already have steps and want screenshot proof of replay.
 
+For simple, reusable, low-cost automation on top of browser-pilot, use the companion
+[Flightplan](https://github.com/svilupp/flightplan) package when it is released.
+
 ## The model
 
 - `record` captures a human demonstration
@@ -51,13 +54,15 @@ Key rule:
 ## Summary-first workflow
 
 ```bash
+bp connect --name demo
 bp record -s demo --profile automation -f ./artifacts/demo.recording.json
 # perform the flow manually, then stop with Ctrl+C
 bp record summary ./artifacts/demo.recording.json
 bp record inspect ./artifacts/demo.recording.json
 bp trace summary ./artifacts/demo.recording.json --view ws
-bp record derive ./artifacts/demo.recording.json -o workflow.json
-bp run workflow.json
+bp record derive ./artifacts/demo.recording.json -o ./artifacts/demo.workflow.json
+jq . ./artifacts/demo.workflow.json
+bp run ./artifacts/demo.workflow.json -s demo
 ```
 
 Why this order works:
@@ -80,12 +85,15 @@ Use the profile that matches the job so later analysis is easier.
 
 ## Deriving automation
 
-`bp record derive` produces replayable steps that can be run directly:
+`bp record derive` produces replayable browser-pilot JSON steps that can be run directly:
 
 ```bash
-bp record derive ./artifacts/demo.recording.json -o workflow.json
-bp run workflow.json --json
+bp record derive ./artifacts/demo.recording.json -o ./artifacts/demo.workflow.json
+jq . ./artifacts/demo.workflow.json
+bp run ./artifacts/demo.workflow.json -s demo --json
 ```
+
+`record derive` emits browser-pilot workflow JSON for `bp run`. Use Flightplan for simple reusable workflows.
 
 Then harden the flow with trace-backed assertions if needed:
 

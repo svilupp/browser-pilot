@@ -2,6 +2,9 @@
 
 Use this guide to choose the right Browser Pilot workflow quickly.
 
+For simple, reusable, low-cost automation on top of browser-pilot, use the companion
+[Flightplan](https://github.com/svilupp/flightplan) package when it is released.
+
 For local Chrome on Chrome 144+, try plain `bp connect` first after enabling remote debugging in `chrome://inspect/#remote-debugging`. Only add `--channel` or `--user-data-dir` when needed to disambiguate local profiles.
 
 ## Workflow 1: inspect then act
@@ -27,12 +30,17 @@ Why:
 Use when a human is showing the path.
 
 ```bash
+bp connect --name demo
 bp record -s demo --profile automation -f ./artifacts/demo.recording.json
 # perform the flow manually, then stop with Ctrl+C
 bp record summary ./artifacts/demo.recording.json
-bp record derive ./artifacts/demo.recording.json -o workflow.json
-bp run workflow.json
+bp record inspect ./artifacts/demo.recording.json
+bp record derive ./artifacts/demo.recording.json -o ./artifacts/demo.workflow.json
+jq . ./artifacts/demo.workflow.json
+bp run ./artifacts/demo.workflow.json -s demo
 ```
+
+`bp record derive` writes browser-pilot workflow JSON for `bp run`. Use Flightplan for simple reusable workflows.
 
 If the workflow is stateful, add trace analysis before deriving:
 

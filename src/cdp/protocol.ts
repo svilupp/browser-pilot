@@ -53,6 +53,10 @@ export interface TargetInfo {
   url: string;
   attached: boolean;
   canAccessOpener: boolean;
+  /** Target that opened this target, when Chrome reports an opener. */
+  openerId?: string;
+  /** Frame that opened this target, when the opener was a frame. */
+  openerFrameId?: string;
   browserContextId?: string;
 }
 

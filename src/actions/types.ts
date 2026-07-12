@@ -2,7 +2,21 @@
  * Action/Step types for batch execution
  */
 
-import type { FailureHint } from '../browser/types.ts';
+import type {
+  ActionReceipt,
+  DispatchState,
+  FailureHint,
+  ReadyCondition,
+} from '../browser/types.ts';
+
+export type UrlMatchMode = 'exact' | 'origin_path' | 'glob' | 'contains';
+export type TextMatchMode = 'exact' | 'contains' | 'regex';
+
+export interface AssertionScope {
+  selector?: string | string[];
+  /** Landmark tag or role, e.g. `main`, `navigation`, or `dialog`. */
+  landmark?: string;
+}
 
 export type FailureReason =
   | 'missing'
@@ -20,14 +34,69 @@ export type FailureReason =
 
 export type OutcomeStatus = 'success' | 'failed' | 'ambiguous' | 'unsafe_to_retry';
 
+export type ActionEffect = 'observe' | 'idempotent' | 'at_most_once';
+
+export type RetryDecisionReason =
+  | 'not_needed_success'
+  | 'max_attempts_reached'
+  | 'retry_allowed_pre_dispatch'
+  | 'dispatch_already_attempted'
+  | 'dangerous_dispatched'
+  | 'retry_unsafe'
+  | 'missing_retry_metadata'
+  | 'dangerous_pre_dispatch_not_explicit';
+
 export type Condition =
-  | { kind: 'urlMatches'; pattern: string }
+  | { kind: 'urlMatches'; pattern: string; mode?: UrlMatchMode; match?: UrlMatchMode }
   | { kind: 'elementVisible'; selector: string | string[] }
   | { kind: 'elementHidden'; selector: string | string[] }
-  | { kind: 'textAppears'; selector?: string | string[]; text: string }
-  | { kind: 'textChanges'; selector?: string | string[]; to?: string }
+  | {
+      kind: 'textAppears';
+      selector?: string | string[];
+      text: string;
+      mode?: TextMatchMode;
+      match?: TextMatchMode;
+      scope?: AssertionScope;
+      landmark?: string;
+    }
+  | {
+      kind: 'textChanges';
+      selector?: string | string[];
+      from?: string;
+      to?: string;
+      mode?: TextMatchMode;
+      match?: TextMatchMode;
+      scope?: AssertionScope;
+      landmark?: string;
+    }
   | { kind: 'networkResponse'; urlPattern: string; status?: number }
-  | { kind: 'stateSignatureChanges' };
+  | { kind: 'stateSignatureChanges'; mode?: 'text' | 'structure' }
+  | { kind: 'selectedTab'; selector?: string | string[]; name?: string; landmark?: string }
+  | { kind: 'fieldValue'; selector: string | string[]; value: string; landmark?: string }
+  | { kind: 'checkbox'; selector: string | string[]; checked: boolean; landmark?: string }
+  | { kind: 'switch'; selector: string | string[]; checked: boolean; landmark?: string }
+  | {
+      kind: 'elementEnabled';
+      selector: string | string[];
+      enabled?: boolean;
+      landmark?: string;
+    }
+  | { kind: 'targetCount'; count: number; type?: string }
+  | {
+      kind: 'newTarget';
+      targetId?: string;
+      openerTargetId?: string;
+      url?: string;
+      type?: string;
+    }
+  | { kind: 'urlChanged'; from?: string; mode?: UrlMatchMode }
+  | {
+      kind: 'fieldChanged';
+      selector: string | string[];
+      from?: string;
+      to?: string;
+      landmark?: string;
+    };
 
 export interface MatchedCondition {
   condition: Condition;
@@ -50,6 +119,7 @@ export type ActionType =
   | 'hover'
   | 'scroll'
   | 'wait'
+  | 'waitForReady'
   | 'snapshot'
   | 'forms'
   | 'screenshot'
@@ -84,6 +154,9 @@ export interface Step {
   /** URL for goto action */
   url?: string;
 
+  /** Create a new tab in the background by default; set false to foreground it. */
+  background?: boolean;
+
   /** Value for fill, type, select, evaluate actions */
   value?: string | string[];
 
@@ -100,7 +173,10 @@ export interface Step {
   modifiers?: Array<'Control' | 'Shift' | 'Alt' | 'Meta'>;
 
   /** What to wait for (wait action) */
-  waitFor?: 'visible' | 'hidden' | 'attached' | 'detached' | 'navigation' | 'networkIdle';
+  waitFor?: 'visible' | 'hidden' | 'attached' | 'detached' | 'navigation' | 'networkIdle' | 'ready';
+
+  /** Correlated navigation lifecycle milestone. */
+  waitUntil?: 'commit' | 'domcontentloaded' | 'load' | 'networkidle';
 
   /** Step-specific timeout override (ms) */
   timeout?: number;
@@ -108,7 +184,7 @@ export interface Step {
   /** Should this step's failure be ignored? */
   optional?: boolean;
 
-  /** Submit method */
+  /** Submit method; enter+click selects one dispatch and never sends both. */
   method?: 'enter' | 'click' | 'enter+click';
 
   /** Trigger blur after filling (for React/Vue frameworks) */
@@ -150,6 +226,22 @@ export interface Step {
   /** Expected value for assertion steps (substring match for assertText, exact for assertValue/assertUrl) */
   expect?: string;
 
+  /** Explicit URL matcher; omitted preserves the legacy contains behavior. */
+  urlMode?: UrlMatchMode;
+  /** Explicit text matcher; omitted preserves the legacy contains behavior. */
+  textMode?: TextMatchMode;
+  /** Landmark scope for text/value assertions. */
+  landmark?: string;
+  /** Optional selector scope for assertion conditions. */
+  scope?: AssertionScope;
+  /** Expected selected/checked/enabled state for state assertions. */
+  checked?: boolean;
+  enabled?: boolean;
+  /** Exact target count assertion. */
+  targetCount?: number;
+  /** Capture/verify a transition from the pre-step state. */
+  transition?: 'urlChanged' | 'fieldChanged';
+
   /** Retry count for assertion or action steps (default: 0 = no retry) */
   retry?: number;
 
@@ -188,6 +280,21 @@ export interface Step {
 
   /** Mark step as dangerous - never auto-retry after ambiguous outcome */
   dangerous?: boolean;
+
+  /** Semantic readiness conditions for the waitForReady batch action. */
+  any?: ReadyCondition[];
+  all?: ReadyCondition[];
+  loadingHidden?: string | string[];
+  predicate?: string;
+  stableForMs?: number;
+  domQuietForMs?: number;
+  pollInterval?: number;
+
+  /** Effect policy used by the centralized retry decision. */
+  effect?: ActionEffect;
+
+  /** Natural-language target anchor supplied by a higher-level planner/driver. */
+  anchor?: string;
 }
 
 export interface RecordOptions {
@@ -228,6 +335,12 @@ export interface StepResult {
 
   /** Which selector was actually used (if multiple provided) */
   selectorUsed?: string;
+
+  /** Effect policy copied from the submitted step for downstream safety artifacts. */
+  effect?: ActionEffect;
+
+  /** Natural-language target anchor copied from the submitted step. */
+  anchor?: string;
 
   /** Whether the step succeeded */
   success: boolean;
@@ -279,6 +392,28 @@ export interface StepResult {
 
   /** Whether it's safe to retry this step */
   retrySafe?: boolean;
+
+  /** Globally unique action identity for this attempt. */
+  actionId?: string;
+  /** Execution identity containing this logical step. */
+  executionId?: string;
+  /** Zero-based attempt number for this logical step. */
+  attempt?: number;
+  /** Target identity used for this step. */
+  targetId?: string;
+  /** Target provenance captured when the Page was attached. */
+  targetProvenance?: Record<string, unknown>;
+
+  /** Evidence collected by the page about the action dispatch boundary. */
+  receipt?: ActionReceipt;
+  /** Flattened dispatch state for JSON/summary consumers. */
+  dispatchState?: DispatchState;
+
+  /** Number of attempts made for this logical step. */
+  attempts?: number;
+
+  /** Why the centralized retry policy did or did not retry. */
+  retryDecisionReason?: RetryDecisionReason;
 }
 
 export interface BatchResult {

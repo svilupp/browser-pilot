@@ -2,6 +2,10 @@
 
 Lightweight CDP-based browser automation for AI agents.
 
+For simple, reusable, low-cost automation on top of browser-pilot, use the companion
+[Flightplan](https://github.com/svilupp/flightplan) package when it is released:
+`bunx flightplan --help`.
+
 ## Quick Links
 
 - [Getting Started](./getting-started.md) - Installation and first steps
@@ -20,7 +24,7 @@ Lightweight CDP-based browser automation for AI agents.
 ## Guides
 
 - [Action Recording](./guides/action-recording.md) - Record workflows and capture replay screenshot trails
-- [Multi-Selector](./guides/multi-selector.md) - Build robust automations with fallback selectors
+- [Multi-Selector](./guides/multi-selector.md) - Build resilient automations with fallback selectors
 - [Batch Actions](./guides/batch-actions.md) - Execute action sequences efficiently
 - [Snapshots](./guides/snapshots.md) - AI-optimized page state extraction
 - [Cloudflare Workers](./guides/cloudflare-workers.md) - Deploy to the edge
@@ -43,14 +47,13 @@ Lightweight CDP-based browser automation for AI agents.
 | Session Persistence | Resume browsing across commands |
 | Replay Recording | Save `recording.json` + screenshots for replay debugging |
 | WebSocket Daemon | Persistent CDP connection, ~5-15ms per command |
-| Full CLI | Perfect for AI agent tool calls |
+| Full CLI | Routed commands for AI agent tool calls |
 
 ## Supported Runtimes
 
 - Node.js 18+
 - Bun
 - Cloudflare Workers
-- Deno (with Node compatibility)
 
 ## Providers
 
@@ -73,7 +76,7 @@ const browser = await connect({
 
 const page = await browser.page();
 
-// Multi-selector for robustness
+// Multi-selector fallbacks
 await page.fill(['#email', 'input[type=email]'], 'user@example.com');
 await page.fill(['#password', 'input[type=password]'], 'secret');
 await page.submit(['#login', 'button[type=submit]']);

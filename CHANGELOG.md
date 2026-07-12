@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.1.0] - 2026-07-12
+
+- Added cross-origin iframe, worker/service-worker, multi-tab, and popup support.
+- Improved reliability with per-page session isolation, background-safe tabs, smarter waits,
+  selector diagnostics, and safer retries.
+- Added structured page review and delta reads, assertions, workflow summaries, recording v2,
+  tracing, audio tools, and browser-state controls.
+- Expanded the CLI and API for Node.js, Bun, and Cloudflare Workers, including daemon transport
+  and page/target inspection.
+
+Breaking change: custom `CDPClient` implementations must support the new session-routing API;
+users of the bundled client are unaffected.
+
 ## [0.0.18] - 2026-03-22
 
 - Add Browser Use cloud provider with built-in CAPTCHA solving, anti-detect fingerprinting, and residential proxies in 195+ countries. Recommended cloud provider when local Chrome CDP is unavailable.

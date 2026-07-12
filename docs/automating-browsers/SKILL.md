@@ -8,6 +8,10 @@ compatibility: Requires browser-pilot CLI (bp). For local Chrome on Chrome 144+,
 
 Route the task before choosing commands.
 
+Use [Flightplan](https://github.com/svilupp/flightplan) for simple, reusable, low-cost automation
+on top of browser-pilot when it is released. Use this skill when you need direct browser control,
+inspection, recording, tracing, voice testing, or browser-state controls.
+
 For local Chrome on Chrome 144+, try plain `bp connect` first after enabling remote debugging in `chrome://inspect/#remote-debugging`. Only narrow with `--channel` or `--user-data-dir` if auto-discovery is ambiguous.
 
 ## Routing tree
@@ -87,13 +91,19 @@ Rules:
 Use `record` when the workflow is being demonstrated manually.
 
 ```bash
+bp connect --name demo
 bp record -s demo --profile automation -f ./artifacts/demo.recording.json
+# perform the flow manually, then stop with Ctrl+C
 bp record summary ./artifacts/demo.recording.json
-bp record derive ./artifacts/demo.recording.json -o workflow.json
-bp run workflow.json
+bp record inspect ./artifacts/demo.recording.json
+bp record derive ./artifacts/demo.recording.json -o ./artifacts/demo.workflow.json
+jq . ./artifacts/demo.workflow.json
+bp run ./artifacts/demo.workflow.json -s demo
 ```
 
 Do not start by reading the raw artifact.
+`record` captures the existing named session. It does not create a named session, and `record derive`
+produces browser-pilot workflow JSON for `bp run`. Use Flightplan for simple reusable workflows.
 
 ## When to use trace
 
@@ -157,7 +167,18 @@ Any action step can include outcome conditions:
 - `failIf`: failure if any condition matches (checked first)
 - `dangerous`: never auto-retry on ambiguous outcome
 
-Condition kinds: `urlMatches`, `elementVisible`, `elementHidden`, `textAppears`, `textChanges`, `networkResponse`, `stateSignatureChanges`.
+Condition kinds: `urlMatches`, `elementVisible`, `elementHidden`, `textAppears`, `textChanges`,
+`networkResponse`, `stateSignatureChanges`, `selectedTab`, `fieldValue`, `checkbox`, `switch`,
+`elementEnabled`, `targetCount`, `newTarget`, `urlChanged`, and `fieldChanged`. Text and URL
+conditions accept explicit match modes; text conditions can also be scoped by selector or landmark.
+
+For semantic readiness, use a `waitForReady` action with `any`/`all`, `loadingHidden`, `predicate`,
+or stability options instead of assuming `networkIdle` means that a hydrated page is ready.
+
+Retries stop at the dispatch boundary: a pre-dispatch failure may retry the action, while a
+dispatched or uncertain effect is observed and its conditions are re-evaluated instead of blindly
+repeating input. Set `effect` to `observe`, `idempotent`, or `at_most_once` when the retry policy
+needs to be explicit.
 
 ## Quick command map
 

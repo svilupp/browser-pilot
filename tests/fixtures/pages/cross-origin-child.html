@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Cross-Origin Child Form</title>
+  <style>
+    body { font-family: system-ui, sans-serif; padding: 15px; background: #fff3e0; }
+    form { display: flex; flex-direction: column; gap: 10px; }
+    input { padding: 8px; border: 1px solid #ccc; border-radius: 4px; }
+    button { padding: 10px; background: #e65100; color: white; border: none; border-radius: 4px; cursor: pointer; }
+    button:hover { background: #bf360c; }
+    .result { margin-top: 10px; padding: 10px; background: #ffe0b2; border-radius: 4px; }
+    h2 { margin-top: 0; color: #333; }
+  </style>
+</head>
+<body>
+  <!--
+    This page is served by ORIGIN B (the child server). When embedded in the
+    origin-A parent it is a CROSS-ORIGIN iframe. Test ids used by the spec:
+      - xo-name    : the real in-frame text input (id="name")
+      - xo-submit  : the real in-frame submit button
+      - xo-message : renders "Form submitted: <value>" on submit
+  -->
+  <h2>Cross-Origin Child (Origin B)</h2>
+
+  <form id="xo-form">
+    <label for="name">Name:</label>
+    <input type="text" id="name" name="name" data-testid="xo-name" placeholder="Enter name">
+
+    <button type="submit" data-testid="xo-submit">Submit</button>
+  </form>
+
+  <div id="xo-message" data-testid="xo-message" class="result" style="display: none;"></div>
+
+  <script>
+    document.getElementById('xo-form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const value = document.getElementById('name').value;
+      const msg = document.getElementById('xo-message');
+      msg.style.display = 'block';
+      msg.textContent = `Form submitted: ${value}`;
+    });
+  </script>
+</body>
+</html>

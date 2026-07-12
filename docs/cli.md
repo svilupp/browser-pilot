@@ -2,6 +2,10 @@
 
 The `bp` CLI is organized around jobs, not alphabetical commands.
 
+browser-pilot is the lower-level browser interface. For simple, reusable, low-cost automation,
+use the companion [Flightplan](https://github.com/svilupp/flightplan) package when released:
+`bunx flightplan --help`.
+
 For local Chrome on Chrome 144+, try plain `bp connect` first after enabling remote debugging in `chrome://inspect/#remote-debugging`. Only add `--channel` or `--user-data-dir` when auto-discovery finds multiple eligible profiles.
 
 Get oriented first:
@@ -34,6 +38,7 @@ Global options:
 - `bp review`: inspect structured business state after actions
 - `bp diagnose`: debug missing selectors or targeting failures
 - `bp exec` / `bp run`: act in the browser
+- `bp use-target`: explicitly switch a session to a known tab
 - `bp trace`: inspect time-based behavior
 
 ## Inspect
@@ -125,8 +130,19 @@ bp exec -s dev '[
 
 Outcome conditions available on any action step:
 
-- `expectAny`, `expectAll`, `failIf` — verify the action's effect
-- `dangerous` — prevent auto-retry on ambiguous outcomes
+- `expectAny`, `expectAll`, `failIf`: verify the action's effect
+- `dangerous`: prevent auto-retry on ambiguous outcomes
+
+Supported condition kinds are `urlMatches`, `elementVisible`, `elementHidden`, `textAppears`,
+`textChanges`, `networkResponse`, `stateSignatureChanges`, `selectedTab`, `fieldValue`,
+`checkbox`, `switch`, `elementEnabled`, `targetCount`, `newTarget`, `urlChanged`, and
+`fieldChanged`. Text and URL conditions support explicit match modes and scoped selectors or
+landmarks.
+
+Retries respect the dispatch boundary. A pre-dispatch failure may retry the input; after a
+dispatch or uncertain result, retry attempts observe the page and re-evaluate conditions rather
+than blindly sending the same input again. Set `effect` to `observe`, `idempotent`, or
+`at_most_once` when you need an explicit policy.
 
 Example:
 
@@ -140,10 +156,10 @@ bp exec -s dev '[
 
 New widget actions:
 
-- `chooseOption` — custom combobox interaction
-- `upload` — file upload with verification
-- `review` — structured page state extraction
-- `delta` — page change detection
+- `chooseOption`: custom combobox interaction
+- `upload`: file upload with verification
+- `review`: structured page state extraction
+- `delta`: page change detection
 
 Likely next steps:
 
@@ -171,11 +187,14 @@ Primary commands:
 Canonical flow:
 
 ```bash
+bp connect --name demo
 bp record -s demo --profile automation -f ./artifacts/demo.recording.json
 # perform the flow, then stop with Ctrl+C
 bp record summary ./artifacts/demo.recording.json
-bp record derive ./artifacts/demo.recording.json -o workflow.json
-bp run workflow.json
+bp record inspect ./artifacts/demo.recording.json
+bp record derive ./artifacts/demo.recording.json -o ./artifacts/demo.workflow.json
+jq . ./artifacts/demo.workflow.json
+bp run ./artifacts/demo.workflow.json -s demo
 ```
 
 Use profiles when they matter:
@@ -188,6 +207,8 @@ Use profiles when they matter:
 Rules:
 
 - Summary first, raw JSON later.
+- `record` captures an existing named session; it does not create one.
+- `record derive` writes browser-pilot workflow JSON for `bp run`. Use Flightplan for simple reusable workflows.
 - Use `record` for human capture.
 - Use `exec --record` when you already have steps and want screenshot proof of replay.
 

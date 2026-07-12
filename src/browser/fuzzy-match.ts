@@ -109,10 +109,11 @@ export function stringSimilarity(a: string, b: string): number {
 }
 
 /**
- * Score an element against a query string
- * Considers name, role, and selector parts with weighted scoring
+ * Score an element against a query string.
+ * Considers name, role, and selector parts with weighted scoring.
+ * Returns a value between 0 and 1 (higher = stronger match).
  */
-function scoreElement(query: string, element: InteractiveElement): number {
+export function scoreElement(query: string, element: InteractiveElement): number {
   const lowerQuery = query.toLowerCase();
   const words = lowerQuery.split(/\s+/).filter((w) => w.length > 0);
 
@@ -203,20 +204,53 @@ function explainMatch(query: string, element: InteractiveElement, score: number)
   return reasons.join(', ');
 }
 
+/** Default minimum score for a fuzzy match to be returned. */
+export const DEFAULT_FUZZY_THRESHOLD = 0.3;
+
 /**
- * Fuzzy match elements against a query string
- * Returns candidates sorted by score, filtered above threshold
+ * Options for {@link fuzzyMatchElements}.
+ */
+export interface FuzzyMatchOptions {
+  /** Maximum number of candidates to return. Default: 5. */
+  maxResults?: number;
+  /**
+   * Minimum score (0..1) a candidate must reach to be returned.
+   * Default: {@link DEFAULT_FUZZY_THRESHOLD} (0.3). Lower it to surface
+   * weaker matches; raise it to be stricter.
+   */
+  minScore?: number;
+  /**
+   * Return every scored candidate (sorted by score) ignoring the score
+   * threshold. `maxResults` still caps the count. Default: false.
+   */
+  returnAll?: boolean;
+}
+
+/**
+ * Fuzzy match elements against a query string.
+ * Returns candidates sorted by score, filtered above the score threshold.
+ *
+ * Backward compatible: the third argument may be a plain `maxResults` number
+ * (legacy form) or a {@link FuzzyMatchOptions} object.
  */
 export function fuzzyMatchElements(
   query: string,
   elements: InteractiveElement[],
-  maxResults: number = 5
+  optionsOrMaxResults: number | FuzzyMatchOptions = 5
 ): FuzzyMatch[] {
   if (!query || query.length === 0) {
     return [];
   }
 
-  const THRESHOLD = 0.3;
+  const options: FuzzyMatchOptions =
+    typeof optionsOrMaxResults === 'number'
+      ? { maxResults: optionsOrMaxResults }
+      : optionsOrMaxResults;
+  const maxResults = options.maxResults ?? 5;
+  const returnAll = options.returnAll ?? false;
+  const threshold = returnAll
+    ? Number.NEGATIVE_INFINITY
+    : (options.minScore ?? DEFAULT_FUZZY_THRESHOLD);
 
   const scored = elements.map((element) => ({
     element,
@@ -224,7 +258,7 @@ export function fuzzyMatchElements(
   }));
 
   return scored
-    .filter((s) => s.score >= THRESHOLD)
+    .filter((s) => s.score >= threshold)
     .sort((a, b) => b.score - a.score)
     .slice(0, maxResults)
     .map((s) => ({

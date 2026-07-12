@@ -13,19 +13,38 @@ import {
 import { ActionabilityError } from '../browser/actionability.ts';
 import { generateHints } from '../browser/hint-generator.ts';
 import type { Page } from '../browser/page.ts';
+import { captureStructureSignature } from '../browser/signature.ts';
+import { classifyStaleError } from '../browser/stale-errors.ts';
+import type { ActionReceipt } from '../browser/types.ts';
 import { ElementNotFoundError, NavigationError, TimeoutError } from '../browser/types.ts';
 import { CDPError } from '../cdp/protocol.ts';
 import {
   canonicalizeRecordingArtifact,
   createRecordingManifest,
+  type RecordingExecution,
   type RecordingFrame,
+  validateRecordingManifest,
 } from '../recording/manifest.ts';
 import { redactValueForRecording } from '../recording/redaction.ts';
+import { createActionId, createExecutionId } from '../runtime/id.ts';
 import { type CanonicalTraceEvent, createTraceId, normalizeTraceEvent } from '../trace/model.ts';
 import { TRACE_BINDING_NAME, TRACE_SCRIPT } from '../trace/script.ts';
 import { formatConsoleArg, globToRegex, readString, readStringOr } from '../utils/strings.ts';
-import { captureStateSignature, evaluateOutcome, NetworkResponseTracker } from './conditions.ts';
+import {
+  type AssertionBeforeState,
+  captureBeforeState,
+  captureStateSignature,
+  evaluateOutcome,
+  matchText,
+  matchUrl,
+  NetworkResponseTracker,
+  type RetryDecision,
+  readScopedElementState,
+  readScopedText,
+  shouldRetry,
+} from './conditions.ts';
 import type {
+  ActionEffect,
   ActionType,
   BatchOptions,
   BatchResult,
@@ -55,6 +74,8 @@ interface RecordingContext {
   quality: number;
   highlights: boolean;
   skipActions: Set<ActionType>;
+  executionId: string;
+  executions: RecordingExecution[];
 }
 
 function loadExistingRecording(manifestPath: string): {
@@ -62,6 +83,7 @@ function loadExistingRecording(manifestPath: string): {
   traceEvents: CanonicalTraceEvent[];
   recordedAt?: string;
   startUrl?: string;
+  executions?: RecordingExecution[];
 } {
   try {
     const raw = JSON.parse(fs.readFileSync(manifestPath, 'utf-8')) as unknown;
@@ -77,9 +99,14 @@ function loadExistingRecording(manifestPath: string): {
     }
 
     const artifact = canonicalizeRecordingArtifact(raw);
-    const screenshotsByAction = new Map(artifact.screenshots.map((shot) => [shot.actionId, shot]));
     const frames = artifact.actions.map<RecordingFrame>((action, index) => {
-      const screenshot = screenshotsByAction.get(action.id);
+      // Match by position first. Legacy manifests reused action IDs, and a
+      // Map(actionId) migration would silently collapse their evidence.
+      const positional = artifact.screenshots[index];
+      const screenshot =
+        positional?.actionId === action.id
+          ? positional
+          : artifact.screenshots.find((candidate) => candidate.actionId === action.id);
       return {
         seq: index + 1,
         timestamp: Date.parse(action.ts),
@@ -98,6 +125,13 @@ function loadExistingRecording(manifestPath: string): {
         pageTitle: action.pageTitle,
         stepIndex: action.stepIndex,
         actionId: action.id,
+        executionId: action.executionId,
+        attempt: action.attempt,
+        dispatchState: action.dispatchState,
+        retrySafe: action.retrySafe,
+        targetId: action.targetId,
+        effect: action.effect,
+        anchor: action.anchor,
       };
     });
 
@@ -106,6 +140,7 @@ function loadExistingRecording(manifestPath: string): {
       traceEvents: artifact.trace.events,
       recordedAt: artifact.recordedAt,
       startUrl: artifact.session.startUrl,
+      executions: artifact.recipe.executions,
     };
   } catch {
     return { frames: [], traceEvents: [] };
@@ -144,9 +179,16 @@ function classifyFailure(error: unknown): {
   if (error instanceof CDPError) {
     return { reason: 'cdpError' };
   }
-  const msg = String((error as Error)?.message ?? error);
-  if (msg.includes('Could not find node') || msg.includes('does not belong to the document')) {
-    return { reason: 'detached' };
+  const stale = classifyStaleError(error);
+  if (stale.stale) {
+    return {
+      reason:
+        stale.kind === 'replaced'
+          ? 'replaced'
+          : stale.kind === 'context'
+            ? 'navigation'
+            : 'detached',
+    };
   }
   return { reason: 'unknown' };
 }
@@ -184,6 +226,13 @@ function getSuggestion(reason: FailureReason): string {
   }
 }
 
+function getDispatchSuggestion(receipt: ActionReceipt | undefined): string | undefined {
+  if (receipt && receipt.dispatchState !== 'not_dispatched') {
+    return 'Dispatch may have reached the browser. Verify the postcondition before another action.';
+  }
+  return undefined;
+}
+
 // Exported for testing
 export { classifyFailure, getSuggestion };
 
@@ -206,14 +255,90 @@ function needsNetworkTracking(step: Step): boolean {
   return allConditions.some((c) => c.kind === 'networkResponse');
 }
 
-/** Check if any conditions need state signature */
-function needsStateSignature(step: Step): boolean {
+/**
+ * Which before-state signatures a step's `stateSignatureChanges` conditions
+ * require. A condition compares its "after" capture against a like-for-like
+ * "before" capture, so a `mode:'structure'` condition needs a structural
+ * before-signature while the default (`mode:'text'`) needs the text one. A
+ * step may contain both, so we capture each mode only when actually needed.
+ */
+function stateSignatureModes(step: Step): { text: boolean; structure: boolean } {
   const allConditions: Condition[] = [
     ...(step.expectAny ?? []),
     ...(step.expectAll ?? []),
     ...(step.failIf ?? []),
   ];
-  return allConditions.some((c) => c.kind === 'stateSignatureChanges');
+  let text = false;
+  let structure = false;
+  for (const c of allConditions) {
+    if (c.kind !== 'stateSignatureChanges') continue;
+    if (c.mode === 'structure') {
+      structure = true;
+    } else {
+      text = true;
+    }
+  }
+  return { text, structure };
+}
+
+function defaultActionEffect(action: ActionType): ActionEffect {
+  switch (action) {
+    case 'assertVisible':
+    case 'assertExists':
+    case 'assertText':
+    case 'assertUrl':
+    case 'assertValue':
+    case 'assertTextChanged':
+    case 'assertPermission':
+    case 'assertMediaTrackLive':
+    case 'assertNoConsoleErrors':
+    case 'wait':
+    case 'waitForReady':
+    case 'snapshot':
+    case 'forms':
+    case 'text':
+    case 'screenshot':
+    case 'review':
+    case 'delta':
+    case 'waitForWsMessage':
+      return 'observe';
+    case 'click':
+    case 'check':
+    case 'uncheck':
+    case 'submit':
+    case 'press':
+    case 'shortcut':
+    case 'evaluate':
+      return 'at_most_once';
+    default:
+      return 'idempotent';
+  }
+}
+
+function receiptFor(page: Page): ActionReceipt | undefined {
+  return page.getLastActionReceipt?.();
+}
+
+type OutcomeEvaluationOptions = Parameters<typeof evaluateOutcome>[1];
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Re-check an outcome without re-running the action after dispatch. */
+async function evaluateOutcomeWithObservation(
+  page: Page,
+  options: OutcomeEvaluationOptions,
+  maxObservations: number,
+  retryDelay: number
+): Promise<Awaited<ReturnType<typeof evaluateOutcome>>> {
+  let outcome = await evaluateOutcome(page, options);
+  for (let observation = 1; observation < maxObservations; observation++) {
+    if (outcome.outcomeStatus === 'success') break;
+    await sleep(retryDelay);
+    outcome = await evaluateOutcome(page, options);
+  }
+  return outcome;
 }
 
 export class BatchExecutor {
@@ -230,7 +355,10 @@ export class BatchExecutor {
     const { timeout = DEFAULT_TIMEOUT, onFail = 'stop' } = options;
     const results: StepResult[] = [];
     const startTime = Date.now();
-    const recording = options.record ? this.createRecordingContext(options.record) : null;
+    const executionId = createExecutionId();
+    const recording = options.record
+      ? this.createRecordingContext(options.record, executionId)
+      : null;
     if (steps.some((step) => step.action === 'waitForWsMessage')) {
       await this.ensureTraceHooks();
     }
@@ -242,43 +370,49 @@ export class BatchExecutor {
       const stepStart = Date.now();
       const maxAttempts = (step.retry ?? 0) + 1;
       const retryDelay = step.retryDelay ?? 500;
+      const effect = step.effect ?? defaultActionEffect(step.action);
 
       let lastError: Error | undefined;
       let succeeded = false;
-
-      if (recording) {
-        recording.traceEvents.push(
-          normalizeTraceEvent({
-            traceId: createTraceId('action'),
-            elapsedMs: Date.now() - startTime,
-            channel: 'action',
-            event: 'action.started',
-            summary: `${step.action}${step.selector ? ` ${Array.isArray(step.selector) ? step.selector[0] : step.selector}` : ''}`,
-            data: {
-              action: step.action,
-              selector: step.selector ?? null,
-              url: step.url ?? null,
-            },
-            actionId: `action-${i + 1}`,
-            stepIndex: i,
-            selector: step.selector,
-            url: step.url,
-          })
-        );
-      }
+      let attemptsMade = 0;
+      let lastReceipt: ActionReceipt | undefined;
+      let lastOutcome: Awaited<ReturnType<typeof evaluateOutcome>> | undefined;
+      let lastActionId: string | undefined;
+      let lastRetryDecision: RetryDecision = {
+        retry: false,
+        reason: 'max_attempts_reached',
+      };
 
       // Pre-step: set up outcome tracking if conditions are present
       const hasOutcome = hasOutcomeConditions(step);
       let networkTracker: NetworkResponseTracker | undefined;
       let beforeSignature: string | undefined;
+      let beforeStructureSignature: string | undefined;
+      let beforeState: AssertionBeforeState | undefined;
+      const signatureModes = stateSignatureModes(step);
 
       if (hasOutcome) {
         if (needsNetworkTracking(step)) {
           networkTracker = new NetworkResponseTracker();
           networkTracker.start(this.page.cdpClient);
         }
-        if (needsStateSignature(step)) {
+        if (signatureModes.text) {
           beforeSignature = await captureStateSignature(this.page);
+        }
+        if (signatureModes.structure) {
+          beforeStructureSignature = await captureStructureSignature(this.page);
+        }
+        const assertionConditions = [
+          ...(step.expectAny ?? []),
+          ...(step.expectAll ?? []),
+          ...(step.failIf ?? []),
+        ];
+        if (
+          assertionConditions.some((condition) =>
+            ['fieldChanged', 'textChanges', 'urlChanged', 'newTarget'].includes(condition.kind)
+          )
+        ) {
+          beforeState = await captureBeforeState(this.page, assertionConditions);
         }
       }
 
@@ -287,20 +421,67 @@ export class BatchExecutor {
           await new Promise((resolve) => setTimeout(resolve, retryDelay));
           // Reset network tracker for retry
           if (networkTracker) networkTracker.reset();
-          if (hasOutcome && needsStateSignature(step)) {
-            beforeSignature = await captureStateSignature(this.page);
-          }
+        }
+
+        const actionId = createActionId(executionId, i, attempt);
+        lastActionId = actionId;
+        if (recording) {
+          recording.traceEvents.push(
+            normalizeTraceEvent({
+              traceId: createTraceId('action'),
+              elapsedMs: Date.now() - startTime,
+              channel: 'action',
+              event: 'action.started',
+              summary: `${step.action}${step.selector ? ` ${Array.isArray(step.selector) ? step.selector[0] : step.selector}` : ''}`,
+              data: {
+                action: step.action,
+                selector: step.selector ?? null,
+                url: step.url ?? null,
+                attempt: attempt + 1,
+                executionId,
+                targetId: this.page.targetId,
+              },
+              actionId,
+              executionId,
+              attempt: attempt + 1,
+              targetId: this.page.targetId,
+              stepIndex: i,
+              selector: step.selector,
+              url: step.url,
+            })
+          );
         }
 
         try {
+          attemptsMade = attempt + 1;
           this.page.resetLastActionPosition();
+          this.page.resetLastActionReceipt?.();
           const result = await this.executeStep(step, timeout);
+          const rawReceipt = result.receipt ?? receiptFor(this.page);
+          lastReceipt = rawReceipt
+            ? {
+                ...rawReceipt,
+                executionId,
+                actionId,
+                attempt: attempt + 1,
+                targetId: this.page.targetId,
+              }
+            : undefined;
 
           const stepResult: StepResult = {
             index: i,
             action: step.action,
             selector: step.selector,
             selectorUsed: result.selectorUsed,
+            effect,
+            anchor: step.anchor,
+            actionId,
+            executionId,
+            attempt: attempt + 1,
+            targetId: this.page.targetId,
+            targetProvenance: this.page.getTargetProvenance?.() as unknown as
+              | Record<string, unknown>
+              | undefined,
             success: true,
             durationMs: Date.now() - stepStart,
             result: result.value,
@@ -308,22 +489,52 @@ export class BatchExecutor {
             timestamp: Date.now(),
             coordinates: this.page.getLastActionCoordinates() ?? undefined,
             boundingBox: this.page.getLastActionBoundingBox() ?? undefined,
+            receipt: lastReceipt,
+            dispatchState: lastReceipt?.dispatchState,
+            retrySafe: lastReceipt?.retrySafe,
+            attempts: attemptsMade,
+            retryDecisionReason: 'not_needed_success',
           };
 
           // Post-step: evaluate outcome conditions
           if (hasOutcome) {
-            if (networkTracker) networkTracker.stop(this.page.cdpClient);
-            const outcome = await evaluateOutcome(this.page, {
+            const outcomeOptions = {
               expectAny: step.expectAny,
               expectAll: step.expectAll,
               failIf: step.failIf,
               dangerous: step.dangerous,
               networkTracker,
               beforeSignature,
-            });
+              beforeStructureSignature,
+              beforeState,
+            } satisfies OutcomeEvaluationOptions;
+            const observesAfterDispatch =
+              lastReceipt?.dispatchState !== undefined &&
+              lastReceipt.dispatchState !== 'not_dispatched';
+            const outcome = observesAfterDispatch
+              ? await evaluateOutcomeWithObservation(
+                  this.page,
+                  outcomeOptions,
+                  maxAttempts - attempt,
+                  retryDelay
+                )
+              : await evaluateOutcome(this.page, outcomeOptions);
+            lastOutcome = outcome;
             stepResult.outcomeStatus = outcome.outcomeStatus;
             stepResult.matchedConditions = outcome.matchedConditions;
-            stepResult.retrySafe = outcome.retrySafe;
+            stepResult.retrySafe = lastReceipt?.retrySafe ?? outcome.retrySafe;
+            lastRetryDecision =
+              outcome.outcomeStatus === 'success'
+                ? { retry: false, reason: 'not_needed_success' }
+                : shouldRetry({
+                    effect,
+                    dangerous: step.dangerous === true,
+                    dispatchState: lastReceipt?.dispatchState,
+                    retrySafe: lastReceipt?.retrySafe ?? outcome.retrySafe,
+                    attempt,
+                    maxAttempts,
+                  });
+            stepResult.retryDecisionReason = lastRetryDecision.reason;
 
             // If outcome is 'failed' or 'ambiguous'/'unsafe_to_retry', mark step as failed
             if (outcome.outcomeStatus !== 'success') {
@@ -336,6 +547,7 @@ export class BatchExecutor {
               if (failedDetails.length > 0) {
                 stepResult.suggestion = failedDetails.join('; ');
               }
+              stepResult.suggestion = getDispatchSuggestion(lastReceipt) ?? stepResult.suggestion;
             }
           }
 
@@ -358,8 +570,14 @@ export class BatchExecutor {
                   selectorUsed: result.selectorUsed ?? null,
                   durationMs: Date.now() - stepStart,
                   outcomeStatus: stepResult.outcomeStatus ?? null,
+                  attempts: attemptsMade,
+                  retryDecisionReason: stepResult.retryDecisionReason ?? null,
+                  receipt: lastReceipt ?? null,
                 },
-                actionId: `action-${i + 1}`,
+                actionId,
+                executionId,
+                attempt: attempt + 1,
+                targetId: this.page.targetId,
                 stepIndex: i,
                 selector: step.selector,
                 selectorUsed: result.selectorUsed,
@@ -370,17 +588,35 @@ export class BatchExecutor {
 
           // If step mechanically succeeded but outcome conditions failed
           if (hasOutcome && !stepResult.success) {
-            // Dangerous steps: never retry, result is final
-            if (step.dangerous) {
-              results.push(stepResult);
-              break; // succeeded stays false, but result is already in array
-            }
-            // Non-dangerous: retry if attempts remain
-            if (attempt < maxAttempts - 1) {
+            if (lastRetryDecision.retry) {
               lastError = new Error(stepResult.error ?? 'Outcome failed');
+              if (recording) {
+                recording.traceEvents.push(
+                  normalizeTraceEvent({
+                    traceId: createTraceId('action'),
+                    elapsedMs: Date.now() - startTime,
+                    channel: 'action',
+                    event: 'action.retrying',
+                    summary: `${step.action} retrying: ${lastRetryDecision.reason}`,
+                    data: {
+                      action: step.action,
+                      attempt: attemptsMade,
+                      maxAttempts,
+                      retryDecisionReason: lastRetryDecision.reason,
+                      receipt: lastReceipt ?? null,
+                    },
+                    actionId,
+                    executionId,
+                    attempt: attempt + 1,
+                    targetId: this.page.targetId,
+                    stepIndex: i,
+                    selector: step.selector,
+                    url: step.url,
+                  })
+                );
+              }
               continue;
             }
-            // Last attempt: keep result with outcome details
             results.push(stepResult);
             break;
           }
@@ -389,7 +625,116 @@ export class BatchExecutor {
           succeeded = true;
           break;
         } catch (error) {
+          attemptsMade = attempt + 1;
           lastError = error instanceof Error ? error : new Error(String(error));
+          const rawReceipt = receiptFor(this.page);
+          lastReceipt = rawReceipt
+            ? {
+                ...rawReceipt,
+                executionId,
+                actionId,
+                attempt: attempt + 1,
+                targetId: this.page.targetId,
+              }
+            : undefined;
+
+          // A transport/context error after dispatch is an observation failure,
+          // not permission to redispatch. Give a configured postcondition one
+          // chance to rescue the result on the new page.
+          if (hasOutcome && lastReceipt && lastReceipt.dispatchState !== 'not_dispatched') {
+            try {
+              const receipt = lastReceipt;
+              const outcomeOptions = {
+                expectAny: step.expectAny,
+                expectAll: step.expectAll,
+                failIf: step.failIf,
+                dangerous: step.dangerous,
+                networkTracker,
+                beforeSignature,
+                beforeStructureSignature,
+                beforeState,
+              } satisfies OutcomeEvaluationOptions;
+              const outcome = await evaluateOutcomeWithObservation(
+                this.page,
+                outcomeOptions,
+                maxAttempts - attempt,
+                retryDelay
+              );
+              lastOutcome = outcome;
+              lastRetryDecision = shouldRetry({
+                effect,
+                dangerous: step.dangerous === true,
+                dispatchState: receipt.dispatchState,
+                retrySafe: receipt.retrySafe,
+                attempt,
+                maxAttempts,
+              });
+
+              if (outcome.outcomeStatus === 'success') {
+                results.push({
+                  index: i,
+                  action: step.action,
+                  selector: step.selector,
+                  effect,
+                  anchor: step.anchor,
+                  success: true,
+                  durationMs: Date.now() - stepStart,
+                  receipt,
+                  dispatchState: receipt.dispatchState,
+                  attempts: attemptsMade,
+                  retrySafe: receipt.retrySafe,
+                  outcomeStatus: outcome.outcomeStatus,
+                  matchedConditions: outcome.matchedConditions,
+                  retryDecisionReason: 'not_needed_success',
+                  timestamp: Date.now(),
+                });
+                succeeded = true;
+                break;
+              }
+            } catch {
+              // Keep the original transport error when observation is also
+              // unavailable. The receipt still prevents a retry.
+            }
+          }
+
+          lastRetryDecision = shouldRetry({
+            effect,
+            dangerous: step.dangerous === true,
+            dispatchState: lastReceipt?.dispatchState,
+            retrySafe: lastReceipt?.retrySafe,
+            attempt,
+            maxAttempts,
+          });
+
+          if (lastRetryDecision.retry) {
+            if (recording) {
+              recording.traceEvents.push(
+                normalizeTraceEvent({
+                  traceId: createTraceId('action'),
+                  elapsedMs: Date.now() - startTime,
+                  channel: 'action',
+                  event: 'action.retrying',
+                  summary: `${step.action} retrying: ${lastRetryDecision.reason}`,
+                  data: {
+                    action: step.action,
+                    attempt: attemptsMade,
+                    maxAttempts,
+                    retryDecisionReason: lastRetryDecision.reason,
+                    receipt: lastReceipt ?? null,
+                  },
+                  actionId,
+                  executionId,
+                  attempt: attempt + 1,
+                  targetId: this.page.targetId,
+                  stepIndex: i,
+                  selector: step.selector,
+                  url: step.url,
+                })
+              );
+            }
+            continue;
+          }
+          break;
         }
       }
 
@@ -426,14 +771,30 @@ export class BatchExecutor {
             index: i,
             action: step.action,
             selector: step.selector,
+            effect,
+            anchor: step.anchor,
+            actionId: lastActionId,
+            executionId,
+            attempt: attemptsMade,
+            targetId: this.page.targetId,
+            targetProvenance: this.page.getTargetProvenance?.() as unknown as
+              | Record<string, unknown>
+              | undefined,
             success: false,
             durationMs: Date.now() - stepStart,
             error: errorMessage,
             hints,
             failureReason: reason,
             coveringElement,
-            suggestion: getSuggestion(reason),
+            suggestion: getDispatchSuggestion(lastReceipt) ?? getSuggestion(reason),
             timestamp: Date.now(),
+            receipt: lastReceipt,
+            dispatchState: lastReceipt?.dispatchState,
+            retrySafe: lastReceipt?.retrySafe,
+            attempts: attemptsMade,
+            retryDecisionReason: lastRetryDecision.reason,
+            outcomeStatus: lastOutcome?.outcomeStatus,
+            matchedConditions: lastOutcome?.matchedConditions,
           };
 
           if (recording && !recording.skipActions.has(step.action)) {
@@ -453,8 +814,14 @@ export class BatchExecutor {
                   selector: step.selector ?? null,
                   error: errorMessage,
                   reason,
+                  attempts: attemptsMade,
+                  retryDecisionReason: lastRetryDecision.reason,
+                  receipt: lastReceipt ?? null,
                 },
-                actionId: `action-${i + 1}`,
+                actionId: lastActionId,
+                executionId,
+                attempt: attemptsMade,
+                targetId: this.page.targetId,
                 stepIndex: i,
                 selector: step.selector,
                 url: step.url,
@@ -496,7 +863,7 @@ export class BatchExecutor {
     };
   }
 
-  private createRecordingContext(record: RecordOptions): RecordingContext {
+  private createRecordingContext(record: RecordOptions, executionId: string): RecordingContext {
     const baseDir = record.outputDir ?? join(process.cwd(), '.browser-pilot');
     const screenshotDir = join(baseDir, 'screenshots');
     const manifestPath = join(baseDir, 'recording.json');
@@ -515,6 +882,8 @@ export class BatchExecutor {
       quality: Math.max(0, Math.min(100, record.quality ?? 40)),
       highlights: record.highlights !== false,
       skipActions: new Set(record.skipActions ?? DEFAULT_RECORDING_SKIP_ACTIONS),
+      executionId,
+      executions: existing.executions ?? [],
     };
   }
 
@@ -595,7 +964,14 @@ export class BatchExecutor {
         pageUrl,
         pageTitle,
         stepIndex: stepResult.index,
-        actionId: `action-${stepResult.index + 1}`,
+        actionId: stepResult.actionId,
+        executionId: stepResult.executionId ?? recording.executionId,
+        attempt: stepResult.attempt,
+        dispatchState: stepResult.receipt?.dispatchState,
+        retrySafe: stepResult.retrySafe,
+        targetId: stepResult.targetId ?? this.page.targetId,
+        effect: stepResult.effect,
+        anchor: step.anchor,
       });
     } catch {
       /* Screenshot capture is best-effort. */
@@ -644,9 +1020,25 @@ export class BatchExecutor {
       notes: success ? [] : ['Replay ended with at least one failed action.'],
       recordingManifest: 'recording.json',
       screenshotDir: 'screenshots/',
+      executionId: recording.executionId,
+      executions: recording.executions,
     });
 
-    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+    const integrity = validateRecordingManifest(manifest);
+    if (!integrity.valid) {
+      throw new Error(`Recording manifest integrity failure: ${integrity.errors.join('; ')}`);
+    }
+    for (const screenshot of manifest.screenshots) {
+      const screenshotPath = join(recording.screenshotDir, screenshot.file);
+      if (!fs.existsSync(screenshotPath) || fs.statSync(screenshotPath).size === 0) {
+        throw new Error(`Recording screenshot evidence is missing: ${screenshot.file}`);
+      }
+    }
+    // Rename within the same directory so readers never observe a partial
+    // manifest while another execution is appending evidence.
+    const temporaryPath = `${manifestPath}.tmp-${recording.executionId}`;
+    fs.writeFileSync(temporaryPath, JSON.stringify(manifest, null, 2));
+    fs.renameSync(temporaryPath, manifestPath);
     return manifestPath;
   }
 
@@ -656,14 +1048,19 @@ export class BatchExecutor {
   private async executeStep(
     step: Step,
     defaultTimeout: number
-  ): Promise<{ selectorUsed?: string; value?: unknown; text?: string }> {
+  ): Promise<{
+    selectorUsed?: string;
+    value?: unknown;
+    text?: string;
+    receipt?: ActionReceipt;
+  }> {
     const timeout = step.timeout ?? defaultTimeout;
     const optional = step.optional ?? false;
 
     switch (step.action) {
       case 'goto': {
         if (!step.url) throw new Error('goto requires url');
-        await this.page.goto(step.url, { timeout, optional });
+        await this.page.goto(step.url, { timeout, optional, waitUntil: step.waitUntil });
         return {};
       }
 
@@ -672,14 +1069,22 @@ export class BatchExecutor {
 
         // If waitForNavigation is set, set up listener BEFORE clicking
         if (step.waitForNavigation === true) {
-          const navPromise = this.page.waitForNavigation({ timeout, optional });
+          const navPromise = this.page.waitForNavigation({
+            timeout,
+            optional,
+            waitUntil: step.waitUntil,
+          });
           await this.page.click(step.selector, { timeout, optional });
-          await navPromise;
+          const observed = await navPromise;
+          if (observed) this.page.markLastActionNavigationObserved?.();
         } else {
           await this.page.click(step.selector, { timeout, optional });
         }
 
-        return { selectorUsed: this.getUsedSelector(step.selector) };
+        return {
+          selectorUsed: this.getUsedSelector(step.selector),
+          receipt: receiptFor(this.page),
+        };
       }
 
       case 'fill': {
@@ -690,7 +1095,10 @@ export class BatchExecutor {
           optional,
           blur: step.blur,
         });
-        return { selectorUsed: this.getUsedSelector(step.selector) };
+        return {
+          selectorUsed: this.getUsedSelector(step.selector),
+          receipt: receiptFor(this.page),
+        };
       }
 
       case 'type': {
@@ -701,7 +1109,10 @@ export class BatchExecutor {
           optional,
           delay: step.delay ?? 50,
         });
-        return { selectorUsed: this.getUsedSelector(step.selector) };
+        return {
+          selectorUsed: this.getUsedSelector(step.selector),
+          receipt: receiptFor(this.page),
+        };
       }
 
       case 'select': {
@@ -716,26 +1127,38 @@ export class BatchExecutor {
             },
             { timeout, optional }
           );
-          return { selectorUsed: this.getUsedSelector(step.trigger) };
+          return {
+            selectorUsed: this.getUsedSelector(step.trigger),
+            receipt: receiptFor(this.page),
+          };
         }
 
         // Native select
         if (!step.selector) throw new Error('select requires selector');
         if (!step.value) throw new Error('select requires value');
         await this.page.select(step.selector, step.value, { timeout, optional });
-        return { selectorUsed: this.getUsedSelector(step.selector) };
+        return {
+          selectorUsed: this.getUsedSelector(step.selector),
+          receipt: receiptFor(this.page),
+        };
       }
 
       case 'check': {
         if (!step.selector) throw new Error('check requires selector');
         await this.page.check(step.selector, { timeout, optional });
-        return { selectorUsed: this.getUsedSelector(step.selector) };
+        return {
+          selectorUsed: this.getUsedSelector(step.selector),
+          receipt: receiptFor(this.page),
+        };
       }
 
       case 'uncheck': {
         if (!step.selector) throw new Error('uncheck requires selector');
         await this.page.uncheck(step.selector, { timeout, optional });
-        return { selectorUsed: this.getUsedSelector(step.selector) };
+        return {
+          selectorUsed: this.getUsedSelector(step.selector),
+          receipt: receiptFor(this.page),
+        };
       }
 
       case 'submit': {
@@ -745,8 +1168,12 @@ export class BatchExecutor {
           optional,
           method: step.method ?? 'enter+click',
           waitForNavigation: step.waitForNavigation,
+          waitUntil: step.waitUntil,
         });
-        return { selectorUsed: this.getUsedSelector(step.selector) };
+        return {
+          selectorUsed: this.getUsedSelector(step.selector),
+          receipt: receiptFor(this.page),
+        };
       }
 
       case 'press': {
@@ -759,7 +1186,7 @@ export class BatchExecutor {
           if (optional) return {};
           throw e;
         }
-        return {};
+        return { receipt: receiptFor(this.page) };
       }
 
       case 'shortcut': {
@@ -770,7 +1197,7 @@ export class BatchExecutor {
           if (optional) return {};
           throw e;
         }
-        return {};
+        return { receipt: receiptFor(this.page) };
       }
 
       case 'focus': {
@@ -807,29 +1234,79 @@ export class BatchExecutor {
 
       case 'wait': {
         // Simple timeout wait (no selector, no waitFor)
-        if (!step.selector && !step.waitFor) {
+        if (
+          !step.selector &&
+          !step.waitFor &&
+          !step.any &&
+          !step.all &&
+          !step.loadingHidden &&
+          !step.predicate &&
+          step.stableForMs === undefined &&
+          step.domQuietForMs === undefined
+        ) {
           const delay = step.timeout ?? 1000;
           await new Promise((resolve) => setTimeout(resolve, delay));
           return {};
         }
         if (step.waitFor === 'navigation') {
-          await this.page.waitForNavigation({ timeout, optional });
+          await this.page.waitForNavigation({ timeout, optional, waitUntil: step.waitUntil });
           return {};
         }
         if (step.waitFor === 'networkIdle') {
           await this.page.waitForNetworkIdle({ timeout, optional });
           return {};
         }
+        if (step.waitFor === 'ready') {
+          const selectorConditions = step.selector
+            ? Array.isArray(step.selector)
+              ? step.selector
+              : [step.selector]
+            : [];
+          await this.page.waitForReady({
+            any: step.any ?? selectorConditions,
+            all: step.all,
+            loadingHidden: step.loadingHidden,
+            predicate: step.predicate,
+            stableForMs: step.stableForMs,
+            domQuietForMs: step.domQuietForMs,
+            pollInterval: step.pollInterval,
+            timeout,
+            optional,
+          });
+          return { value: this.page.getReadinessDiagnostics?.() };
+        }
         if (!step.selector)
           throw new Error(
-            'wait requires selector (or waitFor: navigation/networkIdle, or timeout for simple delay)'
+            'wait requires selector (or waitFor: navigation/networkIdle/ready, or timeout for simple delay)'
           );
         await this.page.waitFor(step.selector, {
           timeout,
           optional,
           state: step.waitFor ?? 'visible',
         });
-        return { selectorUsed: this.getUsedSelector(step.selector) };
+        return {
+          selectorUsed: Array.isArray(step.selector) ? step.selector[0]! : step.selector,
+        };
+      }
+
+      case 'waitForReady': {
+        const selectorConditions = step.selector
+          ? Array.isArray(step.selector)
+            ? step.selector
+            : [step.selector]
+          : [];
+        await this.page.waitForReady({
+          any: step.any ?? selectorConditions,
+          all: step.all,
+          loadingHidden: step.loadingHidden,
+          predicate: step.predicate,
+          stableForMs: step.stableForMs,
+          domQuietForMs: step.domQuietForMs,
+          pollInterval: step.pollInterval,
+          timeout,
+          optional,
+        });
+        return { value: this.page.getReadinessDiagnostics?.() };
       }
 
       case 'snapshot': {
@@ -879,6 +1356,7 @@ export class BatchExecutor {
           'Target.createTarget',
           {
             url: step.url ?? 'about:blank',
+            background: step.background ?? true,
           },
           null
         );
@@ -937,21 +1415,26 @@ export class BatchExecutor {
         const text = await this.page.text(selector);
         const expected = step.expect ?? step.value;
         if (typeof expected !== 'string') throw new Error('assertText requires expect or value');
-        if (!text.includes(expected)) {
+        const scopedText = step.landmark
+          ? await readScopedText(this.page, selector, step.scope, step.landmark)
+          : text;
+        const mode = step.textMode ?? 'contains';
+        if (!matchText(scopedText, expected, mode)) {
           throw new Error(
-            `Assertion failed: text does not contain ${JSON.stringify(expected)}. Got: ${JSON.stringify(text.slice(0, 200))}`
+            `Assertion failed: text does not ${mode === 'contains' ? 'contain' : `match (${mode})`} ${JSON.stringify(expected)}. Got: ${JSON.stringify(scopedText.slice(0, 200))}`
           );
         }
-        return { selectorUsed: selector, text };
+        return { selectorUsed: selector, text: scopedText };
       }
 
       case 'assertUrl': {
         const currentUrl = await this.page.url();
         const expected = step.expect ?? step.url;
         if (typeof expected !== 'string') throw new Error('assertUrl requires expect or url');
-        if (!currentUrl.includes(expected)) {
+        const mode = step.urlMode ?? 'contains';
+        if (!matchUrl(currentUrl, expected, mode)) {
           throw new Error(
-            `Assertion failed: URL does not contain ${JSON.stringify(expected)}. Got: ${JSON.stringify(currentUrl)}`
+            `Assertion failed: URL does not ${mode === 'contains' ? 'contain' : `match (${mode})`} ${JSON.stringify(expected)}. Got: ${JSON.stringify(currentUrl)}`
           );
         }
         return { value: currentUrl };
@@ -970,9 +1453,11 @@ export class BatchExecutor {
           throw new Error(`Assertion failed: selector ${JSON.stringify(step.selector)} not found`);
         }
         const usedSelector = this.getUsedSelector(step.selector);
-        const actual = await this.page.evaluate(
-          `(function() { var el = document.querySelector(${JSON.stringify(usedSelector)}); return el ? el.value : null; })()`
-        );
+        const actual = step.landmark
+          ? (await readScopedElementState(this.page, usedSelector, step.landmark)).value
+          : await this.page.evaluate(
+              `(function() { var el = document.querySelector(${JSON.stringify(usedSelector)}); return el ? el.value : null; })()`
+            );
         if (actual !== expected) {
           throw new Error(
             `Assertion failed: value of ${JSON.stringify(usedSelector)} is ${JSON.stringify(actual)}, expected ${JSON.stringify(expected)}`
@@ -1334,14 +1819,17 @@ export class BatchExecutor {
     selector: string | undefined,
     from: string | undefined,
     to: string,
-    timeout: number
+    timeout: number,
+    mode: import('./types.ts').TextMatchMode = 'contains',
+    scope?: import('./types.ts').AssertionScope,
+    landmark?: string
   ): Promise<string> {
-    const initialText = from ?? (await this.page.text(selector));
+    const initialText = from ?? (await readScopedText(this.page, selector, scope, landmark));
     const deadline = Date.now() + timeout;
 
     while (Date.now() < deadline) {
-      const text = await this.page.text(selector);
-      if (text !== initialText && text.includes(to)) {
+      const text = await readScopedText(this.page, selector, scope, landmark);
+      if (text !== initialText && matchText(text, to, mode)) {
         return text;
       }
       await new Promise((resolve) => setTimeout(resolve, 200));

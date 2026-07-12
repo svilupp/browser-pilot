@@ -2,6 +2,10 @@
 
 Automation-first browser control for agents.
 
+Flightplan is the companion package for simple, reusable, low-cost automation on top of
+browser-pilot: https://github.com/svilupp/flightplan. It will be released immediately after
+browser-pilot. Use `bunx flightplan --help` for its interface.
+
 ## Getting oriented
 
 - Run `bp --help` to see the routed command tree.
@@ -31,7 +35,6 @@ Inspect and act:
 
 ```bash
 bp exec -s dev '{"action":"goto","url":"https://example.com"}'
-bp exec -s dev '{"action":"goto","url":"https://example.com"}'
 bp snapshot -i -s dev
 bp text -s dev --selector main
 bp review -s dev --json
@@ -41,11 +44,17 @@ bp exec -s dev '[{"action":"click","selector":"ref:e4"}]'
 Record and derive:
 
 ```bash
+bp connect --name demo
 bp record -s demo --profile automation -f ./artifacts/demo.recording.json
+# perform the flow manually, then stop with Ctrl+C
 bp record summary ./artifacts/demo.recording.json
-bp record derive ./artifacts/demo.recording.json -o workflow.json
-bp run workflow.json
+bp record inspect ./artifacts/demo.recording.json
+bp record derive ./artifacts/demo.recording.json -o ./artifacts/demo.workflow.json
+jq . ./artifacts/demo.workflow.json
+bp run ./artifacts/demo.workflow.json -s demo
 ```
+
+`bp record` captures an existing named session; it does not create a named session. `bp record derive` writes browser-pilot workflow JSON for `bp run`. Use Flightplan for simple reusable workflows.
 
 Trace live behavior:
 
@@ -71,6 +80,7 @@ bp trace summary -s vt --view voice
 - `bp page` is compact and caches the refs it shows, but it is not an exhaustive action inventory
 - `bp text` is the primary command for readable long-form page copy
 - `bp exec --json` returns `success`, `totalDurationMs`, and per-step results including `selectorUsed`, `error`, `suggestion`, and `hints` when available
+- On a failed testid/id lookup, `bp exec --json` `hints[]` now normalizes dashed/underscored/camelCase intents: an intent like `create-order` (or `create_order` / `createOrder`) can now match an element labeled `Create Order`. Expect richer, sometimes different, testid/id hint suggestions than before 0.1.0
 - `bp record summary <artifact>` returns counts, trace summaries, and next-command tips
 - `bp trace summary <source> --view <view>` returns a view-specific summary over canonical trace events
 - `bp trace export ...` writes events plus derived summaries
@@ -94,7 +104,13 @@ Any action step can verify its effect with conditions:
 - `failIf`: failure if any matches (checked first)
 - `dangerous`: never auto-retry on ambiguous outcome
 
-Condition kinds: `urlMatches`, `elementVisible`, `elementHidden`, `textAppears`, `textChanges`, `networkResponse`, `stateSignatureChanges`.
+Condition kinds: `urlMatches`, `elementVisible`, `elementHidden`, `textAppears`, `textChanges`,
+`networkResponse`, `stateSignatureChanges`, `selectedTab`, `fieldValue`, `checkbox`, `switch`,
+`elementEnabled`, `targetCount`, `newTarget`, `urlChanged`, and `fieldChanged`.
+
+Retries respect the dispatch boundary: pre-dispatch failures may retry the action, while
+dispatched or uncertain effects are observed and conditions re-evaluated instead of blindly
+repeating input. Use `effect` and `dangerous` when the retry policy matters.
 
 Example:
 

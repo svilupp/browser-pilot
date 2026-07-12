@@ -103,14 +103,51 @@ export async function startDaemonServer(
 
   const clients = new Set<Socket>();
 
-  // Forward all CDP events to all connected clients
-  const forwardEvent = (method: string, params: Record<string, unknown>) => {
-    const event: DaemonEvent = { method, params };
+  // Forward all CDP events to all connected clients. The sessionId is carried
+  // through so the CLI's CDP client can route session-scoped events (OOPIF child
+  // sessions) correctly instead of leaking them into main-page handlers.
+  const forwardEvent = (method: string, params: Record<string, unknown>, sessionId?: string) => {
+    const event: DaemonEvent = { method, params, sessionId };
     for (const client of clients) {
       writeMessage(client, event);
     }
   };
   cdp.onAny(forwardEvent);
+
+  // Safety net for paused auto-attached children. Page.init() arms
+  // `Target.setAutoAttach { waitForDebuggerOnStart: true }` on this long-lived
+  // connection, so iframes/workers attach PAUSED. The CLI process normally
+  // unpauses them via `Target.runIfWaitingForDebugger`, but if no client is
+  // connected (the CLI already exited) a newly attached child would freeze the
+  // user's live tab indefinitely. Calling runIfWaitingForDebugger is always safe
+  // to do redundantly, so we unpause children the CLI isn't around to handle.
+  const FALLBACK_UNPAUSE_MS = 2000;
+  const fallbackTimers = new Set<ReturnType<typeof setTimeout>>();
+  const unpauseSession = (sessionId: string) => {
+    cdp.runIfWaitingForDebugger(sessionId).catch((err: unknown) => {
+      daemonLog('warn', `Failed to unpause session ${sessionId}: ${String(err)}`);
+    });
+  };
+  const unsubscribeAttached = cdp.onTargetAttached((info) => {
+    if (!info.waitingForDebugger) return;
+    const { sessionId } = info;
+    if (clients.size === 0) {
+      daemonLog('info', `No client connected; unpausing waiting target ${sessionId}`);
+      unpauseSession(sessionId);
+      return;
+    }
+    // A client is connected and should unpause the child itself. Fall back after
+    // a short grace delay in case it exits or fails to handle it. The timer is
+    // tracked so a shutdown mid-grace-period doesn't leave it firing post-close.
+    const timer = setTimeout(() => {
+      fallbackTimers.delete(timer);
+      if (cdp.hasSession(sessionId)) {
+        daemonLog('info', `Fallback unpausing still-attached target ${sessionId}`);
+        unpauseSession(sessionId);
+      }
+    }, FALLBACK_UNPAUSE_MS);
+    fallbackTimers.add(timer);
+  });
 
   const server = createServer((socket: Socket) => {
     clients.add(socket);
@@ -179,6 +216,11 @@ export async function startDaemonServer(
         },
         async close() {
           cdp.offAny(forwardEvent);
+          unsubscribeAttached();
+          for (const timer of fallbackTimers) {
+            clearTimeout(timer);
+          }
+          fallbackTimers.clear();
           for (const client of clients) {
             client.destroy();
           }

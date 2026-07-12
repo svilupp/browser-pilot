@@ -1,0 +1,503 @@
+/**
+ * Selector-quality ranker.
+ *
+ * A single, pure, browser-free ranker that consolidates the several divergent
+ * selector-quality ladders that previously lived in `selector-generator.ts`,
+ * `recording/script.ts` (`getSelectorCandidates`) and
+ * `recording/aggregator.ts` (`selectBestSelectors`). It is the stable public
+ * API that `Page.resolveAll` and Flightplan consume.
+ *
+ * Two entry points:
+ *  - {@link rankSelectorCandidates} — pure ranker over ONE element's possible
+ *    selectors (no intent, just selector quality).
+ *  - {@link rankCandidates} — pure ranker over a whole snapshot vs an intent
+ *    string, combining intent match with per-element selector quality.
+ *
+ * Strategy → source mapping (1:1 with Flightplan's lock `Strategy` enum):
+ *  - `testid`                 ← `data-testid` / `data-test` / `data-qa`
+ *  - `role_name`              ← accessibility `role` + accessible-name
+ *  - `label`                  ← `aria-label` (or accessible-name fallback)
+ *  - `scoped_text`            ← visible text scoping
+ *  - `structural_fingerprint` ← semantic/structural fingerprint (fingerprint.ts)
+ *  - `css`                    ← stable `id` (`#id`) or stable `class` (`.cls`)
+ *
+ * Quality ladder (base scores, higher = better / more stable). These are
+ * monotonic down the ladder, with the two honest `css` variants slotted by how
+ * stable they are (id above a bare class):
+ *
+ *   testid                 0.95
+ *   role_name              0.80
+ *   label                  0.70
+ *   css (id)               0.60
+ *   scoped_text            0.55
+ *   structural_fingerprint 0.45
+ *   css (class)            0.40
+ *
+ * IMPORTANT honesty rule: `testid` and `css` are emitted ONLY when the backing
+ * real DOM attribute is present on `el.attributes`. We never fabricate a
+ * `testid`/`css` selector from the synthetic `[data-backend-node-id=...]`
+ * selector string. When attributes are absent we only emit the honest
+ * `role_name` / `label` / `scoped_text` / `structural_fingerprint` strategies.
+ *
+ * Configurable attribute allowlist: the `testid` strategy defaults to
+ * {@link DEFAULT_TESTID_ATTRIBUTES} (`data-testid` / `data-test` / `data-qa`).
+ * Callers may EXTEND (never shrink) that set via `testIdAttributes` so a
+ * site-specific deterministic hook — e.g. `data-cmd` on an icon toolbar of
+ * otherwise-identical unnamed buttons — becomes a high-confidence `testid`
+ * candidate like `[data-cmd="c2"]`. {@link rankCandidates} additionally
+ * verifies the extended attribute's value is UNIQUE across the snapshot before
+ * emitting it, so the generated selector is guaranteed to disambiguate. When
+ * `testIdAttributes` is omitted behaviour is byte-for-byte unchanged.
+ */
+
+import { fingerprintKey, type SemanticFingerprint } from './fingerprint.ts';
+import { scoreElement } from './fuzzy-match.ts';
+import type { InteractiveElement, PageSnapshot } from './types.ts';
+
+// Re-exported so the browser barrel can surface the recording-side rich
+// candidate shape alongside this module's public API.
+export type { RichSelectorCandidate } from '../recording/types.ts';
+
+/**
+ * Selector strategy identifiers. 1:1 with Flightplan's lock `Strategy` enum.
+ */
+export type CandidateStrategy =
+  | 'testid'
+  | 'role_name'
+  | 'label'
+  | 'scoped_text'
+  | 'structural_fingerprint'
+  | 'css';
+
+/**
+ * A ranked candidate for one element, expressed as a resolvable selector plus
+ * the strategy that produced it and a normalized 0..1 quality/match score.
+ */
+export interface RankedCandidate {
+  /** Snapshot ref of the backing element (e.g. "e1"), when available. */
+  ref?: string;
+  /** Accessibility role of the element. */
+  role: string;
+  /** Accessible name of the element. */
+  name: string;
+  /** The selector string produced by {@link RankedCandidate.strategy}. */
+  selector: string;
+  /** Strategy that produced {@link RankedCandidate.selector}. */
+  strategy: CandidateStrategy;
+  /** Combined score in 0..1, higher = better. */
+  score: number;
+  /**
+   * True when the accessible name matches a generic destructive-action pattern
+   * (print, delete, remove, discard, archive, unsubscribe, cancel order,
+   * deactivate, destroy, ...). Purely advisory: candidates are NEVER filtered on
+   * this — callers decide whether to require confirmation before executing. The
+   * pattern list is intentionally site-agnostic.
+   */
+  dangerous?: boolean;
+}
+
+/**
+ * Options for {@link rankCandidates}.
+ */
+export interface RankCandidatesOptions {
+  /** Restrict output to these strategies (drops all others). */
+  strategies?: CandidateStrategy[];
+  /** Drop candidates whose combined score is below this threshold. */
+  minConfidence?: number;
+  /**
+   * Return every selector candidate for every element (true) versus only the
+   * single best-quality candidate per element (false, the default).
+   */
+  returnAll?: boolean;
+  /** Truncate the sorted result to at most this many candidates. */
+  maxResults?: number;
+  /**
+   * Bias role expectations for the intended action, e.g. `'click'` favours
+   * button/link/menuitem while `'fill'` favours textbox/searchbox/combobox.
+   */
+  actionType?: string;
+  /**
+   * Extra DOM attribute names the `testid` strategy may use as a deterministic
+   * hook, in addition to the built-in {@link DEFAULT_TESTID_ATTRIBUTES}. An
+   * extended attribute produces a `[attr="value"]` candidate only when the
+   * element's value for that attribute is UNIQUE across `snapshot`, guaranteeing
+   * the selector resolves to exactly one element (e.g. `[data-cmd="c2"]`).
+   * Omit to keep the default behaviour unchanged.
+   */
+  testIdAttributes?: string[];
+}
+
+/**
+ * Built-in attribute allowlist for the `testid` strategy. Extended (never
+ * replaced) by the optional `testIdAttributes` option.
+ */
+export const DEFAULT_TESTID_ATTRIBUTES = ['data-testid', 'data-test', 'data-qa'] as const;
+
+/**
+ * Merge caller-supplied extra attribute names onto the default testid
+ * allowlist, dropping blanks and de-duplicating while preserving priority
+ * (defaults first, so a genuine `data-testid` still wins over a custom attr).
+ */
+function resolveTestIdAttributes(extra: string[] | undefined): string[] {
+  if (!extra || extra.length === 0) return [...DEFAULT_TESTID_ATTRIBUTES];
+  const merged = [...DEFAULT_TESTID_ATTRIBUTES] as string[];
+  for (const name of extra) {
+    const trimmed = name.trim();
+    if (trimmed && !merged.includes(trimmed)) merged.push(trimmed);
+  }
+  return merged;
+}
+
+// --- Destructive-action detection --------------------------------------------
+
+/**
+ * Generic, site-agnostic patterns for destructive/irreversible actions. Matched
+ * case-insensitively against an element's accessible name as whole words (so
+ * "print" matches "Print" / "Print order" but not "sprint" or "fingerprint").
+ * Used only to TAG candidates as {@link RankedCandidate.dangerous}; nothing is
+ * filtered out. Keep this list generic — no site- or brand-specific terms.
+ */
+const DESTRUCTIVE_PATTERNS: readonly RegExp[] = [
+  /\bprint\b/i,
+  /\bdelete\b/i,
+  /\bremove\b/i,
+  /\bdiscard\b/i,
+  /\barchive\b/i,
+  /\bunsubscribe\b/i,
+  /\bcancel\s+order\b/i,
+  /\bcancel\s+subscription\b/i,
+  /\bdeactivate\b/i,
+  /\bdestroy\b/i,
+  /\bwipe\b/i,
+  /\berase\b/i,
+  /\bpurge\b/i,
+  /\breset\b/i,
+  /\brevoke\b/i,
+  /\bterminate\b/i,
+];
+
+/** True when `name` matches any generic destructive-action pattern. */
+export function isDestructiveName(name: string | undefined): boolean {
+  if (!name) return false;
+  return DESTRUCTIVE_PATTERNS.some((re) => re.test(name));
+}
+
+// --- Ladder scores -----------------------------------------------------------
+
+const SCORE = {
+  testid: 0.95,
+  role_name: 0.8,
+  label: 0.7,
+  css_id: 0.6,
+  scoped_text: 0.55,
+  structural_fingerprint: 0.45,
+  css_class: 0.4,
+} as const;
+
+// Weights blending intent match with selector quality in rankCandidates.
+const INTENT_WEIGHT = 0.6;
+const QUALITY_WEIGHT = 0.4;
+
+// How much an action-type role match/mismatch nudges the combined score.
+const ACTION_MATCH_BONUS = 0.1;
+const ACTION_MISMATCH_PENALTY = 0.1;
+
+/** Roles a `click`-like action is expected to target. */
+const CLICK_ROLES = new Set([
+  'button',
+  'link',
+  'menuitem',
+  'menuitemcheckbox',
+  'menuitemradio',
+  'tab',
+  'checkbox',
+  'radio',
+  'switch',
+  'option',
+]);
+
+/** Roles a `fill`/`type`-like action is expected to target. */
+const FILL_ROLES = new Set(['textbox', 'searchbox', 'combobox', 'spinbutton']);
+
+/** Roles a `select`-like action is expected to target. */
+const SELECT_ROLES = new Set(['combobox', 'listbox']);
+
+// --- Small helpers ------------------------------------------------------------
+
+function clamp01(n: number): number {
+  if (n < 0) return 0;
+  if (n > 1) return 1;
+  return n;
+}
+
+/** Read a non-empty real DOM attribute off the element, if present. */
+function attr(el: InteractiveElement, key: string): string | undefined {
+  const value = el.attributes?.[key];
+  return value && value.length > 0 ? value : undefined;
+}
+
+/** Escape double quotes for use inside a `[attr="..."]` selector value. */
+function escapeAttrValue(value: string): string {
+  return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+/**
+ * Whether an `id` looks stable enough to build a `#id` selector from.
+ * Mirrors the heuristics in `recording/script.ts` (`getIdSelector`): reject
+ * ids that start with a digit or a colon, or that are excessively long, plus
+ * ids that look like a random/hashed token.
+ */
+function isStableId(id: string): boolean {
+  if (!id || id.length > 100) return false;
+  if (/^[0-9]/.test(id) || /^:/.test(id) || id.includes(':')) return false;
+  // Reject long hex-ish / random tokens (e.g. "a1b2c3d4e5f6").
+  if (/^[0-9a-f]{8,}$/i.test(id)) return false;
+  return true;
+}
+
+/**
+ * Pick the first stable class from a space-separated `class` string.
+ * Mirrors the heuristics in `recording/script.ts` (`buildCssPath`): skip
+ * emotion/styled hashes (`css-*`), leading `_`, leading digit, and
+ * over-long classes.
+ */
+function pickStableClass(classAttr: string): string | undefined {
+  const classes = classAttr.split(/\s+/).filter((c) => c.length > 0);
+  for (const cls of classes) {
+    if (cls.length >= 40) continue;
+    if (/^css-/.test(cls) || /^_/.test(cls) || /^[0-9]/.test(cls)) continue;
+    // Reject long hex-ish / random-looking tokens.
+    if (/^[0-9a-f]{8,}$/i.test(cls)) continue;
+    return cls;
+  }
+  return undefined;
+}
+
+/** Build a semantic fingerprint descriptor string for a single element. */
+function structuralFingerprintSelector(el: InteractiveElement): string {
+  const stableAttrs: Record<string, string> = {};
+  for (const key of ['id', 'name', 'type'] as const) {
+    const value = attr(el, key);
+    if (value) stableAttrs[key] = value;
+  }
+
+  const fp: SemanticFingerprint = {
+    role: el.role.toLowerCase(),
+    name: el.name,
+    valueShape: el.value !== undefined ? 'text' : '',
+    label: el.name,
+    stableAttrs,
+    nearestHeading: '',
+    siblingIndex: 0,
+    sectionPath: [],
+  };
+
+  return `fingerprint:${fingerprintKey(fp)}`;
+}
+
+/** Which roles this action type is expected to target, if any. */
+function expectedRolesFor(actionType: string | undefined): Set<string> | null {
+  if (!actionType) return null;
+  switch (actionType.toLowerCase()) {
+    case 'click':
+    case 'dblclick':
+    case 'check':
+    case 'uncheck':
+      return CLICK_ROLES;
+    case 'fill':
+    case 'type':
+      return FILL_ROLES;
+    case 'select':
+      return SELECT_ROLES;
+    default:
+      return null;
+  }
+}
+
+/** Additive score delta from an action-type role expectation. */
+function actionTypeDelta(actionType: string | undefined, role: string): number {
+  const expected = expectedRolesFor(actionType);
+  if (!expected) return 0;
+  return expected.has(role.toLowerCase()) ? ACTION_MATCH_BONUS : -ACTION_MISMATCH_PENALTY;
+}
+
+// --- Public: per-element ranker ----------------------------------------------
+
+/**
+ * Rank the possible selectors for a single {@link InteractiveElement} by
+ * quality, best first. Pure and browser-free.
+ *
+ * `testid` and `css` are emitted only when the backing real DOM attribute is
+ * present on `el.attributes`; otherwise only the honest accessibility-derived
+ * strategies are returned. See the module doc-comment for the score ladder.
+ *
+ * `options.testIdAttributes` extends the attribute allowlist scanned for the
+ * `testid` strategy beyond {@link DEFAULT_TESTID_ATTRIBUTES} (defaults keep
+ * priority). Uniqueness across a snapshot is NOT checked here — that is the
+ * caller's contract (see {@link rankCandidates}, which only passes attributes
+ * whose value is unique). Omitting the option leaves behaviour unchanged.
+ */
+export function rankSelectorCandidates(
+  el: InteractiveElement,
+  options: { testIdAttributes?: string[] } = {}
+): { strategy: CandidateStrategy; selector: string; score: number }[] {
+  const out: { strategy: CandidateStrategy; selector: string; score: number }[] = [];
+
+  // 1. testid — only from a genuine data-testid/data-test/data-qa attribute
+  //    (plus any caller-supplied extra attributes).
+  for (const key of resolveTestIdAttributes(options.testIdAttributes)) {
+    const value = attr(el, key);
+    if (value) {
+      out.push({
+        strategy: 'testid',
+        selector: `[${key}="${escapeAttrValue(value)}"]`,
+        score: SCORE.testid,
+      });
+      break; // one testid selector is enough
+    }
+  }
+
+  // 2. role_name — role + accessible name (always available when role present).
+  if (el.role) {
+    const selector = el.name ? `role:${el.role}:"${escapeAttrValue(el.name)}"` : `role:${el.role}`;
+    out.push({ strategy: 'role_name', selector, score: SCORE.role_name });
+  }
+
+  // 3. label — real aria-label attribute, or derived from accessible name.
+  const labelValue = attr(el, 'aria-label') ?? (el.name || undefined);
+  if (labelValue) {
+    out.push({
+      strategy: 'label',
+      selector: `[aria-label="${escapeAttrValue(labelValue)}"]`,
+      score: SCORE.label,
+    });
+  }
+
+  // 4. css (id) — only from a genuine, stable id attribute.
+  const id = attr(el, 'id');
+  if (id && isStableId(id)) {
+    out.push({ strategy: 'css', selector: `#${id}`, score: SCORE.css_id });
+  }
+
+  // 5. scoped_text — visible text scoping (needs an accessible name).
+  if (el.name) {
+    out.push({
+      strategy: 'scoped_text',
+      selector: `text:"${escapeAttrValue(el.name)}"`,
+      score: SCORE.scoped_text,
+    });
+  }
+
+  // 6. structural_fingerprint — semantic/structural descriptor.
+  if (el.role) {
+    out.push({
+      strategy: 'structural_fingerprint',
+      selector: structuralFingerprintSelector(el),
+      score: SCORE.structural_fingerprint,
+    });
+  }
+
+  // 7. css (class) — only from a genuine, stable class attribute.
+  const classAttr = attr(el, 'class');
+  if (classAttr) {
+    const cls = pickStableClass(classAttr);
+    if (cls) {
+      out.push({ strategy: 'css', selector: `.${cls}`, score: SCORE.css_class });
+    }
+  }
+
+  return out.sort((a, b) => b.score - a.score);
+}
+
+// --- Public: snapshot ranker --------------------------------------------------
+
+/**
+ * Rank every interactive element in a snapshot against an `intent` string,
+ * combining fuzzy intent match (role + name + selector) with per-element
+ * selector quality. Pure scoring over the snapshot — executes nothing.
+ *
+ * Returned candidates are sorted by combined score descending. See
+ * {@link RankCandidatesOptions} for filtering/shaping behaviour.
+ */
+export function rankCandidates(
+  snapshot: PageSnapshot,
+  intent: string,
+  opts: RankCandidatesOptions = {}
+): RankedCandidate[] {
+  const { strategies, minConfidence, returnAll = false, maxResults, actionType } = opts;
+  const strategyFilter = strategies && strategies.length > 0 ? new Set(strategies) : null;
+
+  // Extended (non-default) testid attributes, if any. For these we require the
+  // value to be UNIQUE across the snapshot before we let the ranker emit a
+  // `[attr="value"]` candidate, so the generated selector is guaranteed to
+  // disambiguate N identical-role elements to exactly one.
+  const extendedAttrs = (opts.testIdAttributes ?? [])
+    .map((a) => a.trim())
+    .filter((a) => a.length > 0 && !DEFAULT_TESTID_ATTRIBUTES.includes(a as never));
+  const attrValueCounts = new Map<string, Map<string, number>>();
+  if (extendedAttrs.length > 0) {
+    for (const name of extendedAttrs) attrValueCounts.set(name, new Map());
+    for (const el of snapshot.interactiveElements) {
+      for (const name of extendedAttrs) {
+        const value = el.attributes?.[name];
+        if (value) {
+          const counts = attrValueCounts.get(name)!;
+          counts.set(value, (counts.get(value) ?? 0) + 1);
+        }
+      }
+    }
+  }
+
+  const results: RankedCandidate[] = [];
+
+  for (const el of snapshot.interactiveElements) {
+    const intentScore = scoreElement(intent, el); // 0..1
+    const delta = actionTypeDelta(actionType, el.role);
+
+    // Only offer extended attrs whose value is unique to THIS element.
+    const uniqueExtendedAttrs =
+      extendedAttrs.length > 0
+        ? extendedAttrs.filter((name) => {
+            const value = el.attributes?.[name];
+            return value !== undefined && attrValueCounts.get(name)?.get(value) === 1;
+          })
+        : [];
+
+    let selectorCandidates = rankSelectorCandidates(
+      el,
+      uniqueExtendedAttrs.length > 0 ? { testIdAttributes: uniqueExtendedAttrs } : {}
+    );
+    if (strategyFilter) {
+      selectorCandidates = selectorCandidates.filter((c) => strategyFilter.has(c.strategy));
+    }
+    if (selectorCandidates.length === 0) continue;
+
+    // best-per-element (default) vs all candidates for the element.
+    const chosen = returnAll ? selectorCandidates : selectorCandidates.slice(0, 1);
+
+    const dangerous = isDestructiveName(el.name);
+    for (const candidate of chosen) {
+      const score = clamp01(intentScore * INTENT_WEIGHT + candidate.score * QUALITY_WEIGHT + delta);
+      results.push({
+        ref: el.ref,
+        role: el.role,
+        name: el.name,
+        selector: candidate.selector,
+        strategy: candidate.strategy,
+        score,
+        ...(dangerous ? { dangerous: true } : {}),
+      });
+    }
+  }
+
+  results.sort((a, b) => b.score - a.score);
+
+  let output = results;
+  if (minConfidence !== undefined) {
+    output = output.filter((r) => r.score >= minConfidence);
+  }
+  if (maxResults !== undefined) {
+    output = output.slice(0, maxResults);
+  }
+  return output;
+}

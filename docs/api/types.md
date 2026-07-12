@@ -10,6 +10,8 @@ interface ConnectOptions {
   apiKey?: string;
   projectId?: string;
   wsUrl?: string;
+  channel?: 'stable' | 'beta' | 'dev' | 'canary';
+  userDataDir?: string;
   session?: CreateSessionOptions;
   debug?: boolean;
   timeout?: number;
@@ -56,6 +58,7 @@ interface ProviderSession {
 interface ActionOptions {
   timeout?: number;
   optional?: boolean;
+  waitUntil?: 'commit' | 'domcontentloaded' | 'load' | 'networkidle';
 }
 
 interface FillOptions extends ActionOptions {
@@ -65,6 +68,7 @@ interface FillOptions extends ActionOptions {
 
 interface TypeOptions extends ActionOptions {
   delay?: number;
+  blur?: boolean;
 }
 
 interface SubmitOptions extends ActionOptions {
@@ -74,6 +78,7 @@ interface SubmitOptions extends ActionOptions {
 
 interface WaitForOptions extends ActionOptions {
   state?: 'visible' | 'hidden' | 'attached' | 'detached';
+  pollInterval?: number;
 }
 
 interface NetworkIdleOptions extends ActionOptions {
@@ -106,6 +111,7 @@ type ActionType =
   | 'hover'
   | 'scroll'
   | 'wait'
+  | 'waitForReady'
   | 'snapshot'
   | 'forms'
   | 'screenshot'
@@ -135,11 +141,13 @@ interface Step {
   selector?: string | string[];
   url?: string;
   value?: string | string[];
+  background?: boolean;
   targetId?: string;
   key?: string;
   combo?: string;
   modifiers?: Array<'Control' | 'Shift' | 'Alt' | 'Meta'>;
-  waitFor?: 'visible' | 'hidden' | 'attached' | 'detached' | 'navigation' | 'networkIdle';
+  waitFor?: 'visible' | 'hidden' | 'attached' | 'detached' | 'navigation' | 'networkIdle' | 'ready';
+  waitUntil?: 'commit' | 'domcontentloaded' | 'load' | 'networkidle';
   timeout?: number;
   optional?: boolean;
   method?: 'enter' | 'click' | 'enter+click';
@@ -149,6 +157,7 @@ interface Step {
   trigger?: string | string[];
   option?: string | string[];
   match?: 'text' | 'value' | 'contains';
+  where?: Record<string, unknown>;
   x?: number;
   y?: number;
   direction?: 'up' | 'down' | 'left' | 'right';
@@ -157,13 +166,36 @@ interface Step {
   quality?: number;
   fullPage?: boolean;
   expect?: string;
+  from?: string;
+  to?: string;
+  urlMode?: 'exact' | 'origin_path' | 'glob' | 'contains';
+  textMode?: 'exact' | 'contains' | 'regex';
+  landmark?: string;
+  scope?: { selector?: string | string[]; landmark?: string };
+  checked?: boolean;
+  enabled?: boolean;
+  targetCount?: number;
+  transition?: 'urlChanged' | 'fieldChanged';
   retry?: number;
   retryDelay?: number;
+  name?: string;
+  state?: string;
+  kind?: 'audio' | 'video';
+  windowMs?: number;
   files?: string[];
   expectAny?: Condition[];
   expectAll?: Condition[];
   failIf?: Condition[];
   dangerous?: boolean;
+  any?: ReadyCondition[];
+  all?: ReadyCondition[];
+  loadingHidden?: string | string[];
+  predicate?: string;
+  stableForMs?: number;
+  domQuietForMs?: number;
+  pollInterval?: number;
+  effect?: 'observe' | 'idempotent' | 'at_most_once';
+  anchor?: string;
 }
 
 interface RecordOptions {
@@ -202,6 +234,12 @@ interface StepResult {
   failedSelectors?: Array<{ selector: string; reason: string }>;
   result?: unknown;
   text?: string;
+  hints?: Array<{
+    selector: string;
+    reason: string;
+    confidence: 'high' | 'medium' | 'low';
+    element: { ref: string; role: string; name: string; disabled?: boolean };
+  }>;
   failureReason?:
     | 'missing'
     | 'hidden'
@@ -224,6 +262,16 @@ interface StepResult {
   outcomeStatus?: OutcomeStatus;
   matchedConditions?: MatchedCondition[];
   retrySafe?: boolean;
+  effect?: 'observe' | 'idempotent' | 'at_most_once';
+  actionId?: string;
+  executionId?: string;
+  attempt?: number;
+  targetId?: string;
+  targetProvenance?: Record<string, unknown>;
+  receipt?: ActionReceipt;
+  dispatchState?: 'not_dispatched' | 'dispatched' | 'uncertain';
+  attempts?: number;
+  retryDecisionReason?: RetryDecisionReason;
 }
 
 interface BatchResult {
@@ -239,15 +287,63 @@ interface BatchResult {
 
 ```typescript
 type OutcomeStatus = 'success' | 'failed' | 'ambiguous' | 'unsafe_to_retry';
+type ActionEffect = 'observe' | 'idempotent' | 'at_most_once';
+type RetryDecisionReason =
+  | 'not_needed_success'
+  | 'max_attempts_reached'
+  | 'retry_allowed_pre_dispatch'
+  | 'dispatch_already_attempted'
+  | 'dangerous_dispatched'
+  | 'retry_unsafe'
+  | 'missing_retry_metadata'
+  | 'dangerous_pre_dispatch_not_explicit';
 
 type Condition =
-  | { kind: 'urlMatches'; pattern: string }
+  | { kind: 'urlMatches'; pattern: string; mode?: 'exact' | 'origin_path' | 'glob' | 'contains'; match?: 'exact' | 'origin_path' | 'glob' | 'contains' }
   | { kind: 'elementVisible'; selector: string | string[] }
   | { kind: 'elementHidden'; selector: string | string[] }
-  | { kind: 'textAppears'; selector?: string | string[]; text: string }
-  | { kind: 'textChanges'; selector?: string | string[]; to?: string }
+  | { kind: 'textAppears'; selector?: string | string[]; text: string; mode?: 'exact' | 'contains' | 'regex'; match?: 'exact' | 'contains' | 'regex'; scope?: AssertionScope; landmark?: string }
+  | { kind: 'textChanges'; selector?: string | string[]; from?: string; to?: string; mode?: 'exact' | 'contains' | 'regex'; match?: 'exact' | 'contains' | 'regex'; scope?: AssertionScope; landmark?: string }
   | { kind: 'networkResponse'; urlPattern: string; status?: number }
-  | { kind: 'stateSignatureChanges' };
+  | { kind: 'stateSignatureChanges'; mode?: 'text' | 'structure' }
+  | { kind: 'selectedTab'; selector?: string | string[]; name?: string; landmark?: string }
+  | { kind: 'fieldValue'; selector: string | string[]; value: string; landmark?: string }
+  | { kind: 'checkbox'; selector: string | string[]; checked: boolean; landmark?: string }
+  | { kind: 'switch'; selector: string | string[]; checked: boolean; landmark?: string }
+  | { kind: 'elementEnabled'; selector: string | string[]; enabled?: boolean; landmark?: string }
+  | { kind: 'targetCount'; count: number; type?: string }
+  | { kind: 'newTarget'; targetId?: string; openerTargetId?: string; url?: string; type?: string }
+  | { kind: 'urlChanged'; from?: string; mode?: 'exact' | 'origin_path' | 'glob' | 'contains' }
+  | { kind: 'fieldChanged'; selector: string | string[]; from?: string; to?: string; landmark?: string };
+
+interface AssertionScope {
+  selector?: string | string[];
+  landmark?: string;
+}
+
+type ReadyCondition =
+  | string
+  | { selector?: string | string[]; url?: string; predicate?: string | (() => unknown) };
+
+interface ActionReceipt {
+  dispatchState: 'not_dispatched' | 'dispatched' | 'uncertain';
+  retrySafe: boolean;
+  inputEventsSent: string[];
+  navigationObserved?: boolean;
+  staleRecovery?: Record<string, unknown>;
+  executionId?: string;
+  actionId?: string;
+  attempt?: number;
+  targetId?: string;
+}
+
+interface ReadinessDiagnostics {
+  ready: boolean;
+  waitedMs: number;
+  lastMilestone?: 'commit' | 'domcontentloaded' | 'load' | 'networkidle';
+  unmetConditions: string[];
+  checkedAt: string;
+}
 
 interface MatchedCondition {
   condition: Condition;
@@ -318,6 +414,9 @@ interface InteractiveElement {
   name: string;
   selector: string;
   disabled?: boolean;
+  checked?: boolean;
+  value?: string;
+  attributes?: Record<string, string>;
 }
 ```
 
@@ -344,12 +443,28 @@ type WaitState = 'visible' | 'hidden' | 'attached' | 'detached';
 interface WaitOptions {
   state?: WaitState;
   timeout?: number;
+  pollInterval?: number;
+}
+
+type NavigationMilestone = 'commit' | 'domcontentloaded' | 'load' | 'networkidle';
+
+interface WaitForReadyOptions extends ActionOptions {
+  any?: ReadyCondition[];
+  all?: ReadyCondition[];
+  loadingHidden?: string | string[];
+  url?: string;
+  predicate?: string | (() => unknown);
+  stableForMs?: number;
+  domQuietForMs?: number;
+  pollInterval?: number;
 }
 
 interface WaitResult {
   success: boolean;
   selector?: string;
   waitedMs: number;
+  milestone?: NavigationMilestone;
+  diagnostics?: ReadinessDiagnostics;
 }
 ```
 
@@ -357,12 +472,28 @@ interface WaitResult {
 
 ```typescript
 interface CDPClient {
-  send<T>(method: string, params?: object): Promise<T>;
-  on(event: string, handler: (params: unknown) => void): void;
-  off(event: string, handler: (params: unknown) => void): void;
+  send<T>(method: string, params?: Record<string, unknown>, sessionId?: string | null, options?: { timeout?: number }): Promise<T>;
+  on(event: string, handler: (params: Record<string, unknown>) => void): void;
+  off(event: string, handler: (params: Record<string, unknown>) => void): void;
+  onSessionEvent(sessionId: string, event: string, handler: (params: Record<string, unknown>) => void): () => void;
+  onAny(handler: (method: string, params: Record<string, unknown>, sessionId?: string) => void): void;
+  offAny(handler: (method: string, params: Record<string, unknown>, sessionId?: string) => void): void;
+  onTargetAttached(handler: (info: TargetAttachedInfo) => void): () => void;
   close(): Promise<void>;
   attachToTarget(targetId: string): Promise<string>;
+  runIfWaitingForDebugger(sessionId: string): Promise<void>;
+  readonly sessions: ReadonlySet<string>;
+  hasSession(sessionId: string): boolean;
+  readonly sessionId: string | undefined;
+  setSessionId(sessionId: string | undefined): void;
+  setAutoAttach(options?: { sessionId?: string | null }): Promise<void>;
   readonly isConnected: boolean;
+}
+
+interface TargetAttachedInfo {
+  sessionId: string;
+  targetInfo: Record<string, unknown>;
+  waitingForDebugger: boolean;
 }
 
 interface CDPClientOptions {

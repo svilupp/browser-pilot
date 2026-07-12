@@ -26,12 +26,17 @@ import type {
 import { stringifyUnknown } from '../utils/json.ts';
 import {
   DEEP_QUERY_SCRIPT,
+  VISIBLE_PREDICATE_SCRIPT,
   waitForAnyElement,
   waitForNetworkIdle as waitForIdle,
   waitForNavigation as waitForNav,
+  waitForReady as waitForReadyStrategy,
 } from '../wait/index.ts';
+import { ActionDispatch } from './action-dispatch.ts';
 import { ActionabilityError, ensureActionable } from './actionability.ts';
 import { computeDelta, type DeltaResult, extractPageState, type PageState } from './delta.ts';
+import { type DiagnoseOptions, type DiagnoseResult, diagnoseElement } from './diagnose.ts';
+import { buildFingerprintMap, fingerprintSimilarity, recoverStaleRef } from './fingerprint.ts';
 import { generateHints } from './hint-generator.ts';
 import {
   computeModifierBitmask,
@@ -43,9 +48,12 @@ import {
   US_KEYBOARD,
 } from './keyboard.ts';
 import { extractReview, type ReviewResult } from './review.ts';
+import { type CandidateStrategy, type RankedCandidate, rankCandidates } from './selector-rank.ts';
 import { buildSpecialSelectorLookupExpression } from './special-selectors.ts';
+import { classifyStaleError, type StaleRecoveryDiagnostics } from './stale-errors.ts';
 import {
   type ActionOptions,
+  type ActionReceipt,
   type ConsoleHandler,
   type ConsoleMessage,
   type ConsoleMessageType,
@@ -56,6 +64,7 @@ import {
   type Download,
   type ElementInfo,
   ElementNotFoundError,
+  type ElementState,
   type EmulationState,
   type ErrorHandler,
   type FileInput,
@@ -63,20 +72,33 @@ import {
   type FormField,
   type GeolocationOptions,
   type InteractiveElement,
+  type NavigationMilestone,
   type NetworkIdleOptions,
   type PageError,
   type PageSnapshot,
+  type ReadinessDiagnostics,
   type SnapshotNode,
   type SnapshotOptions,
   type SubmitOptions,
+  type TargetProvenance,
   TimeoutError,
   type TypeOptions,
   type UserAgentOptions,
   type ViewportOptions,
   type WaitForOptions,
+  type WaitForReadyOptions,
 } from './types.ts';
 
 const DEFAULT_TIMEOUT = 30000;
+
+/**
+ * Floor (in ms) for how long an OOPIF `switchToFrame` waits for the child
+ * debugging session to auto-attach / for the child document to become ready.
+ * The caller's `timeout` is honoured (M4) — this only guarantees a reasonable
+ * minimum window when a very short timeout is passed, since auto-attach is
+ * asynchronous and can arrive slightly after the parent DOM exposes the iframe.
+ */
+const OOPIF_ATTACH_MIN_TIMEOUT_MS = 5000;
 
 function normalizeAXCheckedValue(value: unknown): boolean | undefined {
   if (typeof value === 'boolean') {
@@ -90,6 +112,142 @@ function normalizeAXCheckedValue(value: unknown): boolean | undefined {
 
   return undefined;
 }
+
+/**
+ * Minimal shape of a node in the flattened tree returned by CDP
+ * `DOM.getDocument({ depth: -1, pierce: true })`.
+ *
+ * Only the fields the attribute-enrichment pass needs are modeled; this is
+ * structurally compatible with the richer `DOMNode` from `../cdp/protocol.ts`,
+ * so the real CDP payload assigns cleanly. `attributes` is CDP's flat
+ * `[name, value, name, value, ...]` list.
+ */
+export interface FlatDomNode {
+  backendNodeId?: number;
+  nodeName?: string;
+  attributes?: string[];
+  children?: FlatDomNode[];
+  contentDocument?: FlatDomNode;
+  shadowRoots?: FlatDomNode[];
+}
+
+/**
+ * Result of resolving an <iframe>/<frame> element: its `frameId` (if any) and
+ * the same-session `contentDocument` nodeId. `contentNodeId` is `undefined` for
+ * a cross-origin (OOPIF) frame whose document is unreachable from this session.
+ */
+interface ReturnFrameDescribe {
+  frameId?: string;
+  contentNodeId?: number;
+}
+
+/**
+ * Heuristic: is `c` a durable, semantic class name worth handing to the ranker?
+ *
+ * Rejects generated/hashed/atomic tokens that change between builds or renders
+ * (CSS-modules hashes, styled-components/emotion suffixes, atomic gibberish,
+ * purely-numeric and over-long tokens) and keeps short human-authored names.
+ */
+export function isStableClassName(c: string): boolean {
+  const cls = c.trim();
+  if (cls.length === 0) return false;
+
+  // Over-long tokens are almost always generated/atomic.
+  if (cls.length > 24) return false;
+
+  // Purely-numeric tokens carry no semantic meaning.
+  if (/^\d+$/.test(cls)) return false;
+
+  // CSS-modules hashes: a semantic prefix glued to a hash via `_`/`__` where the
+  // tail contains a digit, e.g. `Button_abc123`, `Header__3xY7z`.
+  if (/_{1,2}[a-z0-9]*\d[a-z0-9]*$/i.test(cls)) return false;
+
+  // Hashed/atomic suffixes: `<prefix>-<6+ char hashy tail>` where the tail looks
+  // random (has a digit, or mixes letter case), e.g. `css-1a2b3c`, `sc-bdVaJa`.
+  // Plain semantic tails like `nav-container` are kept.
+  const dash = cls.indexOf('-');
+  if (dash > 0) {
+    const tail = cls.slice(dash + 1);
+    if (
+      tail.length >= 6 &&
+      /^[a-z0-9]+$/i.test(tail) &&
+      (/\d/.test(tail) || (/[a-z]/.test(tail) && /[A-Z]/.test(tail)))
+    ) {
+      return false;
+    }
+  }
+
+  // Separator-free alphanumeric gibberish with digits (atomic classes, e.g. `x1nrf0dw`).
+  if (cls.length >= 6 && !/[-_]/.test(cls) && /\d/.test(cls) && /[a-z]/i.test(cls)) {
+    return false;
+  }
+
+  return true;
+}
+
+/**
+ * Pure extraction pass over a flattened CDP DOM tree.
+ *
+ * Walks the tree (including iframe `contentDocument` and `shadowRoots`) and
+ * returns a `backendNodeId -> attributes` map. Attribute names in `wantedNames`
+ * are copied verbatim; `class` is filtered down to stable tokens only. Nodes
+ * with no relevant attributes are omitted. No browser required — fully testable.
+ */
+export function extractAttributesByBackendId(
+  root: FlatDomNode | undefined,
+  wantedNames: readonly string[]
+): Map<number, Record<string, string>> {
+  const wanted = new Set(wantedNames);
+  const byBackendId = new Map<number, Record<string, string>>();
+
+  const visit = (node: FlatDomNode | undefined): void => {
+    if (!node) return;
+    if (node.backendNodeId !== undefined && Array.isArray(node.attributes)) {
+      const attrs: Record<string, string> = {};
+      for (let i = 0; i < node.attributes.length; i += 2) {
+        const name = node.attributes[i];
+        const value = node.attributes[i + 1];
+        if (name === undefined || value === undefined) continue;
+        if (wanted.has(name)) {
+          attrs[name] = value;
+        } else if (name === 'class' && value.trim().length > 0) {
+          // Keep stable (non-utility-noise) classes only: drop tokens that
+          // look state/hash-like so the ranker gets durable hooks.
+          const stable = value.split(/\s+/).filter((c) => c.length > 0 && isStableClassName(c));
+          if (stable.length > 0) attrs['class'] = stable.join(' ');
+        }
+      }
+      if (Object.keys(attrs).length > 0) byBackendId.set(node.backendNodeId, attrs);
+    }
+    if (node.children) for (const child of node.children) visit(child);
+    if (node.contentDocument) visit(node.contentDocument);
+    if (node.shadowRoots) for (const sr of node.shadowRoots) visit(sr);
+  };
+
+  visit(root);
+  return byBackendId;
+}
+
+/**
+ * Overrides `window.print` with a no-op that logs, so a stray click on a native
+ * "Print" control cannot open the browser's print preview (which blocks the
+ * renderer and stalls every subsequent CDP call). Installed per-document when
+ * {@link PageOptions.blockNativePrint} is enabled.
+ */
+const BLOCK_NATIVE_PRINT_SCRIPT = `(() => {
+  try {
+    if (globalThis.__bpNativePrintBlocked) return;
+    Object.defineProperty(globalThis, '__bpNativePrintBlocked', {
+      value: true,
+      configurable: true,
+    });
+    window.print = function () {
+      console.warn('[browser-pilot] window.print() blocked (blockNativePrint enabled)');
+    };
+  } catch (e) {
+    // Best-effort; never throw during page init.
+  }
+})();`;
 
 const EVENT_LISTENER_TRACKER_SCRIPT = `(() => {
   if (globalThis.__bpEventListenerTrackerInstalled) return;
@@ -146,6 +304,22 @@ const EVENT_LISTENER_TRACKER_SCRIPT = `(() => {
   };
 })();`;
 
+/**
+ * Construction-time options for a {@link Page}. Distinct from per-action options;
+ * these configure behaviour installed once at {@link Page.init}.
+ */
+export interface PageInitOptions {
+  /**
+   * Override `window.print` with a logging no-op on every document, preventing a
+   * stray click on a "Print" control from freezing the renderer in a native
+   * print preview. Off by default. Surfaced via `PageOptions.blockNativePrint`.
+   */
+  blockNativePrint?: boolean;
+
+  /** Provenance for diagnostics and workflow evidence. */
+  targetProvenance?: TargetProvenance;
+}
+
 export class Page {
   private cdp: CDPClient;
   private _targetId: string;
@@ -169,12 +343,45 @@ export class Page {
   private currentFrameContextId: number | null = null;
   /** Frame selector if context acquisition failed (cross-origin/sandboxed) */
   private brokenFrame: string | null = null;
+  /**
+   * Cross-origin (OOPIF) support. When an out-of-process iframe is the active
+   * frame, `currentFrameSession` holds its flat CDP child-session id and all
+   * DOM/Runtime/Input commands for that frame are routed to that session.
+   * `null` = the active frame lives in this page's own (default) session, i.e.
+   * top-level or a same-origin iframe — behaviour is unchanged in that case.
+   */
+  private currentFrameSession: string | null = null;
+  /**
+   * Registry of attached OOPIF child sessions, keyed by targetId. For an OOPIF
+   * the target's `targetId` equals the iframe element's `frameId`, so this is
+   * also the frameId→session map used by `switchToFrame`. Populated by the
+   * `Target.attachedToTarget` auto-attach handler; entries are validated against
+   * the live-session set before use (stale ones are dropped).
+   */
+  private oopifFrames = new Map<string, { sessionId: string; targetId: string; url: string }>();
+  /** Guards against wiring OOPIF auto-attach more than once. */
+  private oopifAutoAttachInstalled = false;
+  /**
+   * Firehose handler wired in {@link init} for `Target.attachedToTarget` /
+   * `Target.detachedFromTarget`. Stored so {@link dispose} can unsubscribe it:
+   * `onAny` is connection-global, so a discarded Page would otherwise keep
+   * processing every attach/detach on the connection forever (listener leak).
+   */
+  private oopifAnyHandler:
+    | ((method: string, params: Record<string, unknown>, sessionId?: string) => void)
+    | null = null;
+  /** True once {@link dispose} has run; makes teardown idempotent. */
+  private disposed = false;
   /** Last matched selector from findElement (for selectorUsed tracking) */
   private _lastMatchedSelector: string | undefined;
   private _lastActionCoordinates: { x: number; y: number } | null = null;
   private _lastActionBoundingBox: { x: number; y: number; width: number; height: number } | null =
     null;
   private _lastActionTargetMetadata: ActionTargetMetadata | null = null;
+  private _lastActionReceipt: ActionReceipt | undefined;
+  private _lastNavigationMilestone: NavigationMilestone | undefined;
+  private _lastReadinessDiagnostics: ReadinessDiagnostics | undefined;
+  private _lastStaleRecovery: StaleRecoveryDiagnostics | undefined;
   /** Last snapshot for stale ref recovery */
   private lastSnapshot?: PageSnapshot;
   /** Audio input controller (lazy-initialized) */
@@ -182,9 +389,21 @@ export class Page {
   /** Audio output controller (lazy-initialized) */
   private _audioOutput?: AudioOutput;
 
-  constructor(cdp: CDPClient, targetId: string) {
+  /**
+   * When true, `window.print` is overridden to a no-op (with a console log) on
+   * every document, so an AI-guessed click on a "Print" control can't freeze the
+   * renderer in a native print preview (which would stall every subsequent CDP
+   * call). Opt-in via {@link PageOptions.blockNativePrint}.
+   */
+  private readonly blockNativePrint: boolean;
+
+  private readonly targetProvenance: TargetProvenance;
+
+  constructor(cdp: CDPClient, targetId: string, options: PageInitOptions = {}) {
     this.cdp = cdp;
     this._targetId = targetId;
+    this.blockNativePrint = options.blockNativePrint === true;
+    this.targetProvenance = options.targetProvenance ?? { targetId, source: 'session' };
     this.batchExecutor = new BatchExecutor(this);
   }
 
@@ -193,6 +412,10 @@ export class Page {
    */
   get targetId(): string {
     return this._targetId;
+  }
+
+  getTargetProvenance(): TargetProvenance {
+    return { ...this.targetProvenance };
   }
 
   /**
@@ -296,11 +519,62 @@ export class Page {
     return this._lastActionTargetMetadata;
   }
 
+  getLastActionReceipt(): ActionReceipt | undefined {
+    return this._lastActionReceipt;
+  }
+
+  getLastStaleRecovery(): StaleRecoveryDiagnostics | undefined {
+    return this._lastStaleRecovery;
+  }
+
+  /** Last correlated main-frame navigation milestone observed by this page. */
+  getLastNavigationMilestone(): NavigationMilestone | undefined {
+    return this._lastNavigationMilestone;
+  }
+
+  /** Diagnostics from the most recent semantic readiness wait. */
+  getReadinessDiagnostics(): ReadinessDiagnostics | undefined {
+    return this._lastReadinessDiagnostics
+      ? {
+          ...this._lastReadinessDiagnostics,
+          unmetConditions: [...this._lastReadinessDiagnostics.unmetConditions],
+        }
+      : undefined;
+  }
+
+  /** Alias for inspection clients that expose diagnostics as a verb. */
+  diagnoseReadiness(): ReadinessDiagnostics | undefined {
+    return this.getReadinessDiagnostics();
+  }
+
+  markLastActionNavigationObserved(): void {
+    if (this._lastActionReceipt) {
+      this._lastActionReceipt = { ...this._lastActionReceipt, navigationObserved: true };
+    }
+  }
+
   /** Reset position tracking (call before each executor step) */
   resetLastActionPosition(): void {
     this._lastActionCoordinates = null;
     this._lastActionBoundingBox = null;
     this._lastActionTargetMetadata = null;
+  }
+
+  resetLastActionReceipt(): void {
+    this._lastActionReceipt = undefined;
+    this._lastStaleRecovery = undefined;
+  }
+
+  private async withActionDispatch<T>(fn: (dispatch: ActionDispatch) => Promise<T>): Promise<T> {
+    const dispatch = new ActionDispatch();
+    try {
+      return await fn(dispatch);
+    } finally {
+      this._lastActionReceipt = {
+        ...dispatch.toReceipt(),
+        ...(this._lastStaleRecovery ? { staleRecovery: this._lastStaleRecovery } : {}),
+      };
+    }
   }
 
   /**
@@ -343,12 +617,162 @@ export class Page {
       this.cdp.send('DOM.enable'),
       this.cdp.send('Runtime.enable'),
       this.cdp.send('Network.enable'),
+      // Emit Page.lifecycleEvent (incl. 'networkIdle') so waitForNavigation can
+      // settle heavy SPAs that never fire Page.loadEventFired.
+      this.cdp.send('Page.setLifecycleEventsEnabled', { enabled: true }),
     ]);
+
+    // Cross-origin (OOPIF) support: subscribe to target attaches and enable flat
+    // auto-attach on THIS page session BEFORE any navigation, so out-of-process
+    // iframes created by later navigations attach as child sessions we can drive.
+    if (!this.oopifAutoAttachInstalled) {
+      // Distinguish "mock/legacy client without OOPIF plumbing" (unit tests use
+      // a partial CDP mock) from a genuine auto-attach failure. Missing methods
+      // => degrade silently (same-origin behaviour is unaffected). A real client
+      // whose setAutoAttach REJECTS is surfaced loudly (console.warn) rather than
+      // swallowed, so a broken OOPIF setup on a real browser is not silent.
+      const hasOopifApi =
+        typeof this.cdp.onAny === 'function' && typeof this.cdp.setAutoAttach === 'function';
+      if (hasOopifApi) {
+        try {
+          // Single firehose handler for target lifecycle. We deliberately use
+          // `onAny` (not `onTargetAttached`) for attaches too: `onTargetAttached`
+          // hides the PARENT session id, but attach fan-out must be filtered by
+          // it (BUG B). In flat mode `Target.attachedToTarget` for a child of
+          // session S arrives with a message-level sessionId === S (the parent),
+          // delivered here as the third `parentSessionId` argument. Every Page on
+          // the connection sees every attach; `handleTargetAttached` only does
+          // real setup for children of THIS page's own sessions.
+          const anyHandler = (
+            method: string,
+            params: Record<string, unknown>,
+            parentSessionId?: string
+          ): void => {
+            if (method === 'Target.attachedToTarget') {
+              const attachedSessionId = params['sessionId'];
+              if (typeof attachedSessionId !== 'string') return;
+              void this.handleTargetAttached({
+                sessionId: attachedSessionId,
+                targetInfo: params['targetInfo'] as {
+                  type: string;
+                  url: string;
+                  targetId: string;
+                },
+                waitingForDebugger: params['waitingForDebugger'] === true,
+                parentSessionId,
+              });
+            } else if (method === 'Target.detachedFromTarget') {
+              // Drop registry entries + active frame session when a child target
+              // detaches (frame removed/reloaded/navigated) so we never keep
+              // driving a dead session, and `oopifFrames` can't grow unboundedly.
+              const sid = params['sessionId'];
+              if (typeof sid === 'string') this.dropOopifSession(sid);
+            }
+          };
+          this.oopifAnyHandler = anyHandler;
+          this.cdp.onAny(anyHandler);
+          // Arm auto-attach on THIS page's pinned session explicitly. Omitting the
+          // id resolves to the client's mutable current-default session, which is
+          // a race when two pages init concurrently (BUG D).
+          await this.cdp.setAutoAttach({ sessionId: this.cdp.sessionId });
+          this.oopifAutoAttachInstalled = true;
+        } catch (e) {
+          // Real client but auto-attach failed: OOPIF frames will be unreachable.
+          // Surface it instead of silently degrading.
+          console.warn(
+            '[browser-pilot] Failed to enable cross-origin iframe (OOPIF) auto-attach; ' +
+              `cross-origin frames will not be reachable: ${e instanceof Error ? e.message : String(e)}`
+          );
+        }
+      }
+    }
 
     await this.installEventListenerTracker();
   }
 
+  /**
+   * Handle a newly auto-attached flat child session (OOPIF or worker).
+   *
+   * For iframe targets we enable the DOM/Runtime/Page domains on the child
+   * session, arm auto-attach on it (so frames nested INSIDE it — Stripe-like —
+   * also attach), and record the frame→session linkage. For EVERY target type
+   * (workers included) we finally release it from the `waitForDebuggerOnStart`
+   * pause, otherwise a paused child (e.g. a page worker) would hang forever.
+   */
+  private async handleTargetAttached(info: {
+    sessionId: string;
+    targetInfo: { type: string; url: string; targetId: string };
+    waitingForDebugger: boolean;
+    /**
+     * Message-level sessionId of the `Target.attachedToTarget` event: the PARENT
+     * session the child attached under. Used to reject attaches belonging to
+     * OTHER pages (BUG B). Undefined for legacy callers/mocks — treated as owned
+     * to preserve prior behaviour.
+     */
+    parentSessionId?: string;
+  }): Promise<void> {
+    const { sessionId, targetInfo, parentSessionId } = info;
+    // Ownership filter (BUG B): only act on children of a session THIS page owns
+    // — its own pinned session, or one of its already-known OOPIF child sessions
+    // (nested frames). `onAny` is connection-global, so without this every Page
+    // would run Page/DOM/Runtime.enable + setAutoAttach on every other page's
+    // iframes and pollute its own `oopifFrames` registry with foreign frames.
+    const owned =
+      parentSessionId === undefined ||
+      parentSessionId === this.cdp.sessionId ||
+      this.isKnownChildSession(parentSessionId);
+    if (this.disposed || !owned) {
+      // Not ours to configure. Still release it from the debugger pause if it is
+      // waiting: redundant with the owning page's own unpause (idempotent) but
+      // guarantees nothing stalls if no page happens to claim it.
+      if (info.waitingForDebugger) {
+        try {
+          await this.cdp.runIfWaitingForDebugger(sessionId);
+        } catch {
+          // Session may already be gone; ignore.
+        }
+      }
+      return;
+    }
+    try {
+      if (targetInfo.type === 'iframe') {
+        await Promise.all([
+          this.cdp.send('Page.enable', undefined, sessionId),
+          this.cdp.send('DOM.enable', undefined, sessionId),
+          this.cdp.send('Runtime.enable', undefined, sessionId),
+          // Enable lifecycle events on the child session too, so navigation
+          // settling inside the OOPIF sees 'networkIdle' (parity with main).
+          this.cdp.send('Page.setLifecycleEventsEnabled', { enabled: true }, sessionId),
+        ]);
+        // Descend into nested OOPIFs: arm auto-attach on the child session while
+        // it is still paused, so its own children attach when it resumes. The
+        // explicit `sessionId` is already the child's own id (not the mutable
+        // default), so this arms the correct session.
+        await this.cdp.setAutoAttach({ sessionId });
+        this.oopifFrames.set(targetInfo.targetId, {
+          sessionId,
+          targetId: targetInfo.targetId,
+          url: targetInfo.url,
+        });
+      }
+    } catch {
+      // Best-effort domain setup; still unpause below so nothing stalls.
+    } finally {
+      // CRITICAL: we set waitForDebuggerOnStart, so every attached child starts
+      // paused. Release it (no-op if it wasn't paused) or it never loads.
+      try {
+        await this.cdp.runIfWaitingForDebugger(sessionId);
+      } catch {
+        // Session may already be gone; ignore.
+      }
+    }
+  }
+
   private async installEventListenerTracker(): Promise<void> {
+    if (this.blockNativePrint) {
+      await this.installNativePrintGuard();
+    }
+
     await this.cdp.send('Page.addScriptToEvaluateOnNewDocument', {
       source: EVENT_LISTENER_TRACKER_SCRIPT,
     });
@@ -362,6 +786,24 @@ export class Page {
     }
   }
 
+  /**
+   * Install the native-print guard: register it for every future document AND
+   * apply it to the current document (so a page already loaded before init is
+   * protected too). Best-effort — failures never block page setup.
+   */
+  private async installNativePrintGuard(): Promise<void> {
+    await this.cdp.send('Page.addScriptToEvaluateOnNewDocument', {
+      source: BLOCK_NATIVE_PRINT_SCRIPT,
+    });
+    try {
+      await this.cdp.send('Runtime.evaluate', {
+        expression: BLOCK_NATIVE_PRINT_SCRIPT,
+      });
+    } catch {
+      // No execution context yet; the new-document hook still covers it.
+    }
+  }
+
   // ============ Navigation ============
 
   /**
@@ -370,22 +812,33 @@ export class Page {
   async goto(url: string, options: ActionOptions = {}): Promise<void> {
     const { timeout = DEFAULT_TIMEOUT } = options;
 
-    // Start navigation
-    const navPromise = this.waitForNavigation({ timeout });
+    // `optional: true` so the nav wait RESOLVES (false) on timeout instead of
+    // throwing — the throw form skipped the state reset below (M1). We surface a
+    // URL-specific TimeoutError ourselves after the reset always runs.
+    const navPromise = this.waitForNavigation({
+      timeout,
+      optional: true,
+      waitUntil: options.waitUntil ?? 'load',
+    });
 
     await this.cdp.send('Page.navigate', { url });
 
-    const result = await navPromise;
+    let result: boolean;
+    try {
+      result = await navPromise;
+    } finally {
+      // ALWAYS refresh DOM/ref state AND reset frame state, even when navigation
+      // timed out (M1): the previous document's OOPIF child sessions detach on
+      // navigation, so leaving `currentFrameSession` set would keep routing
+      // actions to a dead child session.
+      this.rootNodeId = null;
+      this.refMap.clear();
+      this.resetFrameState();
+    }
+
     if (!result) {
       throw new TimeoutError(`Navigation to ${url} timed out after ${timeout}ms`);
     }
-
-    // Refresh root node, clear ref map, and reset frame state after navigation
-    this.rootNodeId = null;
-    this.refMap.clear();
-    this.currentFrame = null;
-    this.currentFrameContextId = null;
-    this.frameContexts.clear();
   }
 
   /**
@@ -416,12 +869,29 @@ export class Page {
   async reload(options: ActionOptions = {}): Promise<void> {
     const { timeout = DEFAULT_TIMEOUT } = options;
 
-    const navPromise = this.waitForNavigation({ timeout });
+    // `optional: true` (as in goto) so the wait RESOLVES(false) on timeout rather
+    // than rejecting: a throwing navPromise created BEFORE the `send` below would
+    // become an unhandled rejection if `send` throws (BUG E). We surface the
+    // timeout ourselves after the reset always runs.
+    const navPromise = this.waitForNavigation({
+      timeout,
+      optional: true,
+      waitUntil: options.waitUntil ?? 'load',
+    });
     await this.cdp.send('Page.reload');
-    await navPromise;
-
-    this.rootNodeId = null;
-    this.refMap.clear();
+    let result: boolean;
+    try {
+      result = await navPromise;
+    } finally {
+      // ALWAYS reset, even when navigation timed out (M1): frame sessions from
+      // the pre-reload document are now dead (M2).
+      this.rootNodeId = null;
+      this.refMap.clear();
+      this.resetFrameState();
+    }
+    if (!result) {
+      throw new TimeoutError(`Reload timed out after ${timeout}ms`);
+    }
   }
 
   /**
@@ -441,16 +911,33 @@ export class Page {
       return;
     }
 
-    const navPromise = this.waitForNavigation({ timeout });
+    // `optional: true` so an unawaited navPromise can't become an unhandled
+    // rejection if the `send` below throws (BUG E); timeout surfaced after reset.
+    const navPromise = this.waitForNavigation({
+      timeout,
+      optional: true,
+      waitUntil: options.waitUntil ?? 'load',
+      expectedUrl: history.entries[history.currentIndex - 1]!.url,
+    });
 
     // Use CDP navigation instead of history.back() - fires proper events
     await this.cdp.send('Page.navigateToHistoryEntry', {
       entryId: history.entries[history.currentIndex - 1]!.id,
     });
 
-    await navPromise;
-    this.rootNodeId = null;
-    this.refMap.clear();
+    let result: boolean;
+    try {
+      result = await navPromise;
+    } finally {
+      // ALWAYS reset, even when navigation timed out (M1): frame sessions from
+      // the previous document are now dead (M2).
+      this.rootNodeId = null;
+      this.refMap.clear();
+      this.resetFrameState();
+    }
+    if (!result) {
+      throw new TimeoutError(`Navigation (back) timed out after ${timeout}ms`);
+    }
   }
 
   /**
@@ -470,16 +957,32 @@ export class Page {
       return;
     }
 
-    const navPromise = this.waitForNavigation({ timeout });
+    // `optional: true` so an unawaited navPromise can't become an unhandled
+    // rejection if the `send` below throws (BUG E); timeout surfaced after reset.
+    const navPromise = this.waitForNavigation({
+      timeout,
+      optional: true,
+      waitUntil: options.waitUntil ?? 'load',
+    });
 
     // Use CDP navigation instead of history.forward() - fires proper events
     await this.cdp.send('Page.navigateToHistoryEntry', {
       entryId: history.entries[history.currentIndex + 1]!.id,
     });
 
-    await navPromise;
-    this.rootNodeId = null;
-    this.refMap.clear();
+    let result: boolean;
+    try {
+      result = await navPromise;
+    } finally {
+      // ALWAYS reset, even when navigation timed out (M1): frame sessions from
+      // the previous document are now dead (M2).
+      this.rootNodeId = null;
+      this.refMap.clear();
+      this.resetFrameState();
+    }
+    if (!result) {
+      throw new TimeoutError(`Navigation (forward) timed out after ${timeout}ms`);
+    }
   }
 
   // ============ Core Actions ============
@@ -492,103 +995,213 @@ export class Page {
    * trigger native form submission — no JS dispatch needed.
    */
   async click(selector: string | string[], options: ActionOptions = {}): Promise<boolean> {
-    return this.withStaleNodeRetry(async () => {
-      const element = await this.findElement(selector, options);
-      if (!element) {
-        if (options.optional) return false;
-        const selectorList = Array.isArray(selector) ? selector : [selector];
-        const hints = await generateHints(this, selectorList, 'click');
-        throw new ElementNotFoundError(selector, hints);
-      }
+    return this.withActionDispatch((dispatch) => this.clickInternal(selector, options, dispatch));
+  }
 
-      await this.scrollIntoView(element.nodeId);
-
-      const objectId = await this.resolveObjectId(element.nodeId);
-
-      // Actionability checks before click
-      try {
-        await ensureActionable(this.cdp, objectId, ['visible', 'enabled', 'stable'], {
-          timeout: options.timeout ?? DEFAULT_TIMEOUT,
-        });
-      } catch (e) {
-        if (
-          e instanceof ActionabilityError &&
-          e.failureType === 'hitTarget' &&
-          (await this.tryClickAssociatedLabel(objectId))
-        ) {
-          return true;
-        }
-        if (options.optional) return false;
-        throw e;
-      }
-
-      // Compute click coordinates for hit target check
-      let clickX: number;
-      let clickY: number;
-      try {
-        const { quads } = await this.cdp.send<{ quads: number[][] }>('DOM.getContentQuads', {
-          objectId,
-        });
-        if (quads?.length > 0) {
-          const quad = quads[0]!;
-          clickX = (quad[0]! + quad[2]! + quad[4]! + quad[6]!) / 4;
-          clickY = (quad[1]! + quad[3]! + quad[5]! + quad[7]!) / 4;
-          const minX = Math.min(quad[0]!, quad[2]!, quad[4]!, quad[6]!);
-          const maxX = Math.max(quad[0]!, quad[2]!, quad[4]!, quad[6]!);
-          const minY = Math.min(quad[1]!, quad[3]!, quad[5]!, quad[7]!);
-          const maxY = Math.max(quad[1]!, quad[3]!, quad[5]!, quad[7]!);
-          this.setLastActionPosition(
-            { x: clickX, y: clickY },
-            { x: minX, y: minY, width: maxX - minX, height: maxY - minY }
-          );
-        } else {
-          throw new Error('No quads');
-        }
-      } catch {
-        const box = await this.getBoxModel(element.nodeId);
-        if (!box) throw new Error('Could not get element position');
-        clickX = box.content[0]! + box.width / 2;
-        clickY = box.content[1]! + box.height / 2;
-        this.setLastActionPosition(
-          { x: clickX, y: clickY },
-          { x: box.content[0]!, y: box.content[1]!, width: box.width, height: box.height }
-        );
-      }
-
-      // Hit target checks inside iframes need frame-local coordinates, while
-      // Input.dispatchMouseEvent still needs the page-level coordinates above.
-      const hitTargetCoordinates = this.currentFrame ? undefined : { x: clickX, y: clickY };
-
-      // Hit target check with bounded retry for transient overlays
-      const HIT_TARGET_RETRIES = 3;
-      const HIT_TARGET_DELAY = 100;
-
-      for (let attempt = 0; attempt < HIT_TARGET_RETRIES; attempt++) {
-        try {
-          await ensureActionable(this.cdp, objectId, ['hitTarget'], {
-            timeout: options.timeout ?? DEFAULT_TIMEOUT,
-            coordinates: hitTargetCoordinates,
-          });
-          break;
-        } catch (e) {
+  private async clickInternal(
+    selector: string | string[],
+    options: ActionOptions,
+    dispatch: ActionDispatch
+  ): Promise<boolean> {
+    // Cross-origin (OOPIF) frame active: use element.click() on the child
+    // session (coordinate-based dispatch is out of scope for OOPIFs).
+    if (this.currentFrameSession) {
+      return this.clickInFrame(selector, options, dispatch);
+    }
+    return this.withStaleNodeRetry(
+      async () => {
+        const element = await this.findElement(selector, options);
+        if (!element) {
           if (options.optional) return false;
+          const selectorList = Array.isArray(selector) ? selector : [selector];
+          const hints = await generateHints(this, selectorList, 'click');
+          throw new ElementNotFoundError(selector, hints);
+        }
+
+        await this.scrollIntoView(element.nodeId);
+
+        const objectId = await this.resolveObjectId(element.nodeId);
+
+        // Actionability checks before click
+        try {
+          await ensureActionable(this.cdp, objectId, ['visible', 'enabled', 'stable'], {
+            timeout: options.timeout ?? DEFAULT_TIMEOUT,
+          });
+        } catch (e) {
           if (
             e instanceof ActionabilityError &&
             e.failureType === 'hitTarget' &&
-            attempt < HIT_TARGET_RETRIES - 1
+            (await this.tryClickAssociatedLabel(objectId, dispatch))
           ) {
-            await sleep(HIT_TARGET_DELAY);
-            // Re-scroll in case layout shifted
-            await this.cdp.send('DOM.scrollIntoViewIfNeeded', { nodeId: element.nodeId });
-            continue;
+            return true;
           }
+          if (options.optional) return false;
           throw e;
         }
-      }
 
-      await this.clickElement(element.nodeId);
-      return true;
+        // Compute click coordinates for hit target check
+        let clickX: number;
+        let clickY: number;
+        try {
+          const { quads } = await this.cdp.send<{ quads: number[][] }>('DOM.getContentQuads', {
+            objectId,
+          });
+          if (quads?.length > 0) {
+            const quad = quads[0]!;
+            clickX = (quad[0]! + quad[2]! + quad[4]! + quad[6]!) / 4;
+            clickY = (quad[1]! + quad[3]! + quad[5]! + quad[7]!) / 4;
+            const minX = Math.min(quad[0]!, quad[2]!, quad[4]!, quad[6]!);
+            const maxX = Math.max(quad[0]!, quad[2]!, quad[4]!, quad[6]!);
+            const minY = Math.min(quad[1]!, quad[3]!, quad[5]!, quad[7]!);
+            const maxY = Math.max(quad[1]!, quad[3]!, quad[5]!, quad[7]!);
+            this.setLastActionPosition(
+              { x: clickX, y: clickY },
+              { x: minX, y: minY, width: maxX - minX, height: maxY - minY }
+            );
+          } else {
+            throw new Error('No quads');
+          }
+        } catch {
+          const box = await this.getBoxModel(element.nodeId);
+          if (!box) throw new Error('Could not get element position');
+          clickX = box.content[0]! + box.width / 2;
+          clickY = box.content[1]! + box.height / 2;
+          this.setLastActionPosition(
+            { x: clickX, y: clickY },
+            { x: box.content[0]!, y: box.content[1]!, width: box.width, height: box.height }
+          );
+        }
+
+        // Hit target checks inside iframes need frame-local coordinates, while
+        // Input.dispatchMouseEvent still needs the page-level coordinates above.
+        const hitTargetCoordinates = this.currentFrame ? undefined : { x: clickX, y: clickY };
+
+        // Hit target check with bounded retry for transient overlays
+        const HIT_TARGET_RETRIES = 3;
+        const HIT_TARGET_DELAY = 100;
+
+        // Snapshot checkbox/radio state before any possible label or mouse
+        // dispatch so label-driven controls can be verified without a second
+        // effectful input event.
+        const toggleBefore = await this.readToggleState(objectId);
+
+        // A pointer-events:none input cannot receive the coordinate event even
+        // when its center otherwise looks actionable. Choose its label before
+        // dispatching any mouse event.
+        if (
+          toggleBefore &&
+          (await this.hasPointerEventsNone(objectId)) &&
+          (await this.tryClickAssociatedLabel(objectId, dispatch))
+        ) {
+          const expected = toggleBefore.isRadio ? true : !toggleBefore.checked;
+          await this.ensureToggleRegistered(objectId, expected);
+          return true;
+        }
+
+        for (let attempt = 0; attempt < HIT_TARGET_RETRIES; attempt++) {
+          try {
+            await ensureActionable(this.cdp, objectId, ['hitTarget'], {
+              timeout: options.timeout ?? DEFAULT_TIMEOUT,
+              coordinates: hitTargetCoordinates,
+            });
+            break;
+          } catch (e) {
+            if (options.optional) return false;
+            if (
+              e instanceof ActionabilityError &&
+              e.failureType === 'hitTarget' &&
+              (await this.tryClickAssociatedLabel(objectId, dispatch))
+            ) {
+              if (toggleBefore) {
+                const expected = toggleBefore.isRadio ? true : !toggleBefore.checked;
+                await this.ensureToggleRegistered(objectId, expected);
+              }
+              return true;
+            }
+            if (
+              e instanceof ActionabilityError &&
+              e.failureType === 'hitTarget' &&
+              attempt < HIT_TARGET_RETRIES - 1
+            ) {
+              await sleep(HIT_TARGET_DELAY);
+              // Re-scroll in case layout shifted
+              await this.cdp.send('DOM.scrollIntoViewIfNeeded', { nodeId: element.nodeId });
+              continue;
+            }
+            throw e;
+          }
+        }
+
+        await this.clickElement(element.nodeId, dispatch);
+
+        if (toggleBefore) {
+          // A genuine user click toggles a checkbox / selects a radio AND fires
+          // bubbling input + change. The trusted CDP mouse click normally does this
+          // on its own. Verification is observation only; label-driven controls
+          // are selected before dispatch above.
+          const expected = toggleBefore.isRadio ? true : !toggleBefore.checked;
+          await this.ensureToggleRegistered(objectId, expected);
+        }
+        return true;
+      },
+      { dispatch }
+    );
+  }
+
+  /**
+   * Read whether an element is a checkbox/radio and its current checked state.
+   * Returns null for any other element so plain clicks (buttons/links) are untouched.
+   */
+  private async readToggleState(
+    objectId: string
+  ): Promise<{ isRadio: boolean; checked: boolean } | null> {
+    const res = await this.cdp.send<{
+      result: { value: { isRadio: boolean; checked: boolean } | null };
+    }>('Runtime.callFunctionOn', {
+      objectId,
+      functionDeclaration: `function() {
+        if (!(this instanceof HTMLInputElement)) return null;
+        var t = String(this.type || '').toLowerCase();
+        if (t !== 'checkbox' && t !== 'radio') return null;
+        return { isRadio: t === 'radio', checked: !!this.checked };
+      }`,
+      returnByValue: true,
     });
+    return res.result.value ?? null;
+  }
+
+  private async hasPointerEventsNone(objectId: string): Promise<boolean> {
+    try {
+      const result = await this.cdp.send<{ result: { value: boolean } }>('Runtime.callFunctionOn', {
+        objectId,
+        functionDeclaration:
+          'function() { return getComputedStyle(this).pointerEvents === "none"; }',
+        returnByValue: true,
+      });
+      return result.result.value === true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * After a trusted click on a checkbox/radio, observe whether the toggle
+   * registered. This is deliberately not a recovery path: a second label click
+   * or synthetic event could duplicate an already accepted effect.
+   */
+  private async ensureToggleRegistered(objectId: string, expected: boolean): Promise<void> {
+    let actual: boolean;
+    try {
+      actual = await this.readCheckedState(objectId);
+    } catch {
+      // Node detached (e.g. the click navigated) — nothing to verify.
+      return;
+    }
+    if (actual === expected) return; // Trusted click already did the right thing.
+
+    throw new Error(
+      `Click was dispatched but toggle state did not become ${expected ? 'checked' : 'unchecked'}`
+    );
   }
 
   /**
@@ -601,118 +1214,141 @@ export class Page {
   ): Promise<boolean> {
     const { blur = false } = options;
 
-    return this.withStaleNodeRetry(async () => {
-      const element = await this.findElement(selector, options);
+    // Cross-origin (OOPIF) frame active: focus + Input.insertText on the child
+    // session (coordinate geometry / special-input handling is out of scope).
+    if (this.currentFrameSession) {
+      return this.withActionDispatch((dispatch) =>
+        this.fillInFrame(selector, value, options, dispatch)
+      );
+    }
 
-      if (!element) {
-        if (options.optional) return false;
-        const selectorList = Array.isArray(selector) ? selector : [selector];
-        const hints = await generateHints(this, selectorList, 'fill');
-        throw new ElementNotFoundError(selector, hints);
-      }
+    return this.withActionDispatch((dispatch) =>
+      this.withStaleNodeRetry(
+        async () => {
+          const element = await this.findElement(selector, options);
 
-      // Resolve nodeId to objectId for Runtime.callFunctionOn
-      const { object } = await this.cdp.send<{ object: { objectId: string } }>('DOM.resolveNode', {
-        nodeId: element.nodeId,
-      });
-      const objectId = object.objectId;
+          if (!element) {
+            if (options.optional) return false;
+            const selectorList = Array.isArray(selector) ? selector : [selector];
+            const hints = await generateHints(this, selectorList, 'fill');
+            throw new ElementNotFoundError(selector, hints);
+          }
 
-      // Actionability checks before fill
-      try {
-        await ensureActionable(this.cdp, objectId, ['visible', 'enabled', 'editable'], {
-          timeout: options.timeout ?? DEFAULT_TIMEOUT,
-        });
-      } catch (e) {
-        if (options.optional) return false;
-        throw e;
-      }
+          // Resolve nodeId to objectId for Runtime.callFunctionOn
+          const { object } = await this.cdp.send<{ object: { objectId: string } }>(
+            'DOM.resolveNode',
+            {
+              nodeId: element.nodeId,
+            }
+          );
+          const objectId = object.objectId;
 
-      const fillPos = await this.getElementPosition({ nodeId: element.nodeId });
-      if (fillPos) this.setLastActionPosition(fillPos.center, fillPos.bbox);
+          // Actionability checks before fill
+          try {
+            await ensureActionable(this.cdp, objectId, ['visible', 'enabled', 'editable'], {
+              timeout: options.timeout ?? DEFAULT_TIMEOUT,
+            });
+          } catch (e) {
+            if (options.optional) return false;
+            throw e;
+          }
 
-      // Check if this is a special input type that can't use Input.insertText
-      const tagInfo = await this.cdp.send<{
-        result: { value: { tagName: string; inputType: string; autocomplete: string } };
-      }>('Runtime.callFunctionOn', {
-        objectId,
-        functionDeclaration: `function() {
+          const fillPos = await this.getElementPosition({ nodeId: element.nodeId });
+          if (fillPos) this.setLastActionPosition(fillPos.center, fillPos.bbox);
+
+          // Check if this is a special input type that can't use Input.insertText
+          const tagInfo = await this.cdp.send<{
+            result: { value: { tagName: string; inputType: string; autocomplete: string } };
+          }>('Runtime.callFunctionOn', {
+            objectId,
+            functionDeclaration: `function() {
             return {
               tagName: this.tagName?.toLowerCase() || '',
               inputType: (this.type || '').toLowerCase(),
               autocomplete: typeof this.autocomplete === 'string' ? this.autocomplete.toLowerCase() : '',
             };
           }`,
-        returnByValue: true,
-      });
-      this._lastActionTargetMetadata = tagInfo.result.value;
-      const { tagName, inputType } = tagInfo.result.value;
-      const specialInputTypes = new Set([
-        'date',
-        'datetime-local',
-        'month',
-        'week',
-        'time',
-        'color',
-        'range',
-        'file',
-      ]);
-      const isSpecialInput = tagName === 'input' && specialInputTypes.has(inputType);
+            returnByValue: true,
+          });
+          this._lastActionTargetMetadata = tagInfo.result.value;
+          const { tagName, inputType } = tagInfo.result.value;
+          const specialInputTypes = new Set([
+            'date',
+            'datetime-local',
+            'month',
+            'week',
+            'time',
+            'color',
+            'range',
+            'file',
+          ]);
+          const isSpecialInput = tagName === 'input' && specialInputTypes.has(inputType);
 
-      if (isSpecialInput) {
-        // Special inputs: set value directly + dispatch events
-        await this.cdp.send('Runtime.callFunctionOn', {
-          objectId,
-          functionDeclaration: `function(val) {
-            this.value = val;
-            this.dispatchEvent(new Event('input', { bubbles: true }));
-            this.dispatchEvent(new Event('change', { bubbles: true }));
-          }`,
-          arguments: [{ value }],
-          returnByValue: true,
-        });
-      } else {
-        // Playwright pattern: focus + select all, then insertText/Delete.
-        await this.selectEditableContent(objectId);
-
-        if (value === '') {
-          // Empty value: send Delete key to clear selected text (Playwright pattern)
-          await this.dispatchKey('Delete');
-        } else {
-          // Non-empty: Input.insertText fires real isTrusted:true events
-          await this.cdp.send('Input.insertText', { text: value });
-        }
-      }
-
-      if (options.verify !== false) {
-        let actualValue = await this.readEditableValue(objectId);
-
-        if (actualValue !== value && !isSpecialInput) {
-          if (value === '') {
-            await this.clearEditableSelection(objectId, 'Backspace');
+          if (isSpecialInput) {
+            // Special inputs: set value directly + dispatch events
+            await dispatch.send(
+              () =>
+                this.cdp.send('Runtime.callFunctionOn', {
+                  objectId,
+                  functionDeclaration: `function(val) {
+                this.value = val;
+                this.dispatchEvent(new Event('input', { bubbles: true }));
+                this.dispatchEvent(new Event('change', { bubbles: true }));
+              }`,
+                  arguments: [{ value }],
+                  returnByValue: true,
+                }),
+              'fillValue'
+            );
           } else {
-            await this.typeEditableFallback(element.nodeId, objectId, value);
+            // Playwright pattern: focus + select all, then insertText/Delete.
+            await this.selectEditableContent(objectId);
+
+            if (value === '') {
+              // Empty value: send Delete key to clear selected text (Playwright pattern)
+              await this.dispatchKey('Delete', undefined, dispatch);
+            } else {
+              // Non-empty: Input.insertText fires real isTrusted:true events
+              await dispatch.send(
+                () => this.cdp.send('Input.insertText', { text: value }),
+                'insertText'
+              );
+            }
           }
-          actualValue = await this.readEditableValue(objectId);
-        }
 
-        if (actualValue !== value) {
-          if (options.optional) return false;
-          throw new Error(
-            `Fill value did not stick. Expected ${JSON.stringify(value)} but got ${JSON.stringify(actualValue)}.`
-          );
-        }
-      }
+          if (options.verify !== false) {
+            let actualValue = await this.readEditableValue(objectId);
 
-      // Optionally trigger blur
-      if (blur) {
-        await this.cdp.send('Runtime.callFunctionOn', {
-          objectId,
-          functionDeclaration: 'function() { this.blur(); }',
-        });
-      }
+            if (actualValue !== value && !isSpecialInput) {
+              if (value === '') {
+                await this.clearEditableSelection(objectId, 'Backspace', dispatch);
+              } else {
+                await this.typeEditableFallback(element.nodeId, objectId, value, dispatch);
+              }
+              actualValue = await this.readEditableValue(objectId);
+            }
 
-      return true;
-    });
+            if (actualValue !== value) {
+              if (options.optional) return false;
+              throw new Error(
+                `Fill value did not stick. Expected ${JSON.stringify(value)} but got ${JSON.stringify(actualValue)}.`
+              );
+            }
+          }
+
+          // Optionally trigger blur
+          if (blur) {
+            await this.cdp.send('Runtime.callFunctionOn', {
+              objectId,
+              functionDeclaration: 'function() { this.blur(); }',
+            });
+          }
+
+          return true;
+        },
+        { dispatch }
+      )
+    );
   }
 
   /**
@@ -727,92 +1363,87 @@ export class Page {
     text: string,
     options: TypeOptions = {}
   ): Promise<boolean> {
-    return this.withStaleNodeRetry(async () => {
-      const { delay = 50 } = options;
-      const element = await this.findElement(selector, options);
+    // Cross-origin (OOPIF) frame active: focus + per-key dispatch on the child
+    // session (needed for checkout card entry). Routed before findElement so it
+    // cannot silently resolve against the parent session.
+    if (this.currentFrameSession) {
+      return this.withActionDispatch((dispatch) =>
+        this.typeInFrame(selector, text, options, dispatch)
+      );
+    }
+    return this.withActionDispatch((dispatch) =>
+      this.withStaleNodeRetry(
+        async () => {
+          const { delay = 50 } = options;
+          const element = await this.findElement(selector, options);
 
-      if (!element) {
-        if (options.optional) return false;
-        throw new ElementNotFoundError(selector);
-      }
+          if (!element) {
+            if (options.optional) return false;
+            throw new ElementNotFoundError(selector);
+          }
 
-      // Actionability checks before typing
-      const objectId = await this.resolveObjectId(element.nodeId);
-      try {
-        await ensureActionable(this.cdp, objectId, ['visible', 'enabled'], {
-          timeout: options.timeout ?? DEFAULT_TIMEOUT,
-        });
-      } catch (e) {
-        if (options.optional) return false;
-        throw e;
-      }
-
-      const typePos = await this.getElementPosition({ nodeId: element.nodeId });
-      if (typePos) this.setLastActionPosition(typePos.center, typePos.bbox);
-      this._lastActionTargetMetadata = await this.getActionTargetMetadata({ objectId });
-
-      await this.cdp.send('DOM.focus', { nodeId: element.nodeId });
-
-      for (const char of text) {
-        const def = US_KEYBOARD[char];
-
-        if (def) {
-          if (def.text !== undefined) {
-            // Printable character: 'keyDown' with text fields
-            await this.cdp.send('Input.dispatchKeyEvent', {
-              type: 'keyDown',
-              key: def.key,
-              code: def.code,
-              text: def.text,
-              unmodifiedText: def.text,
-              windowsVirtualKeyCode: def.keyCode,
-              modifiers: 0,
-              autoRepeat: false,
-              location: def.location ?? 0,
-              isKeypad: false,
+          // Actionability checks before typing
+          const objectId = await this.resolveObjectId(element.nodeId);
+          try {
+            await ensureActionable(this.cdp, objectId, ['visible', 'enabled'], {
+              timeout: options.timeout ?? DEFAULT_TIMEOUT,
             });
-          } else {
-            // Non-text key (Enter, Tab, etc.): 'rawKeyDown', no text
-            await this.cdp.send('Input.dispatchKeyEvent', {
-              type: 'rawKeyDown',
-              key: def.key,
-              code: def.code,
-              windowsVirtualKeyCode: def.keyCode,
-              modifiers: 0,
-              autoRepeat: false,
-              location: def.location ?? 0,
-              isKeypad: false,
+          } catch (e) {
+            if (options.optional) return false;
+            throw e;
+          }
+
+          const typePos = await this.getElementPosition({ nodeId: element.nodeId });
+          if (typePos) this.setLastActionPosition(typePos.center, typePos.bbox);
+          this._lastActionTargetMetadata = await this.getActionTargetMetadata({ objectId });
+
+          await this.cdp.send('DOM.focus', { nodeId: element.nodeId });
+          const beforeState = await this.readEditableState(objectId);
+
+          for (const char of text) {
+            const def = US_KEYBOARD[char];
+
+            if (def) {
+              await this.dispatchKeyDefinition(def, 0, undefined, dispatch);
+            } else {
+              // Non-layout character (emoji, CJK): use insertText
+              await dispatch.send(
+                () => this.cdp.send('Input.insertText', { text: char }),
+                'insertText'
+              );
+            }
+
+            if (delay > 0) {
+              await sleep(delay);
+            }
+          }
+
+          // Input.dispatchKeyEvent can acknowledge successfully without
+          // editing a background target. Input.insertText works without
+          // activating the tab, so use it only when the key path had no effect.
+          const afterState = await this.readEditableState(objectId);
+          if (
+            text.length > 0 &&
+            beforeState.value === afterState.value &&
+            beforeState.selectionStart === afterState.selectionStart &&
+            beforeState.selectionEnd === afterState.selectionEnd
+          ) {
+            await dispatch.send(() => this.cdp.send('Input.insertText', { text }), 'insertText');
+          }
+
+          // Optionally trigger blur
+          if (options.blur) {
+            await this.cdp.send('Runtime.callFunctionOn', {
+              objectId,
+              functionDeclaration: 'function() { this.blur(); }',
             });
           }
 
-          await this.cdp.send('Input.dispatchKeyEvent', {
-            type: 'keyUp',
-            key: def.key,
-            code: def.code,
-            windowsVirtualKeyCode: def.keyCode,
-            modifiers: 0,
-            location: def.location ?? 0,
-          });
-        } else {
-          // Non-layout character (emoji, CJK): use insertText
-          await this.cdp.send('Input.insertText', { text: char });
-        }
-
-        if (delay > 0) {
-          await sleep(delay);
-        }
-      }
-
-      // Optionally trigger blur
-      if (options.blur) {
-        await this.cdp.send('Runtime.callFunctionOn', {
-          objectId,
-          functionDeclaration: 'function() { this.blur(); }',
-        });
-      }
-
-      return true;
-    });
+          return true;
+        },
+        { dispatch }
+      )
+    );
   }
 
   /**
@@ -829,6 +1460,7 @@ export class Page {
     valueOrOptions?: string | string[] | ActionOptions,
     maybeOptions?: ActionOptions
   ): Promise<boolean> {
+    this.assertOopifUnsupported('select');
     // Handle custom select config
     if (
       typeof selectorOrConfig === 'object' &&
@@ -842,80 +1474,86 @@ export class Page {
     const value = valueOrOptions as string | string[];
     const options = maybeOptions ?? {};
 
-    return this.withStaleNodeRetry(async () => {
-      const element = await this.findElement(selector, options);
-      if (!element) {
-        if (options.optional) return false;
-        const selectorList = Array.isArray(selector) ? selector : [selector];
-        const hints = await generateHints(this, selectorList, 'select');
-        throw new ElementNotFoundError(selector, hints);
-      }
+    return this.withActionDispatch((dispatch) =>
+      this.withStaleNodeRetry(
+        async () => {
+          const element = await this.findElement(selector, options);
+          if (!element) {
+            if (options.optional) return false;
+            const selectorList = Array.isArray(selector) ? selector : [selector];
+            const hints = await generateHints(this, selectorList, 'select');
+            throw new ElementNotFoundError(selector, hints);
+          }
 
-      const values = Array.isArray(value) ? value : [value];
-      const objectId = await this.resolveObjectId(element.nodeId);
+          const values = Array.isArray(value) ? value : [value];
+          const objectId = await this.resolveObjectId(element.nodeId);
 
-      try {
-        await this.scrollIntoView(element.nodeId);
-        await ensureActionable(this.cdp, objectId, ['visible', 'enabled'], {
-          timeout: options.timeout ?? DEFAULT_TIMEOUT,
-        });
-      } catch (e) {
-        if (options.optional) return false;
-        throw e;
-      }
+          try {
+            await this.scrollIntoView(element.nodeId);
+            await ensureActionable(this.cdp, objectId, ['visible', 'enabled'], {
+              timeout: options.timeout ?? DEFAULT_TIMEOUT,
+            });
+          } catch (e) {
+            if (options.optional) return false;
+            throw e;
+          }
 
-      const selectPos = await this.getElementPosition({ nodeId: element.nodeId });
-      if (selectPos) this.setLastActionPosition(selectPos.center, selectPos.bbox);
-      this._lastActionTargetMetadata = await this.getActionTargetMetadata({ objectId });
+          const selectPos = await this.getElementPosition({ nodeId: element.nodeId });
+          if (selectPos) this.setLastActionPosition(selectPos.center, selectPos.bbox);
+          this._lastActionTargetMetadata = await this.getActionTargetMetadata({ objectId });
 
-      const metadata = await this.getNativeSelectMetadata(objectId, values);
-      if (!metadata.isSelect) {
-        throw new Error('select() target must be a native <select> element');
-      }
-      if (metadata.missing.length > 0) {
-        throw new Error(`No option found for: ${metadata.missing.join(', ')}`);
-      }
-      if (metadata.disabled.length > 0) {
-        throw new Error(`Cannot select disabled option(s): ${metadata.disabled.join(', ')}`);
-      }
-      if (!metadata.multiple && metadata.targetIndexes.length > 1) {
-        throw new Error('Cannot select multiple values on a single-select element');
-      }
+          const metadata = await this.getNativeSelectMetadata(objectId, values);
+          if (!metadata.isSelect) {
+            throw new Error('select() target must be a native <select> element');
+          }
+          if (metadata.missing.length > 0) {
+            throw new Error(`No option found for: ${metadata.missing.join(', ')}`);
+          }
+          if (metadata.disabled.length > 0) {
+            throw new Error(`Cannot select disabled option(s): ${metadata.disabled.join(', ')}`);
+          }
+          if (!metadata.multiple && metadata.targetIndexes.length > 1) {
+            throw new Error('Cannot select multiple values on a single-select element');
+          }
 
-      const expectedValues = metadata.targetIndexes.map((idx) => metadata.options[idx]!.value);
-      if (this.selectValuesMatch(metadata.selectedValues, expectedValues, metadata.multiple)) {
-        return true;
-      }
+          const expectedValues = metadata.targetIndexes.map((idx) => metadata.options[idx]!.value);
+          if (this.selectValuesMatch(metadata.selectedValues, expectedValues, metadata.multiple)) {
+            return true;
+          }
 
-      if (!metadata.multiple && metadata.targetIndexes.length === 1) {
-        await this.applyNativeSelectByKeyboard(
-          element.nodeId,
-          objectId,
-          metadata.currentIndex,
-          metadata.targetIndexes[0]!
-        );
-      }
+          if (!metadata.multiple && metadata.targetIndexes.length === 1) {
+            await this.applyNativeSelectByKeyboard(
+              element.nodeId,
+              objectId,
+              metadata.currentIndex,
+              metadata.targetIndexes[0]!,
+              dispatch
+            );
+          }
 
-      let selectedValues = await this.readNativeSelectValues(objectId);
-      if (!this.selectValuesMatch(selectedValues, expectedValues, metadata.multiple)) {
-        await this.applyNativeSelectFallback(objectId, metadata.targetIndexes);
-        selectedValues = await this.readNativeSelectValues(objectId);
-      }
+          let selectedValues = await this.readNativeSelectValues(objectId);
+          if (!this.selectValuesMatch(selectedValues, expectedValues, metadata.multiple)) {
+            await this.applyNativeSelectFallback(objectId, metadata.targetIndexes, dispatch);
+            selectedValues = await this.readNativeSelectValues(objectId);
+          }
 
-      if (!this.selectValuesMatch(selectedValues, expectedValues, metadata.multiple)) {
-        await this.applyRecordedSelectFallback(objectId, metadata.targetIndexes);
-        selectedValues = await this.readNativeSelectValues(objectId);
-      }
+          if (!this.selectValuesMatch(selectedValues, expectedValues, metadata.multiple)) {
+            await this.applyRecordedSelectFallback(objectId, metadata.targetIndexes, dispatch);
+            selectedValues = await this.readNativeSelectValues(objectId);
+          }
 
-      if (!this.selectValuesMatch(selectedValues, expectedValues, metadata.multiple)) {
-        if (options.optional) return false;
-        throw new Error(
-          `Select value did not stick. Expected ${expectedValues.join(', ') || '(empty)'} but got ${selectedValues.join(', ') || '(empty)'}.`
-        );
-      }
+          if (!this.selectValuesMatch(selectedValues, expectedValues, metadata.multiple)) {
+            if (options.optional) return false;
+            throw new Error(
+              `Select value did not stick. Expected ${expectedValues.join(', ') || '(empty)'} but got ${selectedValues.join(', ') || '(empty)'}.`
+            );
+          }
 
-      return true;
-    });
+          return true;
+        },
+        { dispatch }
+      )
+    );
   }
 
   /**
@@ -927,19 +1565,21 @@ export class Page {
   ): Promise<boolean> {
     const { trigger, option, value, match = 'text' } = config;
 
-    return this.withStaleNodeRetry(async () => {
-      // Click the trigger to open dropdown
-      await this.click(trigger, options);
+    return this.withActionDispatch((dispatch) =>
+      this.withStaleNodeRetry(
+        async () => {
+          // Click the trigger to open dropdown
+          await this.clickInternal(trigger, options, dispatch);
 
-      // Wait for dropdown to appear (up to 500ms) instead of fixed delay
-      const optionSelectors = Array.isArray(option) ? option : [option];
-      await waitForAnyElement(this.cdp, optionSelectors, {
-        state: 'visible',
-        timeout: 500,
-        contextId: this.currentFrameContextId ?? undefined,
-      }).catch(() => sleep(100)); // Fallback to brief delay if we can't detect
-      const optionHandle = await this.evaluateInFrame<{ result: RemoteObject }>(
-        `(() => {
+          // Wait for dropdown to appear (up to 500ms) instead of fixed delay
+          const optionSelectors = Array.isArray(option) ? option : [option];
+          await waitForAnyElement(this.cdp, optionSelectors, {
+            state: 'visible',
+            timeout: 500,
+            contextId: this.currentFrameContextId ?? undefined,
+          }).catch(() => sleep(100)); // Fallback to brief delay if we can't detect
+          const optionHandle = await this.evaluateInFrame<{ result: RemoteObject }>(
+            `(() => {
           const selectors = ${JSON.stringify(optionSelectors)};
           const wanted = ${JSON.stringify(value)};
           const mode = ${JSON.stringify(match)};
@@ -968,35 +1608,38 @@ export class Page {
 
           return null;
         })()`,
-        { returnByValue: false }
-      );
+            { returnByValue: false }
+          );
 
-      if (!optionHandle.result.objectId) {
-        if (options.optional) return false;
-        throw new ElementNotFoundError(`Option with ${match} "${value}"`);
-      }
+          if (!optionHandle.result.objectId) {
+            if (options.optional) return false;
+            throw new ElementNotFoundError(`Option with ${match} "${value}"`);
+          }
 
-      const nodeResult = await this.cdp.send<{ nodeId: number }>('DOM.requestNode', {
-        objectId: optionHandle.result.objectId,
-      });
+          const nodeResult = await this.cdp.send<{ nodeId: number }>('DOM.requestNode', {
+            objectId: optionHandle.result.objectId,
+          });
 
-      if (!nodeResult.nodeId) {
-        if (options.optional) return false;
-        throw new ElementNotFoundError(`Option with ${match} "${value}"`);
-      }
+          if (!nodeResult.nodeId) {
+            if (options.optional) return false;
+            throw new ElementNotFoundError(`Option with ${match} "${value}"`);
+          }
 
-      await this.scrollIntoView(nodeResult.nodeId);
-      await ensureActionable(
-        this.cdp,
-        optionHandle.result.objectId,
-        ['visible', 'enabled', 'stable'],
-        {
-          timeout: options.timeout ?? DEFAULT_TIMEOUT,
-        }
-      );
-      await this.clickElement(nodeResult.nodeId);
-      return true;
-    });
+          await this.scrollIntoView(nodeResult.nodeId);
+          await ensureActionable(
+            this.cdp,
+            optionHandle.result.objectId,
+            ['visible', 'enabled', 'stable'],
+            {
+              timeout: options.timeout ?? DEFAULT_TIMEOUT,
+            }
+          );
+          await this.clickElement(nodeResult.nodeId, dispatch);
+          return true;
+        },
+        { dispatch }
+      )
+    );
   }
 
   /**
@@ -1004,63 +1647,85 @@ export class Page {
    * No-op if already checked. Verifies state changed after click.
    */
   async check(selector: string | string[], options: ActionOptions = {}): Promise<boolean> {
-    return this.withStaleNodeRetry(async () => {
-      const element = await this.findElement(selector, options);
-      if (!element) {
-        if (options.optional) return false;
-        const selectorList = Array.isArray(selector) ? selector : [selector];
-        const hints = await generateHints(this, selectorList, 'check');
-        throw new ElementNotFoundError(selector, hints);
-      }
+    this.assertOopifUnsupported('check');
+    return this.withActionDispatch((dispatch) =>
+      this.withStaleNodeRetry(
+        async () => {
+          const element = await this.findElement(selector, options);
+          if (!element) {
+            if (options.optional) return false;
+            const selectorList = Array.isArray(selector) ? selector : [selector];
+            const hints = await generateHints(this, selectorList, 'check');
+            throw new ElementNotFoundError(selector, hints);
+          }
 
-      const { object } = await this.cdp.send<{ object: { objectId: string } }>('DOM.resolveNode', {
-        nodeId: element.nodeId,
-      });
+          const { object } = await this.cdp.send<{ object: { objectId: string } }>(
+            'DOM.resolveNode',
+            {
+              nodeId: element.nodeId,
+            }
+          );
 
-      // Actionability checks
-      try {
-        await ensureActionable(this.cdp, object.objectId, ['visible', 'enabled'], {
-          timeout: options.timeout ?? DEFAULT_TIMEOUT,
-        });
-      } catch (e) {
-        if (options.optional) return false;
-        throw e;
-      }
+          // Actionability checks
+          try {
+            await ensureActionable(this.cdp, object.objectId, ['visible', 'enabled'], {
+              timeout: options.timeout ?? DEFAULT_TIMEOUT,
+            });
+          } catch (e) {
+            if (options.optional) return false;
+            throw e;
+          }
 
-      const checkPos = await this.getElementPosition({ nodeId: element.nodeId });
-      if (checkPos) this.setLastActionPosition(checkPos.center, checkPos.bbox);
+          const checkPos = await this.getElementPosition({ nodeId: element.nodeId });
+          if (checkPos) this.setLastActionPosition(checkPos.center, checkPos.bbox);
 
-      // Read current checked state
-      const before = await this.cdp.send<{ result: { value: boolean } }>('Runtime.callFunctionOn', {
-        objectId: object.objectId,
-        functionDeclaration: 'function() { return !!this.checked; }',
-        returnByValue: true,
-      });
+          // Read current checked state
+          const before = await this.cdp.send<{ result: { value: boolean } }>(
+            'Runtime.callFunctionOn',
+            {
+              objectId: object.objectId,
+              functionDeclaration: 'function() { return !!this.checked; }',
+              returnByValue: true,
+            }
+          );
 
-      if (before.result.value) return true; // Already checked
+          if (before.result.value) return true; // Already checked
 
-      // Real mouse click
-      await this.scrollIntoView(element.nodeId);
-      await this.clickElement(element.nodeId);
+          // Prefer the associated label when one exists. This is a
+          // pre-dispatch choice that supports controls whose input handler
+          // intentionally prevents the native input click; verification below
+          // remains observation-only.
+          if (await this.tryClickAssociatedLabel(object.objectId, dispatch)) {
+            const afterLabel = await this.readCheckedState(object.objectId);
+            if (!afterLabel) {
+              throw new Error('Label click was dispatched but checkbox did not become checked');
+            }
+            return true;
+          }
 
-      // Verify state changed
-      const after = await this.cdp.send<{ result: { value: boolean } }>('Runtime.callFunctionOn', {
-        objectId: object.objectId,
-        functionDeclaration: 'function() { return !!this.checked; }',
-        returnByValue: true,
-      });
+          // No associated label: dispatch directly to the input.
+          await this.scrollIntoView(element.nodeId);
+          await this.clickElement(element.nodeId, dispatch);
 
-      if (!after.result.value) {
-        if (await this.tryToggleViaLabel(object.objectId, true)) {
+          // Verify state changed
+          const after = await this.cdp.send<{ result: { value: boolean } }>(
+            'Runtime.callFunctionOn',
+            {
+              objectId: object.objectId,
+              functionDeclaration: 'function() { return !!this.checked; }',
+              returnByValue: true,
+            }
+          );
+
+          if (!after.result.value) {
+            throw new Error('Click was dispatched but checkbox did not become checked');
+          }
+
           return true;
-        }
-        throw new Error(
-          'Clicking the checkbox did not change its state. Tried the associated label too.'
-        );
-      }
-
-      return true;
-    });
+        },
+        { dispatch }
+      )
+    );
   }
 
   /**
@@ -1068,79 +1733,99 @@ export class Page {
    * No-op if already unchecked. Radio buttons can't be unchecked (returns true).
    */
   async uncheck(selector: string | string[], options: ActionOptions = {}): Promise<boolean> {
-    return this.withStaleNodeRetry(async () => {
-      const element = await this.findElement(selector, options);
-      if (!element) {
-        if (options.optional) return false;
-        const selectorList = Array.isArray(selector) ? selector : [selector];
-        const hints = await generateHints(this, selectorList, 'uncheck');
-        throw new ElementNotFoundError(selector, hints);
-      }
+    this.assertOopifUnsupported('uncheck');
+    return this.withActionDispatch((dispatch) =>
+      this.withStaleNodeRetry(
+        async () => {
+          const element = await this.findElement(selector, options);
+          if (!element) {
+            if (options.optional) return false;
+            const selectorList = Array.isArray(selector) ? selector : [selector];
+            const hints = await generateHints(this, selectorList, 'uncheck');
+            throw new ElementNotFoundError(selector, hints);
+          }
 
-      const { object } = await this.cdp.send<{ object: { objectId: string } }>('DOM.resolveNode', {
-        nodeId: element.nodeId,
-      });
+          const { object } = await this.cdp.send<{ object: { objectId: string } }>(
+            'DOM.resolveNode',
+            {
+              nodeId: element.nodeId,
+            }
+          );
 
-      // Actionability checks
-      try {
-        await ensureActionable(this.cdp, object.objectId, ['visible', 'enabled'], {
-          timeout: options.timeout ?? DEFAULT_TIMEOUT,
-        });
-      } catch (e) {
-        if (options.optional) return false;
-        throw e;
-      }
+          // Actionability checks
+          try {
+            await ensureActionable(this.cdp, object.objectId, ['visible', 'enabled'], {
+              timeout: options.timeout ?? DEFAULT_TIMEOUT,
+            });
+          } catch (e) {
+            if (options.optional) return false;
+            throw e;
+          }
 
-      const uncheckPos = await this.getElementPosition({ nodeId: element.nodeId });
-      if (uncheckPos) this.setLastActionPosition(uncheckPos.center, uncheckPos.bbox);
+          const uncheckPos = await this.getElementPosition({ nodeId: element.nodeId });
+          if (uncheckPos) this.setLastActionPosition(uncheckPos.center, uncheckPos.bbox);
 
-      // Check if it's a radio button (can't uncheck radio by clicking)
-      const isRadio = await this.cdp.send<{ result: { value: boolean } }>(
-        'Runtime.callFunctionOn',
-        {
-          objectId: object.objectId,
-          functionDeclaration: 'function() { return this.type === "radio"; }',
-          returnByValue: true,
-        }
-      );
+          // Check if it's a radio button (can't uncheck radio by clicking)
+          const isRadio = await this.cdp.send<{ result: { value: boolean } }>(
+            'Runtime.callFunctionOn',
+            {
+              objectId: object.objectId,
+              functionDeclaration: 'function() { return this.type === "radio"; }',
+              returnByValue: true,
+            }
+          );
 
-      if (isRadio.result.value) return true;
+          if (isRadio.result.value) return true;
 
-      // Read current checked state
-      const before = await this.cdp.send<{ result: { value: boolean } }>('Runtime.callFunctionOn', {
-        objectId: object.objectId,
-        functionDeclaration: 'function() { return !!this.checked; }',
-        returnByValue: true,
-      });
+          // Read current checked state
+          const before = await this.cdp.send<{ result: { value: boolean } }>(
+            'Runtime.callFunctionOn',
+            {
+              objectId: object.objectId,
+              functionDeclaration: 'function() { return !!this.checked; }',
+              returnByValue: true,
+            }
+          );
 
-      if (!before.result.value) return true; // Already unchecked
+          if (!before.result.value) return true; // Already unchecked
 
-      // Real mouse click
-      await this.scrollIntoView(element.nodeId);
-      await this.clickElement(element.nodeId);
+          if (await this.tryClickAssociatedLabel(object.objectId, dispatch)) {
+            const afterLabel = await this.readCheckedState(object.objectId);
+            if (afterLabel) {
+              throw new Error('Label click was dispatched but checkbox remained checked');
+            }
+            return true;
+          }
 
-      // Verify state changed
-      const after = await this.cdp.send<{ result: { value: boolean } }>('Runtime.callFunctionOn', {
-        objectId: object.objectId,
-        functionDeclaration: 'function() { return !!this.checked; }',
-        returnByValue: true,
-      });
+          // No associated label: dispatch directly to the input.
+          await this.scrollIntoView(element.nodeId);
+          await this.clickElement(element.nodeId, dispatch);
 
-      if (after.result.value) {
-        if (await this.tryToggleViaLabel(object.objectId, false)) {
+          // Verify state changed
+          const after = await this.cdp.send<{ result: { value: boolean } }>(
+            'Runtime.callFunctionOn',
+            {
+              objectId: object.objectId,
+              functionDeclaration: 'function() { return !!this.checked; }',
+              returnByValue: true,
+            }
+          );
+
+          if (after.result.value) {
+            throw new Error('Click was dispatched but checkbox remained checked');
+          }
+
           return true;
-        }
-        throw new Error(
-          'Clicking the checkbox did not change its state. Tried the associated label too.'
-        );
-      }
-
-      return true;
-    });
+        },
+        { dispatch }
+      )
+    );
   }
 
   /**
-   * Submit a form (tries Enter key first, then click)
+   * Submit a form with one effectful dispatch.
+   * `enter+click` uses the trusted mouse click path; it never sends Enter and
+   * then clicks the same control after an uncertain key dispatch.
    *
    * Navigation waiting behavior:
    * - 'auto' (default): Attempt to detect navigation for 1 second, then assume client-side handling
@@ -1151,107 +1836,133 @@ export class Page {
    * the submit event and triggers HTML5 validation.
    */
   async submit(selector: string | string[], options: SubmitOptions = {}): Promise<boolean> {
-    return this.withStaleNodeRetry(async () => {
-      const { method = 'enter+click', waitForNavigation: shouldWait = 'auto' } = options;
-      const element = await this.findElement(selector, options);
+    this.assertOopifUnsupported('submit');
+    return this.withActionDispatch((dispatch) =>
+      this.withStaleNodeRetry(
+        async () => {
+          const { method = 'enter+click', waitForNavigation: shouldWait = 'auto' } = options;
+          const element = await this.findElement(selector, options);
 
-      if (!element) {
-        if (options.optional) return false;
-        const selectorList = Array.isArray(selector) ? selector : [selector];
-        const hints = await generateHints(this, selectorList, 'submit');
-        throw new ElementNotFoundError(selector, hints);
-      }
+          if (!element) {
+            if (options.optional) return false;
+            const selectorList = Array.isArray(selector) ? selector : [selector];
+            const hints = await generateHints(this, selectorList, 'submit');
+            throw new ElementNotFoundError(selector, hints);
+          }
 
-      const objectId = await this.resolveObjectId(element.nodeId);
-      const submitPos = await this.getElementPosition({ nodeId: element.nodeId });
-      if (submitPos) this.setLastActionPosition(submitPos.center, submitPos.bbox);
+          const objectId = await this.resolveObjectId(element.nodeId);
+          const submitPos = await this.getElementPosition({ nodeId: element.nodeId });
+          if (submitPos) this.setLastActionPosition(submitPos.center, submitPos.bbox);
 
-      const isFormElement = await this.cdp.send<{ result: { value: boolean } }>(
-        'Runtime.callFunctionOn',
-        {
-          objectId,
-          functionDeclaration: 'function() { return this instanceof HTMLFormElement; }',
-          returnByValue: true,
-        }
-      );
-
-      if (isFormElement.result.value) {
-        // For form elements, use requestSubmit() which fires submit event and validates
-        await this.cdp.send('Runtime.callFunctionOn', {
-          objectId,
-          functionDeclaration: `function() {
-            if (typeof this.requestSubmit === 'function') {
-              this.requestSubmit();
-            } else {
-              this.submit();
+          const isFormElement = await this.cdp.send<{ result: { value: boolean } }>(
+            'Runtime.callFunctionOn',
+            {
+              objectId,
+              functionDeclaration: 'function() { return this instanceof HTMLFormElement; }',
+              returnByValue: true,
             }
-          }`,
-        });
+          );
 
-        // Handle navigation waiting
-        if (shouldWait === true) {
-          await this.waitForNavigation({ timeout: options.timeout ?? DEFAULT_TIMEOUT });
-        } else if (shouldWait === 'auto') {
-          await Promise.race([
-            this.waitForNavigation({ timeout: 2000, optional: true }).then(
-              () => 'navigation' as const
-            ),
-            this.waitForDOMMutation({ timeout: 1000 }).then(() => 'mutation' as const),
-            sleep(1500).then(() => 'timeout' as const),
-          ]);
-        }
-        return true;
-      }
+          if (isFormElement.result.value) {
+            // For form elements, use requestSubmit() which fires submit event and validates
+            await dispatch.send(
+              () =>
+                this.cdp.send('Runtime.callFunctionOn', {
+                  objectId,
+                  functionDeclaration: `function() {
+                if (typeof this.requestSubmit === 'function') {
+                  this.requestSubmit();
+                } else {
+                  this.submit();
+                }
+              }`,
+                }),
+              'requestSubmit'
+            );
 
-      // For non-form elements, continue with existing focus+enter/click logic
-      await this.cdp.send('DOM.focus', { nodeId: element.nodeId });
-
-      // Try Enter first if method includes it
-      if (method.includes('enter')) {
-        await this.press('Enter');
-
-        if (shouldWait === true) {
-          try {
-            await this.waitForNavigation({ timeout: options.timeout ?? DEFAULT_TIMEOUT });
+            // Handle navigation waiting
+            if (shouldWait === true) {
+              const observed = await this.waitForNavigation({
+                timeout: options.timeout ?? DEFAULT_TIMEOUT,
+                waitUntil: options.waitUntil ?? 'load',
+              });
+              if (observed) dispatch.observeNavigation();
+            } else if (shouldWait === 'auto') {
+              const result = await Promise.race([
+                this.waitForNavigation({
+                  timeout: 2000,
+                  optional: true,
+                  waitUntil: options.waitUntil ?? 'load',
+                }).then((observed) => {
+                  if (observed) dispatch.observeNavigation();
+                  return 'navigation' as const;
+                }),
+                this.waitForDOMMutation({ timeout: 1000 }).then(() => 'mutation' as const),
+                sleep(1500).then(() => 'timeout' as const),
+              ]);
+              void result;
+            }
             return true;
-          } catch {
-            // No navigation, try click if method includes it
           }
-        } else if (shouldWait === 'auto') {
-          // Race: real navigation vs DOM mutation (client-side form) vs timeout
-          const navigationDetected = await Promise.race([
-            this.waitForNavigation({ timeout: 2000, optional: true }).then((success) =>
-              success ? 'nav' : null
-            ),
-            this.waitForDOMMutation({ timeout: 1000 }).then(() => 'mutation'),
-            sleep(1500).then(() => 'timeout'),
-          ]);
 
-          if (navigationDetected === 'nav') {
-            return true; // Navigation happened, we're done
+          // For non-form elements, continue with existing focus+enter/click logic
+          await this.cdp.send('DOM.focus', { nodeId: element.nodeId });
+
+          // An explicit Enter request is one effectful dispatch. The
+          // enter+click mode intentionally uses the click path below so it
+          // cannot send two potentially submitting inputs.
+          if (method === 'enter') {
+            await this.pressInternal('Enter', undefined, dispatch);
+
+            if (shouldWait === true) {
+              const observed = await this.waitForNavigation({
+                timeout: options.timeout ?? DEFAULT_TIMEOUT,
+                waitUntil: options.waitUntil ?? 'load',
+              });
+              if (observed) dispatch.observeNavigation();
+            } else if (shouldWait === 'auto') {
+              const result = await Promise.race([
+                this.waitForNavigation({
+                  timeout: 2000,
+                  optional: true,
+                  waitUntil: options.waitUntil ?? 'load',
+                }).then((observed) => {
+                  if (observed) dispatch.observeNavigation();
+                  return observed ? ('nav' as const) : null;
+                }),
+                this.waitForDOMMutation({ timeout: 1000 }).then(() => 'mutation' as const),
+                sleep(1500).then(() => 'timeout' as const),
+              ]);
+              void result;
+            } else {
+              // waitForNavigation: false - don't wait
+            }
+
+            return true;
           }
-          // DOM mutation or timeout — assume client-side handling, try click if available
-        } else if (method === 'enter') {
-          // waitForNavigation: false - don't wait
+
+          // Try click if method includes it
+          if (method.includes('click')) {
+            await this.clickInternal(element.selector, { ...options, optional: false }, dispatch);
+
+            if (shouldWait === true) {
+              const observed = await this.waitForNavigation({
+                timeout: options.timeout ?? DEFAULT_TIMEOUT,
+                waitUntil: options.waitUntil ?? 'load',
+              });
+              if (observed) dispatch.observeNavigation();
+            } else if (shouldWait === 'auto') {
+              // Short wait to allow client-side handlers to run
+              await sleep(100);
+            }
+            // waitForNavigation: false - return immediately
+          }
+
           return true;
-        }
-      }
-
-      // Try click if method includes it
-      if (method.includes('click')) {
-        await this.click(element.selector, { ...options, optional: false });
-
-        if (shouldWait === true) {
-          await this.waitForNavigation({ timeout: options.timeout ?? DEFAULT_TIMEOUT });
-        } else if (shouldWait === 'auto') {
-          // Short wait to allow client-side handlers to run
-          await sleep(100);
-        }
-        // waitForNavigation: false - return immediately
-      }
-
-      return true;
-    });
+        },
+        { dispatch }
+      )
+    );
   }
 
   /**
@@ -1261,11 +1972,23 @@ export class Page {
     key: string,
     options?: { modifiers?: Array<'Control' | 'Shift' | 'Alt' | 'Meta'> }
   ): Promise<void> {
-    const modifiers = options?.modifiers;
+    return this.withActionDispatch((dispatch) =>
+      this.pressInternal(key, options?.modifiers, dispatch)
+    );
+  }
+
+  private async pressInternal(
+    key: string,
+    modifiers: Array<'Control' | 'Shift' | 'Alt' | 'Meta'> | undefined,
+    dispatch: ActionDispatch
+  ): Promise<void> {
+    // Route keystrokes to the active OOPIF child session so they reach the
+    // focused in-frame element, not the parent (needed for checkout card entry).
+    const sessionId = this.currentFrameSession ?? undefined;
     if (modifiers && modifiers.length > 0) {
-      await this.dispatchKeyWithModifiers(key, modifiers);
+      await this.dispatchKeyWithModifiers(key, modifiers, sessionId, dispatch);
     } else {
-      await this.dispatchKey(key);
+      await this.dispatchKey(key, sessionId, dispatch);
     }
   }
 
@@ -1273,14 +1996,33 @@ export class Page {
    * Execute a keyboard shortcut (e.g. "Control+a", "Meta+Shift+z")
    */
   async shortcut(combo: string): Promise<void> {
-    const { modifiers, key } = parseShortcut(combo);
-    await this.dispatchKeyWithModifiers(key, modifiers);
+    return this.withActionDispatch(async (dispatch) => {
+      const { modifiers, key } = parseShortcut(combo);
+      // Route to the active OOPIF child session when inside a cross-origin frame.
+      const sessionId = this.currentFrameSession ?? undefined;
+      await this.dispatchKeyWithModifiers(key, modifiers, sessionId, dispatch);
+
+      // Chrome does not consistently apply modifier selection shortcuts to a
+      // CDP-controlled background target. Preserve the browser shortcut event,
+      // then repair the common editable-field case without activating the tab.
+      if (
+        key.toLowerCase() === 'a' &&
+        (modifiers.includes('Control') || modifiers.includes('Meta'))
+      ) {
+        await this.selectAllActiveEditable(sessionId);
+      }
+    });
   }
 
   /**
    * Focus an element
    */
   async focus(selector: string | string[], options: ActionOptions = {}): Promise<boolean> {
+    // Cross-origin (OOPIF) frame active: focus on the child session so the real
+    // in-frame field receives focus (routed before findElement).
+    if (this.currentFrameSession) {
+      return this.focusInFrame(selector, options);
+    }
     const element = await this.findElement(selector, options);
     if (!element) {
       if (options.optional) return false;
@@ -1300,6 +2042,7 @@ export class Page {
    * Hover over an element
    */
   async hover(selector: string | string[], options: ActionOptions = {}): Promise<boolean> {
+    this.assertOopifUnsupported('hover');
     return this.withStaleNodeRetry(async () => {
       const element = await this.findElement(selector, options);
       if (!element) {
@@ -1376,6 +2119,7 @@ export class Page {
     selector: string | string[],
     options: ActionOptions & { x?: number; y?: number } = {}
   ): Promise<boolean> {
+    this.assertOopifUnsupported('scroll');
     const { x, y } = options;
 
     // If x/y provided, scroll the page
@@ -1409,61 +2153,168 @@ export class Page {
    * @returns true if switch succeeded
    */
   async switchToFrame(selector: string | string[], options: ActionOptions = {}): Promise<boolean> {
-    const element = await this.findElement(selector, options);
+    const frameKey = Array.isArray(selector) ? selector[0]! : selector;
+
+    // Nested descent: we are already inside an OOPIF child session, so the
+    // target <iframe> element lives in THAT session. Resolve its frameId there
+    // and descend into the (grand)child OOPIF.
+    if (this.currentFrameSession) {
+      const frameId = await this.resolveFrameIdInSession(selector, this.currentFrameSession);
+      if (!frameId) {
+        if (options.optional) return false;
+        throw new ElementNotFoundError(selector);
+      }
+      // On failure `enterOopifFrame` returns false WITHOUT mutating
+      // `currentFrameSession`, so we remain in the PARENT OOPIF. Do NOT silently
+      // return false leaving the parent retargeted (M3): throw a clear error for
+      // the non-optional case so the caller cannot mistake "still in parent" for
+      // "descended into child". The common cause is a same-origin iframe nested
+      // inside an OOPIF (e.g. real Stripe Elements), which stays in the parent
+      // renderer and never attaches as its own child session — unsupported.
+      const entered = await this.enterOopifFrame(frameKey, frameId, options);
+      if (!entered) {
+        if (options.optional) return false;
+        throw new Error(
+          `Cannot descend into nested frame "${frameKey}": no cross-origin child ` +
+            'session attached for it. A same-origin iframe nested inside a ' +
+            'cross-origin iframe is not yet supported (the active frame is left ' +
+            'unchanged at the parent). switchToMain() and restructure the flow.'
+        );
+      }
+      return true;
+    }
+
+    // Initial iframe-element resolution. GUARDED with withStaleNodeRetry: on a
+    // COLD start the cross-origin OOPIF commit fires `documentUpdated` on the
+    // parent, which can stale the raw nodeId that findElement →
+    // resolveRuntimeSelector's DOM.querySelector → DOM.describeNode({nodeId})
+    // sequence uses, surfacing as an uncaught `CDPError: Could not find node with
+    // given id`. The top-level click/fill/type paths already wrap their
+    // resolution the same way; switchToFrame's initial resolve was the one
+    // unguarded path (the later describeFrameElement is already guarded, but runs
+    // AFTER this). On a stale-node error the retry resets rootNodeId (a stale node
+    // implies the doc updated) so findElement re-resolves against a FRESH document.
+    // A genuinely-absent iframe returns null (not a stale-node error), so it does
+    // not retry and still falls through to the normal ElementNotFoundError below —
+    // no infinite loop, no misleading message. Same-origin/top-level behaviour is
+    // unchanged (findElement already ran there; it is only wrapped now).
+    const element = await this.withStaleNodeRetry(() => this.findElement(selector, options));
     if (!element) {
       if (options.optional) return false;
       throw new ElementNotFoundError(selector);
     }
 
-    // Get the iframe's content document and frameId
-    const descResult = await this.cdp.send<{
-      node: {
-        contentDocument?: { nodeId: number; backendNodeId: number };
-        frameId?: string;
-      };
-    }>('DOM.describeNode', {
-      nodeId: element.nodeId,
-      depth: 1,
-    });
+    // Resolve the iframe's frameId + same-session contentDocument via the STABLE
+    // objectId path, GUARDED so a stale-nodeId CDPError from a mid-load
+    // `documentUpdated` is retried (the element is re-resolved) rather than
+    // propagating raw. `contentNodeId` is undefined for a cross-origin (OOPIF)
+    // frame whose document is unreachable from this session.
+    //
+    // CRITICAL: classify same-origin vs cross-origin by the CHILD SESSION, not by
+    // `contentDocument`. On a genuine OOPIF, `DOM.describeNode` transiently
+    // returns a NON-NULL contentDocument during the brief window before the
+    // cross-origin document commits to its own renderer; keying off it takes the
+    // same-origin branch, fails to get an execution context, and would return
+    // `true` with `currentFrameSession=null` — the silent mis-resolution bug.
+    const { frameId, contentNodeId } = await this.describeFrameElement(selector, element, options);
 
-    if (!descResult.node.contentDocument) {
+    // AUTHORITATIVE OOPIF entry: a cross-origin child session already attached for
+    // this frameId (even when contentDocument was transiently non-null). No wait
+    // here, so a same-origin frame never pays for this probe.
+    if (frameId && this.hasLiveOopifSession(frameId)) {
+      if (await this.enterOopifFrame(frameKey, frameId, options)) {
+        return true;
+      }
+    }
+
+    if (contentNodeId === undefined) {
+      // Cross-origin (OOPIF): the content document is not reachable from this
+      // session. Descend into its auto-attached child session (bounded wait).
+      if (frameId && (await this.enterOopifFrame(frameKey, frameId, options))) {
+        return true;
+      }
       if (options.optional) return false;
+      // Distinguish the two real causes (L3): a frameId means this IS a
+      // cross-origin frame whose child debugging session did not attach within
+      // the timeout; no frameId means the content is unreachable for another
+      // reason (sandboxed / detached).
+      // Effective wait matches enterOopifFrame's floored timeout (M4).
+      const timeout = Math.max(options.timeout ?? DEFAULT_TIMEOUT, OOPIF_ATTACH_MIN_TIMEOUT_MS);
+      if (frameId) {
+        throw new Error(
+          `Cross-origin iframe "${frameKey}" did not attach a child debugging ` +
+            `session within ${timeout}ms. It may still be loading, may be blocked ` +
+            'by the browser, or auto-attach may be unavailable. Increase the ' +
+            'timeout or verify the frame loads.'
+        );
+      }
       throw new Error(
-        'Cannot access iframe content. This may be a cross-origin iframe which requires different handling.'
+        `Cannot access iframe content for "${frameKey}": its content document is ` +
+          'unreachable and no frameId was resolved (sandboxed or detached frame).'
       );
     }
 
-    // Store the frame context
-    const frameKey = Array.isArray(selector) ? selector[0]! : selector;
-    this.frameContexts.set(frameKey, descResult.node.contentDocument.nodeId);
+    // contentDocument is reachable: EITHER a genuine same-origin frame OR a
+    // genuine OOPIF caught mid-commit (transient non-null contentDocument before
+    // its cross-origin renderer attaches). Take the same-origin path, but never
+    // finish in the silent "broken, no session" state for a cross-origin frame.
+    this.frameContexts.set(frameKey, contentNodeId);
     this.currentFrame = frameKey;
+    this.rootNodeId = contentNodeId;
 
-    // Update root node to the iframe's document
-    this.rootNodeId = descResult.node.contentDocument.nodeId;
-
-    // Get the execution context for this frame
-    // The frameId from DOM.describeNode points to the iframe's content frame
-    if (descResult.node.frameId) {
-      const frameId = descResult.node.frameId;
+    if (frameId) {
       const { timeout = DEFAULT_TIMEOUT } = options;
 
-      // Wait for execution context via event instead of polling
+      // Wait for the same-origin execution context via event (unchanged fast path).
       let contextId = this.frameExecutionContexts.get(frameId);
       if (!contextId) {
         contextId = await this.waitForFrameContext(frameId, Math.min(timeout, 2000));
       }
 
       if (contextId) {
+        // Same-origin frame with a live execution context: behaviour unchanged.
         this.currentFrameContextId = contextId;
         this.brokenFrame = null;
       } else {
-        // Context unavailable — mark as broken so evaluate() throws explicitly
-        const frameKey = Array.isArray(selector) ? selector[0]! : selector;
-        this.brokenFrame = frameKey;
-        console.warn(
-          `[browser-pilot] Frame "${frameKey}" execution context unavailable. ` +
-            'JS evaluation will fail in this frame. DOM operations may still work.'
+        // No same-origin execution context. This is the OOPIF race window: do NOT
+        // declare the frame "broken" and return true — that silently routes
+        // subsequent actions to the PARENT look-alike. Poll for the cross-origin
+        // child session up to the caller's timeout; if it attaches, enter the
+        // OOPIF authoritatively (currentFrameSession set).
+        const record = await this.waitForOopifSession(frameId, timeout);
+        if (record && (await this.enterOopifFrame(frameKey, frameId, options))) {
+          return true;
+        }
+
+        // No child session attached within the timeout. Distinguish a genuine
+        // same-origin frame that merely lacks a JS context (e.g. a sandboxed
+        // iframe — DOM still reachable via the parent session; keep the historical
+        // brokenFrame behaviour) from a cross-origin frame that committed to its
+        // own renderer and never attached (contentDocument now UNREACHABLE — must
+        // not succeed silently as a broken parent-resolving frame).
+        const recheck = await this.describeFrameElement(selector, element, options).catch(
+          () => ({ frameId: undefined, contentNodeId: undefined }) as ReturnFrameDescribe
         );
+        if (recheck.contentNodeId !== undefined) {
+          // Still same-origin (reachable): preserve the historical broken-frame
+          // behaviour so DOM operations can still work via CDP.
+          this.brokenFrame = frameKey;
+          console.warn(
+            `[browser-pilot] Frame "${frameKey}" execution context unavailable. ` +
+              'JS evaluation will fail in this frame. DOM operations may still work.'
+          );
+        } else {
+          // Cross-origin frame that committed to its own renderer without
+          // attaching a session — never leave the caller "in" a frame it cannot
+          // safely act on (that is the silent mis-resolution bug).
+          this.currentFrame = null;
+          this.rootNodeId = null;
+          this.frameContexts.delete(frameKey);
+          if (options.optional) return false;
+          throw new Error(
+            `cross-origin frame "${frameKey}" did not attach a session within ${timeout}ms`
+          );
+        }
       }
     }
 
@@ -1474,6 +2325,59 @@ export class Page {
   }
 
   /**
+   * Resolve an <iframe>/<frame> element's `frameId` and same-session
+   * `contentDocument` nodeId via the STABLE objectId path (DOM.resolveNode →
+   * DOM.describeNode {objectId}). GUARDED with {@link withStaleNodeRetry}: a raw
+   * querySelector nodeId can be invalidated by a mid-load `documentUpdated`,
+   * surfacing as an uncaught `CDPError: Could not find node with given id`; on
+   * such an error the element is re-resolved and the describe is retried instead
+   * of propagating raw. `contentNodeId` is `undefined` for a cross-origin (OOPIF)
+   * frame whose document is not reachable from this (parent) session.
+   */
+  private async describeFrameElement(
+    selector: string | string[],
+    element: ElementInfo,
+    options: ActionOptions
+  ): Promise<ReturnFrameDescribe> {
+    let el: ElementInfo = element;
+    let reresolve = false;
+    return this.withStaleNodeRetry(async () => {
+      try {
+        if (reresolve) {
+          // A prior attempt hit a stale node; re-resolve the iframe element fresh.
+          const fresh = await this.findElement(selector, options);
+          if (fresh) el = fresh;
+        }
+        const objectId = await this.resolveObjectId(el.nodeId);
+        const desc = await this.cdp.send<{
+          node: { contentDocument?: { nodeId: number }; frameId?: string };
+        }>('DOM.describeNode', { objectId, depth: 1 });
+        return {
+          frameId: desc.node.frameId,
+          contentNodeId: desc.node.contentDocument?.nodeId,
+        };
+      } catch (e) {
+        // Force a fresh element resolve if withStaleNodeRetry retries this fn.
+        reresolve = true;
+        throw e;
+      }
+    });
+  }
+
+  /**
+   * True iff a cross-origin OOPIF child session is currently attached and live
+   * for `frameId`. This is the AUTHORITATIVE cross-origin signal (not
+   * `contentDocument`). Guarded so partial CDP mocks without `hasSession` degrade
+   * to "no session" rather than throwing.
+   */
+  private hasLiveOopifSession(frameId: string): boolean {
+    const record = this.oopifFrames.get(frameId);
+    if (!record) return false;
+    if (typeof this.cdp.hasSession !== 'function') return false;
+    return this.cdp.hasSession(record.sessionId);
+  }
+
+  /**
    * Switch back to the main document from an iframe
    */
   async switchToMain(): Promise<void> {
@@ -1481,6 +2385,8 @@ export class Page {
     this.rootNodeId = null; // Will be re-fetched on next query
     this.currentFrameContextId = null;
     this.brokenFrame = null;
+    // Leave any OOPIF child frame: subsequent actions route to the top session.
+    this.currentFrameSession = null;
     this.refMap.clear();
   }
 
@@ -1491,6 +2397,669 @@ export class Page {
     return this.currentFrame;
   }
 
+  /**
+   * Reset ALL frame-scoping state back to the top-level document. Called on any
+   * navigation (goto/reload/goBack/goForward) and on reset(): OOPIF child
+   * sessions from the previous document detach, so leaving `currentFrameSession`
+   * set would route subsequent actions to a dead child session (M1/M2). Also
+   * prunes stale OOPIF registry entries so it can't grow unboundedly (M5).
+   */
+  private resetFrameState(): void {
+    this.currentFrame = null;
+    this.currentFrameContextId = null;
+    this.frameContexts.clear();
+    this.brokenFrame = null;
+    this.currentFrameSession = null;
+    this.pruneOopifFrames();
+  }
+
+  /**
+   * Drop OOPIF registry entries whose child session is no longer live. Cheap and
+   * idempotent; guarded so partial CDP mocks (unit tests) without `hasSession`
+   * do not break.
+   */
+  private pruneOopifFrames(): void {
+    if (typeof this.cdp.hasSession !== 'function') return;
+    for (const [key, record] of this.oopifFrames) {
+      if (!this.cdp.hasSession(record.sessionId)) {
+        this.oopifFrames.delete(key);
+      }
+    }
+  }
+
+  /**
+   * Forget a detached child session: remove any OOPIF registry entry bound to it
+   * and, if it was the active frame session, drop back to the top-level document
+   * so no further action targets the dead session. Wired to
+   * `Target.detachedFromTarget` in {@link init}.
+   */
+  private dropOopifSession(sessionId: string): void {
+    for (const [key, record] of this.oopifFrames) {
+      if (record.sessionId === sessionId) this.oopifFrames.delete(key);
+    }
+    if (this.currentFrameSession === sessionId) {
+      // The active frame's session died mid-interaction. A partial reset that
+      // only cleared `currentFrameSession` would leave `rootNodeId`,
+      // `currentFrame`, and `frameContexts` pointing at the dead child, so the
+      // next action would resolve a child-session nodeId against the PARENT
+      // session (wrong-node errors / acting on an unrelated element — BUG C).
+      // Fall all the way back to the top-level document instead.
+      this.rootNodeId = null;
+      this.resetFrameState();
+    }
+  }
+
+  /** True if `sessionId` is one of this page's own attached OOPIF child sessions. */
+  private isKnownChildSession(sessionId: string): boolean {
+    for (const record of this.oopifFrames.values()) {
+      if (record.sessionId === sessionId) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Hard-fail guard (C1) for element-acting/-reading methods that are NOT yet
+   * routed into a cross-origin iframe (OOPIF) child session. Without this, while
+   * `currentFrameSession` is set these methods resolve against the parent/default
+   * session and silently act on a look-alike element — the exact
+   * silent-mis-resolution bug OOPIF support exists to prevent. Supported in-frame
+   * actions (fill/click/type/focus/press/text/waitFor/evaluate) route to the
+   * child session before reaching any guarded path.
+   */
+  private assertOopifUnsupported(method: string): void {
+    if (this.currentFrameSession !== null) {
+      throw new Error(
+        `${method} is not yet supported inside a cross-origin iframe ` +
+          '(supported: fill, click, type, focus, press, text, waitFor, evaluate). ' +
+          'Restructure the flow or switchToMain() first.'
+      );
+    }
+  }
+
+  // ============ Cross-origin (OOPIF) frame helpers ============
+  //
+  // These only run while an out-of-process iframe is the active frame
+  // (`currentFrameSession !== null`). They deliberately AVOID synthetic-mouse
+  // coordinate geometry (frame-offset translation is out of scope): fills use
+  // focus + Input.insertText and clicks use element.click(), each routed to the
+  // frame's own CDP child session. Top-level / same-origin paths are untouched.
+
+  /**
+   * Resolve the `frameId` of an <iframe>/<frame> element within a specific CDP
+   * session via the stable objectId path (Runtime.evaluate → DOM.describeNode
+   * {objectId}). For a real OOPIF the element's `frameId` equals the child
+   * target's id, which is how {@link enterOopifFrame} finds the child session.
+   * @param sessionId `undefined` = this page's default/top session.
+   */
+  private async resolveFrameIdInSession(
+    selector: string | string[],
+    sessionId: string | undefined
+  ): Promise<string | undefined> {
+    const selectors = Array.isArray(selector) ? selector : [selector];
+    for (const sel of selectors) {
+      try {
+        const evalRes = await this.cdp.send<{ result: RemoteObject }>(
+          'Runtime.evaluate',
+          { expression: `document.querySelector(${JSON.stringify(sel)})`, returnByValue: false },
+          sessionId
+        );
+        const objectId = evalRes.result.objectId;
+        if (!objectId) continue;
+        const desc = await this.cdp.send<{ node: { frameId?: string } }>(
+          'DOM.describeNode',
+          { objectId, depth: 0 },
+          sessionId
+        );
+        if (desc.node.frameId) return desc.node.frameId;
+      } catch {
+        // Try the next candidate selector.
+      }
+    }
+    return undefined;
+  }
+
+  /**
+   * Activate an OOPIF child frame identified by `frameId`. Waits (briefly) for
+   * the auto-attached child session to appear, then routes subsequent frame
+   * actions to it. Returns false when no child session materializes.
+   */
+  private async enterOopifFrame(
+    frameKey: string,
+    frameId: string,
+    options: ActionOptions
+  ): Promise<boolean> {
+    // Honour the caller's timeout (M4): a `switchToFrame(sel, { timeout: 20000 })`
+    // must wait up to 20s for the child session, not be silently truncated to 5s.
+    // The floor only widens a very short caller timeout so auto-attach (async) has
+    // a fair chance to land.
+    const timeout = Math.max(options.timeout ?? DEFAULT_TIMEOUT, OOPIF_ATTACH_MIN_TIMEOUT_MS);
+    const record = await this.waitForOopifSession(frameId, timeout);
+    if (!record) return false;
+
+    this.currentFrame = frameKey;
+    this.currentFrameSession = record.sessionId;
+    // OOPIF evaluation uses the child session's own default context, not a
+    // numeric contextId on this page's session.
+    this.currentFrameContextId = null;
+    this.brokenFrame = null;
+    this.refMap.clear();
+
+    // Prime the child document so the first in-frame action doesn't race the
+    // child's async load. Best-effort: actions poll for the node regardless.
+    try {
+      await this.ensureOopifRootReady(timeout);
+    } catch {
+      // The child is still loading; in-frame finders retry on their own.
+    }
+    return true;
+  }
+
+  /**
+   * Poll the OOPIF registry for the child session bound to `frameId`, dropping
+   * stale entries whose session is no longer live. Auto-attach is asynchronous,
+   * so a freshly-navigated frame's session can arrive slightly after the parent
+   * DOM exposes the iframe element.
+   */
+  private async waitForOopifSession(
+    frameId: string,
+    timeout: number
+  ): Promise<{ sessionId: string; targetId: string; url: string } | null> {
+    const deadline = Date.now() + timeout;
+    for (;;) {
+      const record = this.oopifFrames.get(frameId);
+      if (record) {
+        if (this.cdp.hasSession(record.sessionId)) return record;
+        // Session detached (e.g. reload); forget it and keep waiting for a fresh one.
+        this.oopifFrames.delete(frameId);
+      }
+      if (Date.now() >= deadline) return null;
+      await sleep(50);
+    }
+  }
+
+  /**
+   * Fetch (and cache) the document root nodeId inside the active OOPIF child
+   * session, retrying while the child finishes loading.
+   */
+  private async ensureOopifRootReady(timeout: number): Promise<number> {
+    const sessionId = this.currentFrameSession;
+    if (!sessionId) throw new Error('No active OOPIF frame session');
+    const deadline = Date.now() + timeout;
+    for (;;) {
+      try {
+        const doc = await this.cdp.send<{ root: { nodeId: number } }>(
+          'DOM.getDocument',
+          { depth: 0 },
+          sessionId
+        );
+        if (doc.root?.nodeId) {
+          return doc.root.nodeId;
+        }
+      } catch {
+        // DOM not ready yet on the child session.
+      }
+      if (Date.now() >= deadline) throw new Error('OOPIF document not ready');
+      await sleep(50);
+    }
+  }
+
+  /**
+   * Locate an element inside the active OOPIF child session and return both its
+   * (child-session-scoped) nodeId and a Runtime objectId. Re-fetches the child
+   * document root each poll so a mid-load `documentUpdated` can't leave us with
+   * a stale root. Supports plain CSS selectors and, as a fallback, a shadow-DOM
+   * -piercing deep query (the checkout-fill subset never needs ref:/text:/role:
+   * selectors inside a cross-origin frame).
+   */
+  private async findElementInSession(
+    selector: string | string[],
+    sessionId: string,
+    timeout: number
+  ): Promise<{ nodeId: number; objectId: string; selector: string } | null> {
+    const selectors = Array.isArray(selector) ? selector : [selector];
+    const deadline = Date.now() + timeout;
+    for (;;) {
+      for (const sel of selectors) {
+        try {
+          const doc = await this.cdp.send<{ root: { nodeId: number } }>(
+            'DOM.getDocument',
+            { depth: 0 },
+            sessionId
+          );
+          const root = doc.root?.nodeId;
+          if (root) {
+            const q = await this.cdp.send<{ nodeId: number }>(
+              'DOM.querySelector',
+              { nodeId: root, selector: sel },
+              sessionId
+            );
+            if (q.nodeId) {
+              const resolved = await this.cdp.send<{ object: { objectId: string } }>(
+                'DOM.resolveNode',
+                { nodeId: q.nodeId },
+                sessionId
+              );
+              return { nodeId: q.nodeId, objectId: resolved.object.objectId, selector: sel };
+            }
+          }
+        } catch {
+          // querySelector can throw for shadow-only matches or during load.
+        }
+
+        // Shadow-piercing fallback (L-1): `DOM.querySelector` above does NOT
+        // pierce shadow roots, but the visibility probe `waitForSelectorInSession`
+        // proves visibility with a shadow-piercing `deepQuery`. Without this
+        // fallback a shadow-encapsulated field in an OOPIF passes the visibility
+        // probe then fails here with ElementNotFoundError. Resolve via the same
+        // `deepQuery`, then map the returned handle back to a nodeId.
+        try {
+          const deep = await this.cdp.send<{ result: { objectId?: string } }>(
+            'Runtime.evaluate',
+            {
+              expression: `(() => { ${DEEP_QUERY_SCRIPT} return deepQuery(${JSON.stringify(sel)}); })()`,
+              returnByValue: false,
+            },
+            sessionId
+          );
+          const objectId = deep.result.objectId;
+          if (objectId) {
+            const req = await this.cdp.send<{ nodeId: number }>(
+              'DOM.requestNode',
+              { objectId },
+              sessionId
+            );
+            if (req.nodeId) {
+              return { nodeId: req.nodeId, objectId, selector: sel };
+            }
+          }
+        } catch {
+          // deepQuery/requestNode can throw during load; try the next candidate.
+        }
+      }
+      if (Date.now() >= deadline) return null;
+      await sleep(50);
+    }
+  }
+
+  /**
+   * Poll for a selector (any of several) to reach `state` inside the active
+   * OOPIF child session, evaluating the same visibility/attachment predicates
+   * the top-level wait subsystem uses, but on the child session's own context.
+   */
+  private async waitForSelectorInSession(
+    selectors: string[],
+    sessionId: string,
+    state: 'visible' | 'hidden' | 'attached' | 'detached',
+    timeout: number
+  ): Promise<boolean> {
+    const wantPresent = state === 'visible' || state === 'attached';
+    const buildExpr = (sel: string): string =>
+      state === 'attached' || state === 'detached'
+        ? `(() => { ${DEEP_QUERY_SCRIPT} return deepQuery(${JSON.stringify(sel)}) !== null; })()`
+        : `(() => { ${DEEP_QUERY_SCRIPT} ${VISIBLE_PREDICATE_SCRIPT} return bpElementVisible(deepQuery(${JSON.stringify(sel)})); })()`;
+
+    const deadline = Date.now() + timeout;
+    for (;;) {
+      for (const sel of selectors) {
+        let present = false;
+        try {
+          const res = await this.cdp.send<{ result: { value: boolean } }>(
+            'Runtime.evaluate',
+            { expression: buildExpr(sel), returnByValue: true },
+            sessionId
+          );
+          present = res.result.value === true;
+        } catch {
+          present = false;
+        }
+        if ((wantPresent && present) || (!wantPresent && !present)) return true;
+      }
+      if (Date.now() >= deadline) return false;
+      await sleep(100);
+    }
+  }
+
+  /**
+   * Report whether an element inside a child session is disabled (native
+   * `disabled`, an ancestor `fieldset[disabled]`, or `aria-disabled="true"`).
+   * Best-effort: returns false if the probe fails.
+   */
+  private async isDisabledInSession(objectId: string, sessionId: string): Promise<boolean> {
+    try {
+      const res = await this.cdp.send<{ result: { value: boolean } }>(
+        'Runtime.callFunctionOn',
+        {
+          objectId,
+          functionDeclaration: `function() {
+            if (this.disabled === true) return true;
+            if (typeof this.closest === 'function' && this.closest('fieldset[disabled]')) return true;
+            var aria = this.getAttribute && this.getAttribute('aria-disabled');
+            return aria === 'true';
+          }`,
+          returnByValue: true,
+        },
+        sessionId
+      );
+      return res.result.value === true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Locate an ACTIONABLE element inside the active OOPIF child session. Enforces
+   * the same existence + visibility (and, unless `requireEnabled === false`,
+   * enabled) safety the top-level fill/click apply via `ensureActionable` (H1):
+   * `findElementInSession` alone only proves existence, so a hidden/disabled node
+   * would otherwise be acted on. Returns null only when `optional` and the
+   * element never became actionable; otherwise throws.
+   */
+  private async resolveActionableInSession(
+    selector: string | string[],
+    sessionId: string,
+    timeout: number,
+    opts: { optional?: boolean; requireEnabled?: boolean }
+  ): Promise<{ nodeId: number; objectId: string; selector: string } | null> {
+    const selectors = Array.isArray(selector) ? selector : [selector];
+
+    // Existence + visibility, polled on the child session's own context.
+    const visible = await this.waitForSelectorInSession(selectors, sessionId, 'visible', timeout);
+    if (!visible) {
+      if (opts.optional) return null;
+      throw new ElementNotFoundError(selector);
+    }
+
+    const found = await this.findElementInSession(
+      selector,
+      sessionId,
+      Math.min(timeout, OOPIF_ATTACH_MIN_TIMEOUT_MS)
+    );
+    if (!found) {
+      if (opts.optional) return null;
+      throw new ElementNotFoundError(selector);
+    }
+
+    if (
+      opts.requireEnabled !== false &&
+      (await this.isDisabledInSession(found.objectId, sessionId))
+    ) {
+      if (opts.optional) return null;
+      throw new Error(
+        `Element "${found.selector}" is disabled inside the cross-origin iframe and cannot be actioned.`
+      );
+    }
+    return found;
+  }
+
+  /**
+   * Fill an input inside the active OOPIF child session using focus +
+   * Input.insertText, both routed to the child session (focus on the child
+   * session is the load-bearing part). Coordinate geometry is intentionally
+   * skipped for OOPIF frames.
+   */
+  private async fillInFrame(
+    selector: string | string[],
+    value: string,
+    options: FillOptions,
+    dispatch: ActionDispatch
+  ): Promise<boolean> {
+    const sessionId = this.currentFrameSession!;
+    const timeout = options.timeout ?? DEFAULT_TIMEOUT;
+    // H1: enforce visible + enabled before acting (parity with top-level fill).
+    const found = await this.resolveActionableInSession(selector, sessionId, timeout, {
+      optional: options.optional,
+    });
+    if (!found) return false;
+    this._lastMatchedSelector = found.selector;
+
+    // Focus on the CHILD session, then select existing content so insertText
+    // replaces it (matches the top-level fill's clear-then-type semantics).
+    await this.cdp.send('DOM.focus', { nodeId: found.nodeId }, sessionId);
+    await this.selectEditableContent(found.objectId, sessionId);
+
+    if (value === '') {
+      await dispatch.send(
+        () =>
+          this.cdp.send(
+            'Runtime.callFunctionOn',
+            {
+              objectId: found.objectId,
+              functionDeclaration: `function() {
+                if (this.isContentEditable) { this.textContent = ''; }
+                else { this.value = ''; }
+                this.dispatchEvent(new Event('input', { bubbles: true }));
+                this.dispatchEvent(new Event('change', { bubbles: true }));
+              }`,
+            },
+            sessionId
+          ),
+        'fillValue'
+      );
+    } else {
+      await dispatch.send(
+        () => this.cdp.send('Input.insertText', { text: value }, sessionId),
+        'insertText'
+      );
+    }
+
+    if (options.verify !== false) {
+      const actual = await this.readEditableValue(found.objectId, sessionId);
+      if (actual !== value) {
+        if (options.optional) return false;
+        throw new Error(
+          `Fill value did not stick. Expected ${JSON.stringify(value)} but got ${JSON.stringify(actual)}.`
+        );
+      }
+    }
+
+    if (options.blur) {
+      await this.cdp.send(
+        'Runtime.callFunctionOn',
+        { objectId: found.objectId, functionDeclaration: 'function() { this.blur(); }' },
+        sessionId
+      );
+    }
+    return true;
+  }
+
+  /**
+   * Click an element inside the active OOPIF child session via element.click()
+   * (JS click; synthetic-mouse coordinate translation is out of scope). Runs a
+   * round-trip afterwards so synchronous handlers complete before returning.
+   */
+  private async clickInFrame(
+    selector: string | string[],
+    options: ActionOptions,
+    dispatch: ActionDispatch
+  ): Promise<boolean> {
+    const sessionId = this.currentFrameSession!;
+    const timeout = options.timeout ?? DEFAULT_TIMEOUT;
+    // H1: enforce visible + enabled before acting (parity with top-level click).
+    const found = await this.resolveActionableInSession(selector, sessionId, timeout, {
+      optional: options.optional,
+    });
+    if (!found) return false;
+    this._lastMatchedSelector = found.selector;
+
+    await this.cdp.send('DOM.focus', { nodeId: found.nodeId }, sessionId).catch(() => {});
+    await dispatch.send(
+      () =>
+        this.cdp.send(
+          'Runtime.callFunctionOn',
+          { objectId: found.objectId, functionDeclaration: 'function() { this.click(); }' },
+          sessionId
+        ),
+      'javascriptClick'
+    );
+    return true;
+  }
+
+  /**
+   * Type into a field inside the active OOPIF child session: focus on the child
+   * session, then per-character key events (or `Input.insertText` for chars with
+   * no US-layout mapping) dispatched on the child session. Enforces visible +
+   * enabled first (H1). Mirrors the top-level {@link type} keystroke path.
+   */
+  private async typeInFrame(
+    selector: string | string[],
+    text: string,
+    options: TypeOptions,
+    dispatch: ActionDispatch
+  ): Promise<boolean> {
+    const sessionId = this.currentFrameSession!;
+    const timeout = options.timeout ?? DEFAULT_TIMEOUT;
+    const { delay = 50 } = options;
+    const found = await this.resolveActionableInSession(selector, sessionId, timeout, {
+      optional: options.optional,
+    });
+    if (!found) return false;
+    this._lastMatchedSelector = found.selector;
+
+    await this.cdp.send('DOM.focus', { nodeId: found.nodeId }, sessionId);
+    const beforeState = await this.readEditableState(found.objectId, sessionId);
+
+    for (const char of text) {
+      const def = US_KEYBOARD[char];
+      if (def) {
+        await this.dispatchKeyDefinition(def, 0, sessionId, dispatch);
+      } else {
+        // Non-layout character (emoji, CJK): use insertText on the child session.
+        await dispatch.send(
+          () => this.cdp.send('Input.insertText', { text: char }, sessionId),
+          'insertText'
+        );
+      }
+      if (delay > 0) {
+        await sleep(delay);
+      }
+    }
+
+    const afterState = await this.readEditableState(found.objectId, sessionId);
+    if (
+      text.length > 0 &&
+      beforeState.value === afterState.value &&
+      beforeState.selectionStart === afterState.selectionStart &&
+      beforeState.selectionEnd === afterState.selectionEnd
+    ) {
+      await dispatch.send(
+        () => this.cdp.send('Input.insertText', { text }, sessionId),
+        'insertText'
+      );
+    }
+
+    if (options.blur) {
+      await this.cdp.send(
+        'Runtime.callFunctionOn',
+        { objectId: found.objectId, functionDeclaration: 'function() { this.blur(); }' },
+        sessionId
+      );
+    }
+    return true;
+  }
+
+  /**
+   * Focus an element inside the active OOPIF child session (H1: existence +
+   * visibility enforced; a disabled element can still be focused, so enabled is
+   * not required here). `DOM.focus` is routed to the child session.
+   */
+  private async focusInFrame(
+    selector: string | string[],
+    options: ActionOptions
+  ): Promise<boolean> {
+    const sessionId = this.currentFrameSession!;
+    const timeout = options.timeout ?? DEFAULT_TIMEOUT;
+    const found = await this.resolveActionableInSession(selector, sessionId, timeout, {
+      optional: options.optional,
+      requireEnabled: false,
+    });
+    if (!found) return false;
+    this._lastMatchedSelector = found.selector;
+    await this.cdp.send('DOM.focus', { nodeId: found.nodeId }, sessionId);
+    return true;
+  }
+
+  /**
+   * Read text content from within the active OOPIF child session.
+   */
+  private async textInFrame(selector: string | undefined): Promise<string> {
+    const sessionId = this.currentFrameSession!;
+    if (!selector) {
+      const res = await this.cdp.send<{ result: { value: string } }>(
+        'Runtime.evaluate',
+        { expression: 'document.body.innerText', returnByValue: true },
+        sessionId
+      );
+      return res.result.value ?? '';
+    }
+    const found = await this.findElementInSession(selector, sessionId, DEFAULT_TIMEOUT);
+    if (!found) return '';
+    const res = await this.cdp.send<{ result: { value: string } }>(
+      'Runtime.callFunctionOn',
+      {
+        objectId: found.objectId,
+        functionDeclaration: 'function() { return this.innerText || this.textContent || ""; }',
+        returnByValue: true,
+      },
+      sessionId
+    );
+    return res.result.value ?? '';
+  }
+
+  /**
+   * Diagnose whether a CSS selector resolves inside an iframe rather than the
+   * current (main) document. `snapshot()` and CSS-based fills/waits do NOT
+   * pierce iframes, so a selector whose only true match lives inside an iframe
+   * `contentDocument` will silently fail (or, worse, resolve a look-alike
+   * parent element). This is a best-effort, on-demand check intended for the
+   * failure / not-found path — it runs a single in-page `Runtime.evaluate` and
+   * does not touch the happy path.
+   *
+   * Returns:
+   * - `'main'`   — the selector matches in the current document.
+   * - `'iframe'` — it matches only inside a same-origin iframe; the caller
+   *   should `switchToFrame(...)` before acting on it.
+   * - `'none'`   — no match anywhere reachable (may still exist in a
+   *   cross-origin iframe, which is not inspectable).
+   *
+   * @param selector - A plain CSS selector (ref:/text:/role: selectors are not
+   *   iframe-scoped and always report against the current document).
+   */
+  async locateSelectorFrame(selector: string): Promise<'main' | 'iframe' | 'none'> {
+    // L-2: inside a cross-origin (OOPIF) frame the default session evaluates
+    // against the PARENT document and would mis-report. Route the probe to the
+    // active child session so 'main' correctly means "the document you are
+    // currently operating in" (the OOPIF child), not the parent. A numeric
+    // contextId and a sessionId are mutually exclusive, so only send the contextId
+    // on the default (non-OOPIF) session.
+    const sessionId = this.currentFrameSession ?? undefined;
+    try {
+      const result = await this.cdp.send<{ result: RemoteObject }>(
+        'Runtime.evaluate',
+        {
+          expression: `(() => {
+          const sel = ${JSON.stringify(selector)};
+          try { if (document.querySelector(sel)) return 'main'; } catch { return 'none'; }
+          const frames = document.querySelectorAll('iframe, frame');
+          for (const f of frames) {
+            try {
+              const doc = f.contentDocument;
+              if (doc && doc.querySelector(sel)) return 'iframe';
+            } catch { /* cross-origin: not inspectable */ }
+          }
+          return 'none';
+        })()`,
+          returnByValue: true,
+          contextId: sessionId ? undefined : (this.currentFrameContextId ?? undefined),
+        },
+        sessionId
+      );
+      const value = result.result.value;
+      return value === 'main' || value === 'iframe' ? value : 'none';
+    } catch {
+      return 'none';
+    }
+  }
+
   // ============ Waiting ============
 
   /**
@@ -1499,6 +3068,20 @@ export class Page {
   async waitFor(selector: string | string[], options: WaitForOptions = {}): Promise<boolean> {
     const { timeout = DEFAULT_TIMEOUT, state = 'visible' } = options;
     const selectors = Array.isArray(selector) ? selector : [selector];
+
+    // Cross-origin (OOPIF) frame active: poll the child session's own context.
+    if (this.currentFrameSession) {
+      const success = await this.waitForSelectorInSession(
+        selectors,
+        this.currentFrameSession,
+        state,
+        timeout
+      );
+      if (!success && !options.optional) {
+        throw new TimeoutError(`Timeout waiting for ${selectors.join(' or ')} to be ${state}`);
+      }
+      return success;
+    }
 
     const result = await waitForAnyElement(this.cdp, selectors, {
       state,
@@ -1514,11 +3097,53 @@ export class Page {
   }
 
   /**
+   * Wait for application-level readiness after a navigation milestone.
+   * Unlike element waits this deliberately keeps polling through an empty
+   * first snapshot and through pages that continue making background requests.
+   */
+  async waitForReady(options: WaitForReadyOptions = {}): Promise<boolean> {
+    this.assertOopifUnsupported('waitForReady');
+    const result = await waitForReadyStrategy(this.cdp, {
+      ...options,
+      timeout: options.timeout ?? DEFAULT_TIMEOUT,
+      contextId: this.currentFrameContextId ?? undefined,
+      refMap: this.exportRefMap(),
+    });
+    const diagnostics: ReadinessDiagnostics = {
+      ...(result.diagnostics ?? {
+        ready: result.success,
+        waitedMs: result.waitedMs,
+        unmetConditions: [],
+        checkedAt: new Date().toISOString(),
+      }),
+      ready: result.success,
+      waitedMs: result.waitedMs,
+      lastMilestone: this._lastNavigationMilestone,
+    };
+    this._lastReadinessDiagnostics = diagnostics;
+    if (!result.success && !options.optional) {
+      const unmet =
+        diagnostics.unmetConditions.length > 0
+          ? ` Unmet conditions: ${diagnostics.unmetConditions.join('; ')}.`
+          : '';
+      throw new TimeoutError(`Page readiness timeout after ${diagnostics.waitedMs}ms.${unmet}`);
+    }
+    return result.success;
+  }
+
+  /**
    * Wait for navigation to complete
    */
-  async waitForNavigation(options: ActionOptions = {}): Promise<boolean> {
+  async waitForNavigation(
+    options: ActionOptions & { expectedUrl?: string } = {}
+  ): Promise<boolean> {
     const { timeout = DEFAULT_TIMEOUT } = options;
-    const result = await waitForNav(this.cdp, { timeout });
+    const result = await waitForNav(this.cdp, {
+      timeout,
+      waitUntil: options.waitUntil ?? 'load',
+      expectedUrl: options.expectedUrl,
+    });
+    this._lastNavigationMilestone = result.milestone;
 
     if (!result.success && !options.optional) {
       throw new TimeoutError('Navigation timeout');
@@ -1567,15 +3192,18 @@ export class Page {
       awaitPromise: true,
     };
 
-    // Use iframe execution context if we're in a frame
-    if (this.currentFrameContextId !== null) {
+    // Cross-origin (OOPIF) frame active: evaluate in the child session's own
+    // default context (no numeric contextId). Otherwise use the same-origin
+    // iframe execution context if we're in a frame.
+    const evalSessionId = this.currentFrameSession ?? undefined;
+    if (evalSessionId === undefined && this.currentFrameContextId !== null) {
       params['contextId'] = this.currentFrameContextId;
     }
 
     const result = await this.cdp.send<{
       result: RemoteObject;
       exceptionDetails?: ExceptionDetails;
-    }>('Runtime.evaluate', params);
+    }>('Runtime.evaluate', params, evalSessionId);
 
     if (result.exceptionDetails) {
       throw new Error(this.formatEvaluationError(result.exceptionDetails));
@@ -1627,6 +3255,11 @@ export class Page {
    * Get text content from the page or a specific element
    */
   async text(selector?: string): Promise<string> {
+    // Cross-origin (OOPIF) frame active: read from the child session.
+    if (this.currentFrameSession) {
+      return this.textInFrame(selector);
+    }
+
     if (!selector) {
       const result = await this.evaluateInFrame<{ result: RemoteObject }>(
         'document.body.innerText'
@@ -1650,9 +3283,110 @@ export class Page {
   }
 
   /**
+   * Inspect the live-DOM state of an arbitrary selector — including
+   * non-interactive elements (e.g. a `<div data-testid="toolbar">` container)
+   * that `snapshot()` never surfaces, since that is built from the
+   * accessibility tree and only enumerates interactive roles.
+   *
+   * Runs a single `Runtime.evaluate` round-trip that pierces shadow roots and
+   * honors the current iframe context (like `waitFor`/`text`/`evaluate`). The
+   * visibility test reuses the exact predicate the wait subsystem uses.
+   *
+   * Selector parity with `waitFor`: plain CSS selectors (attribute selectors
+   * like `[data-testid='toolbar']`, `#id`, `.class`, descendant combinators)
+   * and browser-pilot special selectors (`text:` / `role:`) are supported.
+   * For special selectors the match is the single best element, so `count` is
+   * 0 or 1.
+   */
+  async elementState(selector: string): Promise<ElementState> {
+    this.assertOopifUnsupported('elementState');
+    // Special selectors (text:/role:) resolve to the single best element and
+    // must count hidden elements as "existing"; visibility is computed below.
+    const specialLookup = buildSpecialSelectorLookupExpression(selector, { includeHidden: true });
+
+    const matchesExpr = specialLookup
+      ? `(() => { const bpEl = ${specialLookup}; return bpEl ? [bpEl] : []; })()`
+      : `deepQueryAll(${JSON.stringify(selector)})`;
+
+    const expression = `(() => {
+      ${VISIBLE_PREDICATE_SCRIPT}
+      function deepQueryAll(selector, root) {
+        var node = root || document;
+        var results = [];
+        var seen = new Set();
+        function collect(scope) {
+          if (!scope || typeof scope.querySelectorAll !== 'function') return;
+          var direct;
+          try { direct = scope.querySelectorAll(selector); } catch (e) { return; }
+          for (var i = 0; i < direct.length; i++) {
+            if (!seen.has(direct[i])) { seen.add(direct[i]); results.push(direct[i]); }
+          }
+          var all = scope.querySelectorAll('*');
+          for (var j = 0; j < all.length; j++) {
+            if (all[j].shadowRoot) collect(all[j].shadowRoot);
+          }
+        }
+        collect(node);
+        return results;
+      }
+      var matches;
+      try { matches = ${matchesExpr}; } catch (e) { matches = []; }
+      if (!matches) matches = [];
+      var count = matches.length;
+      var first = count > 0 ? matches[0] : null;
+      var text = '';
+      if (first) {
+        var raw = first.innerText != null ? first.innerText : (first.textContent != null ? first.textContent : '');
+        text = String(raw).trim();
+      }
+      var value = null;
+      if (
+        first &&
+        'value' in first &&
+        typeof first.value === 'string' &&
+        /^(INPUT|SELECT|TEXTAREA)$/.test(first.tagName)
+      ) {
+        value = first.value;
+      }
+      var boundingBox = null;
+      if (first) {
+        var rect = first.getBoundingClientRect();
+        if (rect.width > 0 || rect.height > 0) {
+          boundingBox = { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+        }
+      }
+      return {
+        exists: count > 0,
+        visible: first ? bpElementVisible(first) : false,
+        count: count,
+        text: text,
+        value: value,
+        boundingBox: boundingBox,
+      };
+    })()`;
+
+    const result = await this.evaluateInFrame<{ result: { value: ElementState | undefined } }>(
+      expression,
+      { awaitPromise: true }
+    );
+
+    return (
+      result.result.value ?? {
+        exists: false,
+        visible: false,
+        count: 0,
+        text: '',
+        value: null,
+        boundingBox: null,
+      }
+    );
+  }
+
+  /**
    * Enumerate form controls on the page with labels and current state.
    */
   async forms(): Promise<FormField[]> {
+    this.assertOopifUnsupported('forms');
     const result = await this.evaluateInFrame<{ result: { value: FormField[] } }>(
       `(() => {
         function normalize(value) {
@@ -1730,6 +3464,7 @@ export class Page {
     files: FileInput[],
     options: ActionOptions = {}
   ): Promise<boolean> {
+    this.assertOopifUnsupported('setInputFiles');
     return this.withStaleNodeRetry(async () => {
       const element = await this.findElement(selector, options);
       if (!element) {
@@ -1927,7 +3662,8 @@ export class Page {
     nodeId: number,
     objectId: string,
     currentIndex: number,
-    targetIndex: number
+    targetIndex: number,
+    dispatch: ActionDispatch
   ): Promise<boolean> {
     await this.cdp.send('DOM.focus', { nodeId });
 
@@ -1935,14 +3671,14 @@ export class Page {
       let effectiveIndex = currentIndex;
 
       if (effectiveIndex < 0 || targetIndex < effectiveIndex) {
-        await this.dispatchKey('Home');
+        await this.dispatchKey('Home', undefined, dispatch);
         effectiveIndex = 0;
       }
       const steps = targetIndex - effectiveIndex;
       const direction = steps >= 0 ? 'ArrowDown' : 'ArrowUp';
 
       for (let i = 0; i < Math.abs(steps); i++) {
-        await this.dispatchKey(direction);
+        await this.dispatchKey(direction, undefined, dispatch);
       }
     }
 
@@ -1952,33 +3688,40 @@ export class Page {
 
   private async applyNativeSelectFallback(
     objectId: string,
-    targetIndexes: number[]
+    targetIndexes: number[],
+    dispatch: ActionDispatch
   ): Promise<void> {
-    await this.cdp.send('Runtime.callFunctionOn', {
-      objectId,
-      functionDeclaration: `function(indexes) {
-        if (!(this instanceof HTMLSelectElement)) return false;
+    await dispatch.send(
+      () =>
+        this.cdp.send('Runtime.callFunctionOn', {
+          objectId,
+          functionDeclaration: `function(indexes) {
+            if (!(this instanceof HTMLSelectElement)) return false;
 
-        var wanted = new Set(indexes.map(function(index) { return Number(index); }));
-        for (var i = 0; i < this.options.length; i++) {
-          this.options[i].selected = wanted.has(i);
-        }
-        if (!this.multiple && indexes.length === 1) {
-          this.selectedIndex = indexes[0];
-        }
-        this.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
-        this.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
-        return true;
-      }`,
-      arguments: [{ value: targetIndexes }],
-      returnByValue: true,
-    });
+            var wanted = new Set(indexes.map(function(index) { return Number(index); }));
+            for (var i = 0; i < this.options.length; i++) {
+              this.options[i].selected = wanted.has(i);
+            }
+            if (!this.multiple && indexes.length === 1) {
+              this.selectedIndex = indexes[0];
+            }
+            this.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+            this.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+            return true;
+          }`,
+          arguments: [{ value: targetIndexes }],
+          returnByValue: true,
+        }),
+      'selectValue'
+    );
   }
 
-  private async selectEditableContent(objectId: string): Promise<void> {
-    await this.cdp.send('Runtime.callFunctionOn', {
-      objectId,
-      functionDeclaration: `function() {
+  private async selectEditableContent(objectId: string, sessionId?: string): Promise<void> {
+    await this.cdp.send(
+      'Runtime.callFunctionOn',
+      {
+        objectId,
+        functionDeclaration: `function() {
         if (this.isContentEditable) {
           this.focus();
           const range = document.createRange();
@@ -2003,75 +3746,159 @@ export class Page {
         }
         this.focus();
       }`,
-    });
+      },
+      sessionId
+    );
   }
 
   private async clearEditableSelection(
     objectId: string,
-    key: 'Backspace' | 'Delete'
+    key: 'Backspace' | 'Delete',
+    dispatch: ActionDispatch
   ): Promise<void> {
     await this.selectEditableContent(objectId);
-    await this.dispatchKey(key);
+    await this.dispatchKey(key, undefined, dispatch);
   }
 
-  private async readEditableValue(objectId: string): Promise<string> {
-    const result = await this.cdp.send<{ result: { value: string } }>('Runtime.callFunctionOn', {
-      objectId,
-      functionDeclaration: `function() {
+  private async readEditableValue(objectId: string, sessionId?: string): Promise<string> {
+    const result = await this.cdp.send<{ result: { value: string } }>(
+      'Runtime.callFunctionOn',
+      {
+        objectId,
+        functionDeclaration: `function() {
         if (this.isContentEditable) {
           return this.textContent || '';
         }
         return this.value || '';
       }`,
-      returnByValue: true,
-    });
+        returnByValue: true,
+      },
+      sessionId
+    );
     return result.result.value ?? '';
+  }
+
+  private async readEditableState(
+    objectId: string,
+    sessionId?: string
+  ): Promise<{ value: string; selectionStart: number | null; selectionEnd: number | null }> {
+    const result = await this.cdp.send<{
+      result: {
+        value: { value: string; selectionStart: number | null; selectionEnd: number | null };
+      };
+    }>(
+      'Runtime.callFunctionOn',
+      {
+        objectId,
+        functionDeclaration: `function() {
+          return {
+            value: this.isContentEditable ? (this.textContent || '') : (this.value || ''),
+            selectionStart: typeof this.selectionStart === 'number' ? this.selectionStart : null,
+            selectionEnd: typeof this.selectionEnd === 'number' ? this.selectionEnd : null,
+          };
+        }`,
+        returnByValue: true,
+      },
+      sessionId
+    );
+    return (
+      result.result.value ?? {
+        value: '',
+        selectionStart: null,
+        selectionEnd: null,
+      }
+    );
+  }
+
+  private async selectAllActiveEditable(sessionId?: string): Promise<boolean> {
+    const params: Record<string, unknown> = {
+      expression: `(() => {
+        const active = document.activeElement;
+        if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) {
+          active.select();
+          return true;
+        }
+        if (active instanceof HTMLElement && active.isContentEditable) {
+          const range = document.createRange();
+          range.selectNodeContents(active);
+          const selection = window.getSelection();
+          if (!selection) return false;
+          selection.removeAllRanges();
+          selection.addRange(range);
+          return true;
+        }
+        return false;
+      })()`,
+      returnByValue: true,
+    };
+    if (sessionId === undefined && this.currentFrameContextId !== null) {
+      params['contextId'] = this.currentFrameContextId;
+    }
+
+    try {
+      const result = await this.cdp.send<{ result: { value: boolean } }>(
+        'Runtime.evaluate',
+        params,
+        sessionId
+      );
+      return result.result.value === true;
+    } catch {
+      return false;
+    }
   }
 
   private async typeEditableFallback(
     nodeId: number,
     objectId: string,
-    value: string
+    value: string,
+    dispatch: ActionDispatch
   ): Promise<void> {
     await this.selectEditableContent(objectId);
     await this.cdp.send('DOM.focus', { nodeId });
     for (const char of value) {
-      await this.dispatchKey(char);
+      await this.dispatchKey(char, undefined, dispatch);
     }
   }
 
   private async applyRecordedSelectFallback(
     objectId: string,
-    targetIndexes: number[]
+    targetIndexes: number[],
+    dispatch: ActionDispatch
   ): Promise<boolean> {
-    await this.cdp.send('Runtime.callFunctionOn', {
-      objectId,
-      functionDeclaration: `function(indexes) {
-        if (!(this instanceof HTMLSelectElement)) return false;
+    await dispatch.send(
+      () =>
+        this.cdp.send('Runtime.callFunctionOn', {
+          objectId,
+          functionDeclaration: `function(indexes) {
+            if (!(this instanceof HTMLSelectElement)) return false;
 
-        var wanted = new Set(indexes.map(function(index) { return Number(index); }));
-        for (var i = 0; i < this.options.length; i++) {
-          this.options[i].selected = wanted.has(i);
-        }
-        if (!this.multiple && indexes.length === 1) {
-          this.selectedIndex = indexes[0];
-        }
-        return true;
-      }`,
-      arguments: [{ value: targetIndexes }],
-      returnByValue: true,
-    });
+            var wanted = new Set(indexes.map(function(index) { return Number(index); }));
+            for (var i = 0; i < this.options.length; i++) {
+              this.options[i].selected = wanted.has(i);
+            }
+            if (!this.multiple && indexes.length === 1) {
+              this.selectedIndex = indexes[0];
+            }
+            return true;
+          }`,
+          arguments: [{ value: targetIndexes }],
+          returnByValue: true,
+        }),
+      'selectValue'
+    );
 
-    return this.invokeRecordedEventListeners(objectId, ['input', 'change']);
+    return this.invokeRecordedEventListeners(objectId, ['input', 'change'], dispatch);
   }
 
   private async invokeRecordedEventListeners(
     objectId: string,
-    eventTypes: string[]
+    eventTypes: string[],
+    dispatch?: ActionDispatch
   ): Promise<boolean> {
-    const result = await this.cdp.send<{ result: { value: boolean } }>('Runtime.callFunctionOn', {
-      objectId,
-      functionDeclaration: `function(types) {
+    const operation = () =>
+      this.cdp.send<{ result: { value: boolean } }>('Runtime.callFunctionOn', {
+        objectId,
+        functionDeclaration: `function(types) {
         function buildPath(target) {
           var path = [];
           var node = target;
@@ -2206,9 +4033,10 @@ export class Page {
 
         return invokedAny;
       }`,
-      arguments: [{ value: eventTypes }],
-      returnByValue: true,
-    });
+        arguments: [{ value: eventTypes }],
+        returnByValue: true,
+      });
+    const result = dispatch ? await dispatch.send(operation, 'selectEvents') : await operation();
 
     return result.result.value ?? false;
   }
@@ -2293,10 +4121,15 @@ export class Page {
    * Get an accessibility tree snapshot of the page
    */
   async snapshot(options: SnapshotOptions = {}): Promise<PageSnapshot> {
+    this.assertOopifUnsupported('snapshot');
     const roleFilter = new Set((options.roles ?? []).map((role) => role.trim().toLowerCase()));
-    const [url, title, axTree] = await Promise.all([
-      this.url(),
-      this.title(),
+    // Fold url()+title() into a single Runtime.evaluate round-trip (one CDP
+    // call instead of two) and fetch the AX tree in parallel.
+    const [urlTitle, axTree] = await Promise.all([
+      this.cdp.send<{ result: RemoteObject }>('Runtime.evaluate', {
+        expression: '({ url: location.href, title: document.title })',
+        returnByValue: true,
+      }),
       this.cdp.send<{
         nodes: Array<{
           nodeId: string;
@@ -2311,6 +4144,10 @@ export class Page {
         }>;
       }>('Accessibility.getFullAXTree'),
     ]);
+
+    const urlTitleValue = (urlTitle.result.value ?? {}) as { url?: string; title?: string };
+    const url = urlTitleValue.url ?? '';
+    const title = urlTitleValue.title ?? '';
 
     // Process accessibility nodes
     const nodes = axTree.nodes.filter((n) => !n.ignored);
@@ -2357,6 +4194,11 @@ export class Page {
         node.properties?.find((p) => p.name === 'checked')?.value.value
       );
 
+      const properties = node.properties?.reduce<Record<string, unknown>>((acc, property) => {
+        acc[property.name] = property.value.value;
+        return acc;
+      }, {});
+
       return {
         role,
         name,
@@ -2365,6 +4207,7 @@ export class Page {
         children: children.length > 0 ? children : undefined,
         disabled,
         checked,
+        ...(properties && Object.keys(properties).length > 0 ? { properties } : {}),
       };
     };
 
@@ -2470,10 +4313,33 @@ export class Page {
       return lines.join('\n');
     };
 
-    const text =
+    // Lazily compute the (potentially large) text representation. Most callers
+    // only read `accessibilityTree` / `interactiveElements`; building the full
+    // formatted string on every snapshot is wasteful. The getter memoizes on
+    // first access so repeated reads (and CLI commands that print `.text`) are
+    // unaffected.
+    let textCache: string | undefined;
+    const computeText = (): string =>
       roleFilter.size > 0
         ? accessibilityTree.map((node) => formatNode(node)).join('\n')
         : formatTree(accessibilityTree);
+
+    // Opt-in: enrich interactive elements with real DOM attributes via a
+    // single batched pass (one DOM.getDocument flatten), NOT one CDP call
+    // per node. Default-off so the cheap AX-only path is byte-for-byte
+    // unchanged.
+    if (options.attributes && interactiveElements.length > 0) {
+      try {
+        await this.enrichSnapshotAttributes(
+          interactiveElements,
+          nodeRefs,
+          nodeMap,
+          options.attributeNames
+        );
+      } catch {
+        // Enrichment is best-effort; never fail the snapshot over it.
+      }
+    }
 
     const result: PageSnapshot = {
       url,
@@ -2481,12 +4347,77 @@ export class Page {
       timestamp: new Date().toISOString(),
       accessibilityTree,
       interactiveElements,
-      text,
+      get text(): string {
+        if (textCache === undefined) textCache = computeText();
+        return textCache;
+      },
     };
-    if (roleFilter.size === 0) {
+    if (roleFilter.size === 0 && !options.attributes) {
       this.lastSnapshot = result; // Store for stale ref recovery
     }
     return result;
+  }
+
+  /** Attributes captured by the opt-in `snapshot({ attributes: true })` pass. */
+  private static readonly ENRICHED_ATTRIBUTE_NAMES = [
+    'id',
+    'data-testid',
+    'data-test',
+    'data-test-id',
+    'data-qa',
+    'name',
+    'type',
+    'placeholder',
+    'role',
+    'aria-label',
+  ];
+
+  /**
+   * Batched DOM-attribute enrichment for {@link snapshot} (opt-in).
+   *
+   * Performs ONE `DOM.getDocument` flatten (depth -1, pierce) to obtain every
+   * node's `backendNodeId` + inline `attributes`, builds a
+   * `backendNodeId -> Record<string,string>` map, and assigns the relevant
+   * attributes (`id`, `data-testid`/`data-test`/`data-qa`, stable `class`es,
+   * `name`, `type`, ...) onto each `InteractiveElement.attributes`.
+   *
+   * This is a single round-trip regardless of element count.
+   */
+  private async enrichSnapshotAttributes(
+    interactiveElements: InteractiveElement[],
+    nodeRefs: Map<string, string>,
+    nodeMap: Map<string, { backendDOMNodeId?: number }>,
+    extraAttributeNames?: string[]
+  ): Promise<void> {
+    // Build ref -> backendNodeId from the AX node map (the snapshot's source of truth).
+    const refToBackendId = new Map<string, number>();
+    for (const [nodeId, ref] of nodeRefs.entries()) {
+      const backendId = nodeMap.get(nodeId)?.backendDOMNodeId;
+      if (backendId !== undefined) refToBackendId.set(ref, backendId);
+    }
+    if (refToBackendId.size === 0) return;
+
+    // ONE batched DOM read: full flattened document (incl. shadow/iframe piercing)
+    // with inline attributes. Single round-trip regardless of element count.
+    const doc = await this.cdp.send<{ root: FlatDomNode }>('DOM.getDocument', {
+      depth: -1,
+      pierce: true,
+    });
+
+    const wantedNames =
+      extraAttributeNames && extraAttributeNames.length > 0
+        ? [...Page.ENRICHED_ATTRIBUTE_NAMES, ...extraAttributeNames]
+        : Page.ENRICHED_ATTRIBUTE_NAMES;
+    const byBackendId = extractAttributesByBackendId(doc.root, wantedNames);
+
+    for (const el of interactiveElements) {
+      const backendId = refToBackendId.get(el.ref);
+      if (backendId === undefined) continue;
+      const attrs = byBackendId.get(backendId);
+      if (attrs && Object.keys(attrs).length > 0) {
+        el.attributes = attrs;
+      }
+    }
   }
 
   /**
@@ -3127,6 +5058,10 @@ export class Page {
     this.currentFrameContextId = null;
     this.brokenFrame = null;
     this.frameContexts.clear();
+    this.currentFrameSession = null;
+    // Full teardown of the OOPIF registry (M5): a reset abandons the current
+    // document, so no previously attached child session is relevant anymore.
+    this.oopifFrames.clear();
     this.dialogHandler = null;
 
     // Stop any pending loading
@@ -3150,12 +5085,85 @@ export class Page {
   }
 
   /**
-   * Close this page (no-op for now, managed by Browser)
-   * This is a placeholder for API compatibility
+   * Release connection-global listeners this Page installed. Idempotent.
+   *
+   * The OOPIF firehose handler (`onAny`) is registered on the shared connection,
+   * not scoped to this page, so a discarded Page without teardown would keep
+   * processing every target attach/detach on the connection forever (BUG A).
+   * Called by {@link Browser.closePage} and {@link close}.
+   */
+  dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    if (this.oopifAnyHandler && typeof this.cdp.offAny === 'function') {
+      this.cdp.offAny(this.oopifAnyHandler);
+    }
+    this.oopifAnyHandler = null;
+  }
+
+  /**
+   * Close this page. Target teardown is managed by {@link Browser.closePage};
+   * this releases the page's connection-global listeners so a closed Page stops
+   * reacting to target lifecycle events.
    */
   async close(): Promise<void> {
-    // Page closing is managed by Browser.closePage()
-    // This method exists for API convenience in tests
+    this.dispose();
+  }
+
+  // ============ Resolution & Diagnostics ============
+
+  /**
+   * Score every plausible target for `intent` and return the ranked candidates.
+   *
+   * Takes ONE snapshot (reusing `opts.snapshot` when provided, otherwise an
+   * attribute-enriched snapshot so testid/css strategies have real DOM hooks),
+   * then delegates all scoring to {@link rankCandidates}. This is read-only:
+   * it EXECUTES NOTHING — no clicks, no navigation — it only ranks.
+   */
+  async resolveAll(
+    intent: string,
+    opts: {
+      snapshot?: PageSnapshot;
+      action?: string;
+      limit?: number;
+      includeHidden?: boolean;
+      strategies?: CandidateStrategy[];
+      minConfidence?: number;
+      /**
+       * Extra DOM attribute names the ranker may use as deterministic hooks
+       * (extends the default data-testid/data-test/data-qa set). When a fresh
+       * snapshot is taken here it is enriched with these attributes too, so a
+       * unique value like `data-cmd="c2"` becomes a `[data-cmd="c2"]` candidate.
+       */
+      testIdAttributes?: string[];
+    } = {}
+  ): Promise<RankedCandidate[]> {
+    const snapshot =
+      opts.snapshot ??
+      (await this.snapshot({ attributes: true, attributeNames: opts.testIdAttributes }));
+    return rankCandidates(snapshot, intent, {
+      actionType: opts.action,
+      maxResults: opts.limit,
+      strategies: opts.strategies,
+      minConfidence: opts.minConfidence,
+      testIdAttributes: opts.testIdAttributes,
+      returnAll: true,
+    });
+  }
+
+  /**
+   * Diagnose why a selector or intent does/doesn't resolve to an element.
+   * Thin delegation to {@link diagnoseElement}.
+   */
+  async diagnose(selectorOrIntent: string, opts?: DiagnoseOptions): Promise<DiagnoseResult> {
+    // L-2: diagnostics resolve against the DEFAULT session (snapshot, AX tree,
+    // querySelector), so inside a cross-origin (OOPIF) frame they would report
+    // about the PARENT document, not the frame the caller is operating in.
+    // Read-only, so no C1 risk, but misleading — fail with a clear message rather
+    // than silently diagnosing the wrong document. (snapshot() also guards this,
+    // but naming `diagnose` gives a clearer error.)
+    this.assertOopifUnsupported('diagnose');
+    return diagnoseElement(this, selectorOrIntent, opts);
   }
 
   // ============ Private Helpers ============
@@ -3166,7 +5174,7 @@ export class Page {
    */
   private async withStaleNodeRetry<T>(
     fn: () => Promise<T>,
-    options: { retries?: number; delay?: number } = {}
+    options: { retries?: number; delay?: number; dispatch?: ActionDispatch } = {}
   ): Promise<T> {
     const { retries = 2, delay = 50 } = options;
     let lastError: Error | undefined;
@@ -3175,24 +5183,21 @@ export class Page {
       try {
         return await fn();
       } catch (e) {
-        const message = e instanceof Error ? e.message : '';
-        if (
-          e instanceof Error &&
-          (message.includes('Could not find node with given id') ||
-            message.includes('Node with given id does not belong to the document') ||
-            message.includes('No node with given id found') ||
-            message.includes('Could not find object with given id') ||
-            message.includes('Cannot find context with specified id') ||
-            message.includes('Cannot find context with given id') ||
-            message.includes('Execution context was destroyed') ||
-            message.includes('No execution context with given id') ||
-            message.includes('Argument should belong to the same JavaScript world'))
-        ) {
-          lastError = e;
+        if (options.dispatch?.hasPotentiallyDispatched) {
+          throw e;
+        }
+        const stale = classifyStaleError(e);
+        if (stale.stale) {
+          lastError = e instanceof Error ? e : new Error(String(e));
           if (attempt < retries) {
-            // Reset cached DOM/context state so the next attempt re-resolves fresh handles.
+            // Reset every resolution cache so the next attempt uses fresh DOM,
+            // frame, ref, and execution-context handles. Keep lastSnapshot so
+            // semantic recovery can compare the old and new trees.
             this.rootNodeId = null;
             this.currentFrameContextId = null;
+            this.frameContexts.clear();
+            this.frameExecutionContexts.clear();
+            this.refMap.clear();
             await sleep(delay);
             continue;
           }
@@ -3207,63 +5212,86 @@ export class Page {
   /**
    * Find an element using single or multiple selectors
    * Supports ref:, text:, and role: selectors.
+   *
+   * The candidate array is an ordered preference list — "most-specific/explicit
+   * hint first, fallbacks after" — so array position is authoritative. We make a
+   * SINGLE ordered pass that tries each candidate in the caller's order and
+   * returns the first that resolves to an element:
+   *   - a `ref:` entry resolves instantly via its backendNodeId (no polling); a
+   *     stale/missing ref falls through to the next candidate.
+   *   - a runtime selector (CSS / [attr] / descendant / `text:` / `role:`) is
+   *     probed with an INSTANT visibility check here.
+   * A `ref:` no longer jumps ahead of a runtime selector that precedes it — the
+   * only behavioral change vs. the old ref-first pass. If nothing is present yet,
+   * the waiting pass below polls the runtime selectors (in author order) so
+   * late-appearing elements still resolve; refs are static (a snapshot's
+   * backendNodeIds), so a ref that failed above can never "appear" later and
+   * needs no waiting.
    */
   private async findElement(
     selectors: string | string[],
     options: { timeout?: number } = {}
   ): Promise<ElementInfo | null> {
+    // Safety net (C1): resolving elements here uses the parent/default session.
+    // While a cross-origin iframe (OOPIF) is active, supported in-frame actions
+    // route to the child session via findElementInSession and never reach here,
+    // so any caller that DOES reach here would silently act on the parent — stop
+    // it cold. Belt-and-suspenders behind the per-method guards.
+    if (this.currentFrameSession !== null) {
+      this.assertOopifUnsupported('This action');
+    }
+
     const { timeout = DEFAULT_TIMEOUT } = options;
     const selectorList = Array.isArray(selectors) ? selectors : [selectors];
 
     // Clear last matched selector at the start
     this._lastMatchedSelector = undefined;
 
-    // Check for ref: prefix in selectors first (instant lookup, no waiting)
+    // Single ordered pass — honor the caller's candidate order.
     for (const selector of selectorList) {
       if (selector.startsWith('ref:')) {
-        const ref = selector.slice(4); // Extract "e4" from "ref:e4"
-        const backendNodeId = this.refMap.get(ref);
-        if (!backendNodeId) {
-          continue; // Try next selector in list
+        const refMatch = await this.resolveRefSelector(selector);
+        if (refMatch) {
+          this._lastMatchedSelector = selector;
+          return refMatch;
         }
+        continue; // stale/missing ref → try next candidate
+      }
 
-        // Resolve backendNodeId to nodeId by pushing to frontend
-        try {
-          await this.ensureRootNode();
-          const pushResult = await this.cdp.send<{ nodeIds: number[] }>(
-            'DOM.pushNodesByBackendIdsToFrontend',
-            {
-              backendNodeIds: [backendNodeId],
-            }
-          );
-
-          if (pushResult.nodeIds?.[0]) {
-            this._lastMatchedSelector = selector;
-            return {
-              nodeId: pushResult.nodeIds[0],
-              backendNodeId,
-              selector,
-              waitedMs: 0,
-            };
-          }
-        } catch {}
+      // Runtime selector: instant visibility check (timeout: 0). If it is not
+      // present yet, fall through — the waiting pass below will poll for it.
+      const immediate = await waitForAnyElement(this.cdp, [selector], {
+        state: 'visible',
+        timeout: 0,
+        contextId: this.currentFrameContextId ?? undefined,
+      });
+      if (immediate.success && immediate.selector) {
+        const match = await this.resolveRuntimeSelector(immediate.selector, immediate.waitedMs);
+        if (match) {
+          this._lastMatchedSelector = immediate.selector;
+          return match;
+        }
       }
     }
 
     // Stale ref recovery: if all selectors were refs and none worked, try matching by role+name
     if (selectorList.every((s) => s.startsWith('ref:')) && this.lastSnapshot) {
+      const oldFingerprints = buildFingerprintMap(this.lastSnapshot.accessibilityTree);
       for (const selector of selectorList) {
         const ref = selector.slice(4);
-        const originalElement = this.lastSnapshot.interactiveElements.find((e) => e.ref === ref);
-        if (!originalElement) continue;
+        const staleFingerprint = oldFingerprints.get(ref);
+        if (!staleFingerprint) continue;
 
-        // Take a fresh snapshot to find matching element
+        // Take a fresh snapshot and recover only when the semantic match is
+        // both strong enough and separated from the next candidate.
         const freshSnapshot = await this.snapshot();
-        const match = freshSnapshot.interactiveElements.find(
-          (e) => e.role === originalElement.role && e.name === originalElement.name
-        );
+        const currentFingerprints = buildFingerprintMap(freshSnapshot.accessibilityTree);
+        const recovery = recoverStaleRef(staleFingerprint, currentFingerprints, 0.75, 0.15);
+        const match = recovery
+          ? freshSnapshot.interactiveElements.find((element) => element.ref === recovery.ref)
+          : undefined;
 
-        if (match) {
+        if (match && recovery) {
           const newBackendNodeId = this.refMap.get(match.ref);
           if (newBackendNodeId) {
             try {
@@ -3273,6 +5301,23 @@ export class Page {
                 { backendNodeIds: [newBackendNodeId] }
               );
               if (pushResult.nodeIds?.[0]) {
+                this._lastStaleRecovery = {
+                  oldRef: ref,
+                  newRef: match.ref,
+                  confidence: recovery.confidence,
+                  ambiguityMargin: 0.15,
+                  oldFingerprint: staleFingerprint,
+                  newFingerprint: currentFingerprints.get(match.ref),
+                  alternatives: [...currentFingerprints.entries()]
+                    .map(([candidateRef, fingerprint]) => ({
+                      ref: candidateRef,
+                      confidence:
+                        Math.round(fingerprintSimilarity(staleFingerprint, fingerprint) * 1000) /
+                        1000,
+                    }))
+                    .sort((a, b) => b.confidence - a.confidence)
+                    .slice(0, 5),
+                };
                 this._lastMatchedSelector = `ref:${match.ref}`;
                 return {
                   nodeId: pushResult.nodeIds[0],
@@ -3287,7 +5332,9 @@ export class Page {
       }
     }
 
-    // Filter out ref: selectors for runtime waiting/querying.
+    // Waiting pass: nothing was present immediately. Poll the runtime selectors
+    // (in author order) so late-appearing elements still resolve. refs are
+    // static and already failed above, so only runtime selectors remain here.
     const runtimeSelectors = selectorList.filter((s) => !s.startsWith('ref:'));
     if (runtimeSelectors.length === 0) {
       return null; // All were ref selectors and none worked
@@ -3303,12 +5350,63 @@ export class Page {
       return null;
     }
 
-    const specialSelectorMatch = await this.resolveSpecialSelector(result.selector);
-    if (specialSelectorMatch) {
+    const match = await this.resolveRuntimeSelector(result.selector, result.waitedMs);
+    if (match) {
       this._lastMatchedSelector = result.selector;
+    }
+    return match;
+  }
+
+  /**
+   * Resolve a `ref:eN` selector to a live node via its snapshot backendNodeId.
+   * Returns null (so the caller falls through to the next candidate) when the
+   * ref is missing from the current map or its backend node is stale.
+   */
+  private async resolveRefSelector(selector: string): Promise<ElementInfo | null> {
+    const ref = selector.slice(4); // Extract "e4" from "ref:e4"
+    const backendNodeId = this.refMap.get(ref);
+    if (!backendNodeId) {
+      return null;
+    }
+
+    // Resolve backendNodeId to nodeId by pushing to frontend
+    try {
+      await this.ensureRootNode();
+      const pushResult = await this.cdp.send<{ nodeIds: number[] }>(
+        'DOM.pushNodesByBackendIdsToFrontend',
+        {
+          backendNodeIds: [backendNodeId],
+        }
+      );
+
+      if (pushResult.nodeIds?.[0]) {
+        return {
+          nodeId: pushResult.nodeIds[0],
+          backendNodeId,
+          selector,
+          waitedMs: 0,
+        };
+      }
+    } catch {}
+
+    return null;
+  }
+
+  /**
+   * Resolve a runtime selector (CSS / [attr] / descendant / `text:` / `role:`)
+   * that has already been confirmed present, into an {@link ElementInfo}.
+   * Tries special-selector lookup, then standard querySelector, then a
+   * shadow-piercing deep query. Returns null if the node cannot be materialized.
+   */
+  private async resolveRuntimeSelector(
+    selector: string,
+    waitedMs: number
+  ): Promise<ElementInfo | null> {
+    const specialSelectorMatch = await this.resolveSpecialSelector(selector);
+    if (specialSelectorMatch) {
       return {
         ...specialSelectorMatch,
-        waitedMs: result.waitedMs,
+        waitedMs,
       };
     }
 
@@ -3318,7 +5416,7 @@ export class Page {
     // First try standard querySelector (faster for non-shadow DOM)
     const queryResult = await this.cdp.send<{ nodeId: number }>('DOM.querySelector', {
       nodeId: this.rootNodeId!,
-      selector: result.selector,
+      selector,
     });
 
     if (queryResult.nodeId) {
@@ -3328,12 +5426,11 @@ export class Page {
         { nodeId: queryResult.nodeId }
       );
 
-      this._lastMatchedSelector = result.selector;
       return {
         nodeId: queryResult.nodeId,
         backendNodeId: describeResult.node.backendNodeId,
-        selector: result.selector,
-        waitedMs: result.waitedMs,
+        selector,
+        waitedMs,
       };
     }
 
@@ -3341,7 +5438,7 @@ export class Page {
     const deepQueryResult = await this.evaluateInFrame<{ result: RemoteObject }>(
       `(() => {
         ${DEEP_QUERY_SCRIPT}
-        return deepQuery(${JSON.stringify(result.selector)});
+        return deepQuery(${JSON.stringify(selector)});
       })()`,
       { returnByValue: false }
     );
@@ -3365,12 +5462,11 @@ export class Page {
       { nodeId: nodeResult.nodeId }
     );
 
-    this._lastMatchedSelector = result.selector;
     return {
       nodeId: nodeResult.nodeId,
       backendNodeId: describeResult.node.backendNodeId,
-      selector: result.selector,
-      waitedMs: result.waitedMs,
+      selector,
+      waitedMs,
     };
   }
 
@@ -3498,7 +5594,10 @@ export class Page {
     return { nodeId, backendNodeId };
   }
 
-  private async tryClickAssociatedLabel(objectId: string): Promise<boolean> {
+  private async tryClickAssociatedLabel(
+    objectId: string,
+    dispatch: ActionDispatch
+  ): Promise<boolean> {
     const inputType = await this.readInputType(objectId);
     if (inputType !== 'checkbox' && inputType !== 'radio') {
       return false;
@@ -3511,19 +5610,14 @@ export class Page {
 
     try {
       await this.scrollIntoView(labelNodeId);
-      await this.clickElement(labelNodeId);
+      await this.clickElement(labelNodeId, dispatch);
       return true;
-    } catch {
+    } catch (error) {
+      if (dispatch.hasPotentiallyDispatched) {
+        throw error;
+      }
       return false;
     }
-  }
-
-  private async tryToggleViaLabel(objectId: string, desiredChecked: boolean): Promise<boolean> {
-    if (!(await this.tryClickAssociatedLabel(objectId))) {
-      return false;
-    }
-
-    return (await this.readCheckedState(objectId)) === desiredChecked;
   }
 
   /**
@@ -3531,6 +5625,15 @@ export class Page {
    */
   private async ensureRootNode(): Promise<void> {
     if (this.rootNodeId) return;
+
+    // OOPIF active: the frame's DOM lives in its own child session and is
+    // reached via the dedicated in-session helpers, not this shared rootNodeId.
+    // Do NOT re-root through the default session here (that would resolve a
+    // null contentDocument and silently drop us out of the frame).
+    if (this.currentFrameSession) {
+      this.rootNodeId = await this.ensureOopifRootReady(DEFAULT_TIMEOUT);
+      return;
+    }
 
     if (this.currentFrame) {
       const mainDocument = await this.cdp.send<{ root: { nodeId: number } }>('DOM.getDocument', {
@@ -3668,9 +5771,14 @@ export class Page {
    * Click an element by node ID using Playwright's 3-event sequence:
    * mouseMoved → mousePressed → mouseReleased (sequential).
    * Uses DOM.getContentQuads for accurate coordinates (handles CSS transforms).
-   * Falls back to JS this.click() if CDP mouse dispatch fails.
+   * Uses JS this.click() for hidden documents because Chrome acknowledges
+   * coordinate input on background targets without delivering DOM mouse/click
+   * events. Visible documents use the trusted coordinate sequence. If that
+   * sequence fails before an effectful mouse event was accepted, JS fallback is
+   * still safe; once mousePressed or mouseReleased may have reached the page,
+   * the error is surfaced as uncertain.
    */
-  private async clickElement(nodeId: number): Promise<void> {
+  private async clickElement(nodeId: number, dispatch: ActionDispatch): Promise<void> {
     // Get objectId for getContentQuads
     const { object } = await this.cdp.send<{ object: { objectId: string } }>('DOM.resolveNode', {
       nodeId,
@@ -3699,45 +5807,85 @@ export class Page {
       y = box.content[1]! + box.height / 2;
     }
 
-    // Sequential mouse events (Playwright pattern)
-    try {
-      await this.cdp.send('Input.dispatchMouseEvent', {
-        type: 'mouseMoved',
-        x,
-        y,
-        button: 'none',
-        buttons: 0,
-        modifiers: 0,
-      });
-      await this.cdp.send('Input.dispatchMouseEvent', {
-        type: 'mousePressed',
-        x,
-        y,
-        button: 'left',
-        buttons: 1,
-        clickCount: 1,
-        modifiers: 0,
-      });
-      await this.cdp.send('Input.dispatchMouseEvent', {
-        type: 'mouseReleased',
-        x,
-        y,
-        button: 'left',
-        buttons: 0,
-        clickCount: 1,
-        modifiers: 0,
-      });
-    } catch {
-      // Fallback: JS click if CDP mouse dispatch fails
-      await this.cdp.send('Runtime.callFunctionOn', {
-        objectId: object.objectId,
-        functionDeclaration: 'function() { this.click(); }',
-      });
+    // Chrome accepts Input.dispatchMouseEvent for a background target but
+    // suppresses the renderer's pointer/mouse/click dispatch. Use the DOM
+    // activation path before sending any effectful input event so the click
+    // still mutates page state without foregrounding the tab. This remains
+    // synthetic (untrusted), matching the existing OOPIF click path.
+    const visibility = await this.cdp.send<{
+      result: { value?: string };
+    }>('Runtime.evaluate', {
+      expression: 'document.visibilityState',
+      returnByValue: true,
+    });
+    if (visibility.result.value === 'hidden') {
+      await dispatch.send(
+        () =>
+          this.cdp.send('Runtime.callFunctionOn', {
+            objectId: object.objectId,
+            functionDeclaration: 'function() { this.click(); }',
+          }),
+        'javascriptClick'
+      );
+      return;
     }
 
-    // Force a round-trip to ensure all synchronous event handlers
-    // triggered by the click have completed before we return
-    await this.cdp.send('Runtime.evaluate', { expression: '0' });
+    // Sequential mouse events (Playwright pattern). mouseMoved is preparatory;
+    // mousePressed and mouseReleased cross the side-effect boundary.
+    try {
+      await dispatch.send(
+        () =>
+          this.cdp.send('Input.dispatchMouseEvent', {
+            type: 'mouseMoved',
+            x,
+            y,
+            button: 'none',
+            buttons: 0,
+            modifiers: 0,
+          }),
+        'mouseMoved',
+        { effectful: false }
+      );
+      await dispatch.send(
+        () =>
+          this.cdp.send('Input.dispatchMouseEvent', {
+            type: 'mousePressed',
+            x,
+            y,
+            button: 'left',
+            buttons: 1,
+            clickCount: 1,
+            modifiers: 0,
+          }),
+        'mousePressed'
+      );
+      await dispatch.send(
+        () =>
+          this.cdp.send('Input.dispatchMouseEvent', {
+            type: 'mouseReleased',
+            x,
+            y,
+            button: 'left',
+            buttons: 0,
+            clickCount: 1,
+            modifiers: 0,
+          }),
+        'mouseReleased'
+      );
+    } catch (error) {
+      // JS fallback is valid only before an effectful mouse event. In
+      // particular, never turn a failed mousePressed/mouseReleased into a
+      // second click.
+      if (!dispatch.canRetryAction) throw error;
+      await dispatch.send(
+        () =>
+          this.cdp.send('Runtime.callFunctionOn', {
+            objectId: object.objectId,
+            functionDeclaration: 'function() { this.click(); }',
+          }),
+        'javascriptClick'
+      );
+    }
   }
 
   /**
@@ -3750,9 +5898,16 @@ export class Page {
     return object.objectId;
   }
 
-  private async dispatchKeyDefinition(def: KeyDefinition, modifierBitmask = 0): Promise<void> {
+  private async dispatchKeyDefinition(
+    def: KeyDefinition,
+    modifierBitmask = 0,
+    sessionId?: string,
+    dispatch?: ActionDispatch,
+    suppressText = false
+  ): Promise<void> {
+    const hasText = def.text !== undefined && !suppressText;
     const downParams: Record<string, unknown> = {
-      type: def.text !== undefined ? 'keyDown' : 'rawKeyDown',
+      type: hasText ? 'keyDown' : 'rawKeyDown',
       key: def.key,
       code: def.code,
       windowsVirtualKeyCode: def.keyCode,
@@ -3762,75 +5917,131 @@ export class Page {
       isKeypad: false,
     };
 
-    if (def.text !== undefined) {
+    if (hasText) {
       downParams['text'] = def.text;
       downParams['unmodifiedText'] = def.text;
     }
 
-    await this.cdp.send('Input.dispatchKeyEvent', downParams);
-    await this.cdp.send('Input.dispatchKeyEvent', {
-      type: 'keyUp',
-      key: def.key,
-      code: def.code,
-      windowsVirtualKeyCode: def.keyCode,
-      modifiers: modifierBitmask,
-      location: def.location ?? 0,
-    });
+    const send = dispatch
+      ? <T>(operation: () => Promise<T>, eventName: string) => dispatch.send(operation, eventName)
+      : <T>(operation: () => Promise<T>) => operation();
+
+    await send(() => this.cdp.send('Input.dispatchKeyEvent', downParams, sessionId), 'keyDown');
+    await send(
+      () =>
+        this.cdp.send(
+          'Input.dispatchKeyEvent',
+          {
+            type: 'keyUp',
+            key: def.key,
+            code: def.code,
+            windowsVirtualKeyCode: def.keyCode,
+            modifiers: modifierBitmask,
+            location: def.location ?? 0,
+          },
+          sessionId
+        ),
+      'keyUp'
+    );
   }
 
-  private async dispatchKey(key: string): Promise<void> {
+  private async dispatchKey(
+    key: string,
+    sessionId?: string,
+    dispatch?: ActionDispatch
+  ): Promise<void> {
     const def = US_KEYBOARD[key];
     if (def) {
-      await this.dispatchKeyDefinition(def);
+      await this.dispatchKeyDefinition(def, 0, sessionId, dispatch);
       return;
     }
 
     if (key.length === 1) {
-      await this.cdp.send('Input.insertText', { text: key });
+      if (dispatch) {
+        await dispatch.send(
+          () => this.cdp.send('Input.insertText', { text: key }, sessionId),
+          'insertText'
+        );
+      } else {
+        await this.cdp.send('Input.insertText', { text: key }, sessionId);
+      }
       return;
     }
 
-    await this.dispatchKeyDefinition({ key, code: key, keyCode: 0 });
+    await this.dispatchKeyDefinition({ key, code: key, keyCode: 0 }, 0, sessionId, dispatch);
   }
 
-  private async dispatchKeyWithModifiers(key: string, modifiers: ModifierKey[]): Promise<void> {
+  private async dispatchKeyWithModifiers(
+    key: string,
+    modifiers: ModifierKey[],
+    sessionId?: string,
+    dispatch?: ActionDispatch
+  ): Promise<void> {
     const mask = computeModifierBitmask(modifiers);
 
     // Press modifier keys down
     for (const mod of modifiers) {
-      await this.cdp.send('Input.dispatchKeyEvent', {
+      const params = {
         type: 'rawKeyDown',
         key: mod,
         code: MODIFIER_CODES[mod],
         windowsVirtualKeyCode: MODIFIER_KEY_CODES[mod],
         modifiers: mask,
         location: 1,
-      });
+      };
+      if (dispatch) {
+        await dispatch.send(
+          () => this.cdp.send('Input.dispatchKeyEvent', params, sessionId),
+          'modifierKeyDown',
+          { effectful: false }
+        );
+      } else {
+        await this.cdp.send('Input.dispatchKeyEvent', params, sessionId);
+      }
     }
 
-    // Dispatch the main key with modifiers held
+    // Dispatch the main key with modifiers held. A printable `text` payload
+    // can turn a modified key into an insertion on some Chrome versions
+    // (for example, Meta+a inserts `a` before the select-all fallback runs).
+    // Control/Meta/Alt combinations are commands, so omit printable text.
+    const suppressText = modifiers.some((mod) => mod !== 'Shift');
     const def = US_KEYBOARD[key];
     if (def) {
-      await this.dispatchKeyDefinition(def, mask);
+      await this.dispatchKeyDefinition(def, mask, sessionId, dispatch, suppressText);
     } else if (key.length === 1) {
       // For single characters with modifiers, use dispatchKeyEvent instead of insertText
       // so the modifiers are included in the event
-      await this.dispatchKeyDefinition({ key, code: key, keyCode: 0, text: key }, mask);
+      await this.dispatchKeyDefinition(
+        { key, code: key, keyCode: 0, text: key },
+        mask,
+        sessionId,
+        dispatch,
+        suppressText
+      );
     } else {
-      await this.dispatchKeyDefinition({ key, code: key, keyCode: 0 }, mask);
+      await this.dispatchKeyDefinition({ key, code: key, keyCode: 0 }, mask, sessionId, dispatch);
     }
 
     // Release modifier keys (reverse order)
     for (let i = modifiers.length - 1; i >= 0; i--) {
       const mod = modifiers[i]!;
-      await this.cdp.send('Input.dispatchKeyEvent', {
+      const params = {
         type: 'keyUp',
         key: mod,
         code: MODIFIER_CODES[mod],
         windowsVirtualKeyCode: MODIFIER_KEY_CODES[mod],
         modifiers: 0,
         location: 1,
-      });
+      };
+      if (dispatch) {
+        await dispatch.send(
+          () => this.cdp.send('Input.dispatchKeyEvent', params, sessionId),
+          'modifierKeyUp',
+          { effectful: false }
+        );
+      } else {
+        await this.cdp.send('Input.dispatchKeyEvent', params, sessionId);
+      }
     }
   }
 

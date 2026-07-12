@@ -1,6 +1,9 @@
 # Getting Started
 
-This guide will help you get up and running with browser-pilot in under 5 minutes.
+This guide gets browser-pilot connected and running in a few commands.
+
+For simple, reusable, low-cost automation on top of browser-pilot, see the companion
+[Flightplan](https://github.com/svilupp/flightplan) package: `bunx flightplan --help`.
 
 ## Installation
 
@@ -47,11 +50,11 @@ Tip: try plain `bp connect` first. Only add `--channel` or `--user-data-dir` if 
 Then connect:
 
 ```typescript
-import { connect } from 'browser-pilot';
+import { connect, getBrowserWebSocketUrl } from 'browser-pilot';
 
 const browser = await connect({
   provider: 'generic',
-  // Auto-discovers a local Chrome endpoint
+  wsUrl: await getBrowserWebSocketUrl(),
 });
 
 const page = await browser.page();
@@ -77,7 +80,7 @@ google-chrome --remote-debugging-port=9222 --user-data-dir=/tmp/browser-pilot-pr
 
 ## Your First Automation
 
-Let's automate a simple login flow:
+Automate a simple login flow:
 
 ```typescript
 import { connect } from 'browser-pilot';
@@ -93,7 +96,7 @@ async function login() {
   // Navigate to login page
   await page.goto('https://app.example.com/login');
 
-  // Fill in credentials (using multi-selector for robustness)
+  // Fill in credentials with fallback selectors
   await page.fill(['#email', 'input[type=email]', '[name=email]'], 'user@example.com');
   await page.fill(['#password', 'input[type=password]'], 'secretpassword');
 
@@ -134,9 +137,28 @@ bp close -s my-session
 
 Use `bp diagnose -s my-session '<selector>'` when targeting fails, and keep `bp eval` as a last-resort escape hatch.
 
+### Record a manual workflow
+
+Create the named session before recording. `bp record` captures that existing session and writes the artifact to the path passed to `-f`.
+
+```bash
+bp connect --name demo
+bp record -s demo --profile automation -f ./artifacts/demo.recording.json
+# perform the flow manually, then stop with Ctrl+C
+bp record summary ./artifacts/demo.recording.json
+bp record inspect ./artifacts/demo.recording.json
+bp record derive ./artifacts/demo.recording.json -o ./artifacts/demo.workflow.json
+jq . ./artifacts/demo.workflow.json
+bp run ./artifacts/demo.workflow.json -s demo
+```
+
+`bp record derive` emits browser-pilot workflow JSON for `bp run`. Use the companion Flightplan
+package for simple reusable workflows.
+
 ## Next Steps
 
 - [Providers](./providers.md) - Configure Browser Use, BrowserBase, Browserless, or local Chrome
-- [Multi-Selector Guide](./guides/multi-selector.md) - Build robust automations
+- [Multi-Selector Guide](./guides/multi-selector.md) - Build resilient automations
 - [Batch Actions](./guides/batch-actions.md) - Execute action sequences efficiently
 - [API Reference](./api/page.md) - Full Page API documentation
+- [Flightplan](https://github.com/svilupp/flightplan) - Higher-level reusable automation

@@ -450,10 +450,25 @@ describe('Forms and Tabs', () => {
     expect(result.success).toBe(true);
     expect(page.cdpCalls[0]).toEqual({
       method: 'Target.createTarget',
-      params: { url: 'https://example.com' },
+      params: { url: 'https://example.com', background: true },
     });
     expect(result.steps[0]?.result).toEqual({ targetId: 'new-target-123' });
     expect(page.targetId).toBe('page-target-1');
+  });
+
+  test('can foreground a new tab when explicitly requested', async () => {
+    const page = createMockPage();
+    const executor = new BatchExecutor(page as unknown as Page);
+
+    const result = await executor.execute([
+      { action: 'newTab', url: 'https://example.com', background: false },
+    ]);
+
+    expect(result.success).toBe(true);
+    expect(page.cdpCalls[0]).toEqual({
+      method: 'Target.createTarget',
+      params: { url: 'https://example.com', background: false },
+    });
   });
 
   test('should close the current tab by default', async () => {

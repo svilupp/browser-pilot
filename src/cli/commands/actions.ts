@@ -89,7 +89,8 @@ CONTENT EXTRACTION
 TAB MANAGEMENT
   {"action": "newTab"}
   {"action": "newTab", "url": "https://example.com"}
-    Create a new tab and optionally navigate it. Returns { targetId }.
+    Create a background tab and optionally navigate it. Returns { targetId }.
+    Set "background": false to opt into foregrounding it.
 
   {"action": "closeTab"}
   {"action": "closeTab", "targetId": "TARGET_ID"}
@@ -111,7 +112,11 @@ IFRAME NAVIGATION
       {"action": "click", "selector": "#submit-order"}
     ]
 
-  Note: Cross-origin iframes cannot be accessed due to browser security.
+  Note: Cross-origin (out-of-process) iframes CAN be entered with switchFrame and
+  support the fill subset (fill/type/focus/press/click/text/waitFor/evaluate). Limits:
+  some in-frame actions hard-fail and need switchToMain first; a same-origin iframe
+  nested inside a cross-origin frame (e.g. full Stripe Elements) is not yet supported;
+  genuine cross-origin OOPIFs require Chrome site isolation (--site-per-process).
 
 DIALOG HANDLING
   Use --dialog flag: bp exec --dialog accept '[...]'

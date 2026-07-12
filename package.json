@@ -1,8 +1,19 @@
 {
   "name": "browser-pilot",
-  "version": "0.0.18",
+  "version": "0.1.0",
   "description": "Lightweight CDP-based browser automation for Node.js, Bun, and Cloudflare Workers",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/svilupp/browser-pilot.git"
+  },
+  "homepage": "https://github.com/svilupp/browser-pilot#readme",
+  "bugs": {
+    "url": "https://github.com/svilupp/browser-pilot/issues"
+  },
+  "engines": {
+    "node": ">=18"
+  },
   "main": "./dist/index.cjs",
   "module": "./dist/index.mjs",
   "types": "./dist/index.d.ts",
@@ -42,12 +53,13 @@
     "browser-pilot": "./dist/cli.mjs"
   },
   "files": [
-    "dist"
+    "dist",
+    "CHANGELOG.md"
   ],
   "sideEffects": false,
   "scripts": {
     "clean": "rm -rf dist",
-    "build": "tsup",
+    "build": "bun run clean && tsup",
     "test": "bun test",
     "test:unit": "bun test tests/unit",
     "test:integration": "bun test tests/integration --timeout 30000",
@@ -60,12 +72,13 @@
     "format": "biome format --write .",
     "check": "bun run typecheck && bun run lint && bun run lint:type",
     "check:quiet": "bash scripts/check.sh",
-    "prepare": "bunx prek install",
+    "setup:hooks": "bunx prek install",
     "harden": "./scripts/prek-run.sh run --all-files --stage manual",
     "harden:quick": "./scripts/prek-run.sh run --stage pre-commit",
     "gate:agent": "./scripts/prek-run.sh run --from-ref HEAD~1",
     "api:check": "api-extractor run --local",
-    "prepublishOnly": "bun run build",
+    "prepack": "bun run clean && bun run build",
+    "prepublishOnly": "bun run clean && bun run build",
     "bp": "bun ./src/cli/index.ts",
     "dev:bp": "bun ./src/cli/index.ts",
     "browser-pilot": "bun ./src/cli/index.ts",
@@ -81,9 +94,6 @@
     "oxlint": "^1.51.0",
     "oxlint-tsgolint": "^0.16.0",
     "tsup": "^8.0.0"
-  },
-  "peerDependencies": {
-    "typescript": "^5"
   },
   "publishConfig": {
     "access": "public"

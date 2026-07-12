@@ -30,6 +30,7 @@ describe('validateSteps', () => {
         { action: 'evaluate', value: 'document.title' },
         { action: 'text' },
         { action: 'newTab' },
+        { action: 'newTab', background: false },
         { action: 'closeTab' },
         { action: 'switchFrame', selector: '#frame' },
         { action: 'switchToMain' },

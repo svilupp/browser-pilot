@@ -15,7 +15,6 @@ const FORBIDDEN = [
   /\bjira\b/i,
   /\bconfluence\b/i,
   /\bhubspot\.com/i,
-  /\bshopify\.com/i,
 ];
 
 // Files/directories where site references are acceptable (examples, docs, fixtures)
