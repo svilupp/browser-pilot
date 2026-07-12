@@ -143,3 +143,5 @@ tests/screenshots/
 
 # bv (beads viewer) local config and caches
 .bv/
+
+.private/
