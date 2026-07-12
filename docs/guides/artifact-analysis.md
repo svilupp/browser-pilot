@@ -65,12 +65,19 @@ Use `record export` when:
 ## Example analysis loop
 
 ```bash
+bp connect --name demo
+bp record -s demo --profile automation -f ./artifacts/demo.recording.json
+# perform the flow manually, then stop with Ctrl+C
 bp record summary ./artifacts/demo.recording.json
+bp record inspect ./artifacts/demo.recording.json
 bp trace summary ./artifacts/demo.recording.json --view console
 bp trace summary ./artifacts/demo.recording.json --view ws
-bp record derive ./artifacts/demo.recording.json -o workflow.json
-bp run workflow.json --json
+bp record derive ./artifacts/demo.recording.json -o ./artifacts/demo.workflow.json
+jq . ./artifacts/demo.workflow.json
+bp run ./artifacts/demo.workflow.json -s demo --json
 ```
+
+`bp record derive` writes browser-pilot workflow JSON for `bp run`, not Flightplan TOML. Translate the derived steps into Flightplan manually.
 
 ## Common mistakes
 

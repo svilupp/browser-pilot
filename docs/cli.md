@@ -183,11 +183,14 @@ Primary commands:
 Canonical flow:
 
 ```bash
+bp connect --name demo
 bp record -s demo --profile automation -f ./artifacts/demo.recording.json
 # perform the flow, then stop with Ctrl+C
 bp record summary ./artifacts/demo.recording.json
-bp record derive ./artifacts/demo.recording.json -o workflow.json
-bp run workflow.json
+bp record inspect ./artifacts/demo.recording.json
+bp record derive ./artifacts/demo.recording.json -o ./artifacts/demo.workflow.json
+jq . ./artifacts/demo.workflow.json
+bp run ./artifacts/demo.workflow.json -s demo
 ```
 
 Use profiles when they matter:
@@ -200,6 +203,8 @@ Use profiles when they matter:
 Rules:
 
 - Summary first, raw JSON later.
+- `record` captures an existing named session; it does not create one.
+- `record derive` writes browser-pilot workflow JSON, not Flightplan TOML. Translate it into Flightplan manually.
 - Use `record` for human capture.
 - Use `exec --record` when you already have steps and want screenshot proof of replay.
 

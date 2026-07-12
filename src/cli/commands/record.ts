@@ -44,17 +44,30 @@ When not to use:
   You already have steps and just want to run or validate them. Use \`bp exec\` or \`bp run\`.
 
 Default flow:
-  capture -> summary -> inspect or trace -> derive -> run
+  bp connect --name demo
+  bp record -s demo --profile automation -f ./artifacts/demo.recording.json
+  # perform the flow, then stop with Ctrl+C
+  bp record summary ./artifacts/demo.recording.json
+  bp record inspect ./artifacts/demo.recording.json
+  bp record derive ./artifacts/demo.recording.json -o ./artifacts/demo.workflow.json
+  jq . ./artifacts/demo.workflow.json
+  bp run ./artifacts/demo.workflow.json -s demo
 
 Common mistake:
   Opening \`recording.json\` first. Start with \`bp record summary\`.
+
+Session and output:
+  \`bp record\` captures an existing session; it does not create a named session.
+  Pass \`-f <path>\` to write the captured artifact to a known filename.
+  \`bp record derive\` writes browser-pilot workflow JSON, not Flightplan TOML.
+  Translate the derived steps into Flightplan manually.
 
 Usage:
   bp record [options]
   bp record <inspect|summary|derive|export> [artifact] [options]
 
 Capture options:
-  -s, --session [id]   Session to use (omit: auto-connect, -s: latest, -s <id>: specific)
+  -s, --session [id]   Existing session (omit: auto-connect, -s: latest, -s <id>: specific)
   -f, --file <path>    Artifact output path (default: recording.json)
   --timeout <ms>       Auto-stop after timeout
   --profile <name>     automation | realtime | voice | auth (default: automation)
@@ -70,17 +83,17 @@ Artifact subcommands:
   export <artifact> -o <output>   Write canonical triage bundle
 
 Examples:
-  bp record -s demo --profile automation
-  bp record --profile voice --bodies
-  bp record summary recording.json
-  bp record inspect recording.json
-  bp record derive recording.json -o workflow.json
-  bp record export recording.json -o bundle.json
+  bp connect --name demo
+  bp record -s demo --profile automation -f ./artifacts/demo.recording.json
+  bp record summary ./artifacts/demo.recording.json
+  bp record inspect ./artifacts/demo.recording.json
+  bp record derive ./artifacts/demo.recording.json -o ./artifacts/demo.workflow.json
+  bp record export ./artifacts/demo.recording.json -o ./artifacts/demo.bundle.json
 
 Likely next commands:
-  bp record summary recording.json
-  bp trace summary recording.json --view ws
-  bp record derive recording.json -o workflow.json
+  bp record summary ./artifacts/demo.recording.json
+  bp trace summary ./artifacts/demo.recording.json --view ws
+  bp record derive ./artifacts/demo.recording.json -o ./artifacts/demo.workflow.json
 `.trim();
 
 const DEFAULT_ARTIFACT = 'recording.json';
@@ -255,6 +268,10 @@ function normalizeProfile(profile?: RecordProfile): RecordProfile {
 }
 
 function tipsForArtifact(path: string) {
+  const workflowPath = path.endsWith('.recording.json')
+    ? `${path.slice(0, -'.recording.json'.length)}.workflow.json`
+    : path.replace(/\.json$/, '.workflow.json');
+
   return {
     tip: {
       reason: 'summary_first',
@@ -263,7 +280,7 @@ function tipsForArtifact(path: string) {
     alternateTips: [
       {
         reason: 'derive_replayable_steps',
-        command: `bp record derive ${path} -o workflow.json`,
+        command: `bp record derive ${path} -o ${workflowPath}`,
       },
       {
         reason: 'inspect_trace_views',

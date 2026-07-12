@@ -89,7 +89,8 @@ CONTENT EXTRACTION
 TAB MANAGEMENT
   {"action": "newTab"}
   {"action": "newTab", "url": "https://example.com"}
-    Create a new tab and optionally navigate it. Returns { targetId }.
+    Create a background tab and optionally navigate it. Returns { targetId }.
+    Set "background": false to opt into foregrounding it.
 
   {"action": "closeTab"}
   {"action": "closeTab", "targetId": "TARGET_ID"}

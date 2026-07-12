@@ -219,11 +219,17 @@ bp exec -s vt '[{"action":"assertMediaTrackLive","kind":"audio"}]'
 ### Capture and derive
 
 ```bash
+bp connect --name demo
 bp record -s demo --profile automation -f ./artifacts/demo.recording.json
+# perform the flow manually, then stop with Ctrl+C
 bp record summary ./artifacts/demo.recording.json
-bp record derive ./artifacts/demo.recording.json -o workflow.json
-bp run workflow.json
+bp record inspect ./artifacts/demo.recording.json
+bp record derive ./artifacts/demo.recording.json -o ./artifacts/demo.workflow.json
+jq . ./artifacts/demo.workflow.json
+bp run ./artifacts/demo.workflow.json -s demo
 ```
+
+`record derive` writes browser-pilot workflow JSON, not Flightplan TOML. Translate the derived steps into Flightplan manually.
 
 ### Outcome-aware submit
 

@@ -282,6 +282,7 @@ const ACTION_RULES: Record<ActionType, ActionRule> = {
     required: {},
     optional: {
       url: { type: 'string' },
+      background: { type: 'boolean' },
     },
   },
   closeTab: {
@@ -399,6 +400,7 @@ const KNOWN_STEP_FIELDS = new Set([
   'action',
   'selector',
   'url',
+  'background',
   'value',
   'targetId',
   'key',

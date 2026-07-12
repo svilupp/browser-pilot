@@ -132,6 +132,7 @@ export {
   NavigationError,
   type NavigationMilestone,
   type NetworkIdleOptions,
+  type NewPageOptions,
   type OverlayInfo,
   Page,
   type PageError,

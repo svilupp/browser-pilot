@@ -139,7 +139,7 @@ async function createBrowserWithTargets(
   }
 
   // Bypass private constructor for testing
-  type BrowserHarness = Pick<Browser, 'page'> & {
+  type BrowserHarness = Pick<Browser, 'page' | 'newPage'> & {
     cdp: ReturnType<typeof createMockCDPClient>;
     pages: Map<string, unknown>;
     providerSession: {
@@ -229,7 +229,7 @@ describe('Target Selection', () => {
     expect(attachCall?.params?.['targetId']).toBe('titled');
   });
 
-  test('creates new target when no page targets exist', async () => {
+  test('creates a background target when no page targets exist', async () => {
     const targets = [
       makeTarget({
         targetId: 'worker',
@@ -243,6 +243,40 @@ describe('Target Selection', () => {
 
     const createCall = cdp.findCall('Target.createTarget');
     expect(createCall).toBeDefined();
+    expect(createCall?.params).toEqual({ url: 'about:blank', background: true });
+  });
+
+  test('allows foreground behavior for a fallback-created target', async () => {
+    const targets = [
+      makeTarget({
+        targetId: 'worker',
+        type: 'service_worker',
+        url: 'http://localhost:3000/sw.js',
+      }),
+    ];
+
+    const { browser, cdp } = await createBrowserWithTargets(targets);
+    await browser.page(undefined, { background: false });
+
+    const createCall = cdp.findCall('Target.createTarget');
+    expect(createCall?.params).toEqual({ url: 'about:blank', background: false });
+  });
+
+  test('creates new pages in the background by default and supports foreground opt-in', async () => {
+    const { browser, cdp } = await createBrowserWithTargets([]);
+
+    await browser.newPage('https://example.com');
+    expect(cdp.findCall('Target.createTarget')?.params).toEqual({
+      url: 'https://example.com',
+      background: true,
+    });
+
+    cdp.sent.length = 0;
+    await browser.newPage('https://example.com/foreground', { background: false });
+    expect(cdp.findCall('Target.createTarget')?.params).toEqual({
+      url: 'https://example.com/foreground',
+      background: false,
+    });
   });
 
   test('filters by targetUrl when provided', async () => {

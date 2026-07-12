@@ -108,7 +108,10 @@ describe('ActionDispatch', () => {
   });
 });
 
-function createClickPage(failAt?: 'mousePressed' | 'mouseReleased') {
+function createClickPage(
+  failAt?: 'mousePressed' | 'mouseReleased',
+  visibilityState: 'visible' | 'hidden' = 'visible'
+) {
   const inputEvents: string[] = [];
   const calls: string[] = [];
   let resolveNodeCalls = 0;
@@ -130,7 +133,12 @@ function createClickPage(failAt?: 'mousePressed' | 'mouseReleased') {
       if (method === 'DOM.getContentQuads') {
         return { quads: [[10, 10, 110, 10, 110, 50, 10, 50]] };
       }
-      if (method === 'Runtime.evaluate') return { result: { value: true } };
+      if (method === 'Runtime.evaluate') {
+        if (params?.['expression'] === 'document.visibilityState') {
+          return { result: { value: visibilityState } };
+        }
+        return { result: { value: true } };
+      }
       if (method === 'Runtime.callFunctionOn') {
         const declaration = String(params?.['functionDeclaration'] ?? '');
         if (declaration.includes('instanceof HTMLInputElement')) {
@@ -192,6 +200,20 @@ describe('Page click dispatch boundary', () => {
 
     expect(fixture.page.getLastActionReceipt()?.dispatchState).toBe('dispatched');
     expect(fixture.calls).not.toContain('Runtime.evaluate:0');
+  });
+
+  test('uses DOM click for a hidden document before any mouse input', async () => {
+    const fixture = createClickPage(undefined, 'hidden');
+
+    await fixture.page.click('#button');
+
+    expect(fixture.inputEvents).toEqual([]);
+    expect(fixture.calls).toContain('Runtime.callFunctionOn');
+    expect(fixture.page.getLastActionReceipt()).toEqual({
+      dispatchState: 'dispatched',
+      retrySafe: false,
+      inputEventsSent: ['javascriptClick'],
+    });
   });
 
   test('still retries a stale node before any effectful input event', async () => {

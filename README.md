@@ -97,12 +97,19 @@ Best practices from real usage:
 ## Golden path 2: capture a manual workflow and derive automation
 
 ```bash
+bp connect --name demo
 bp record -s demo --profile automation -f ./artifacts/demo.recording.json
 # perform the flow manually, then stop with Ctrl+C
 bp record summary ./artifacts/demo.recording.json
-bp record derive ./artifacts/demo.recording.json -o workflow.json
-bp run workflow.json
+bp record inspect ./artifacts/demo.recording.json
+bp record derive ./artifacts/demo.recording.json -o ./artifacts/demo.workflow.json
+jq . ./artifacts/demo.workflow.json
+bp run ./artifacts/demo.workflow.json -s demo
 ```
+
+`bp record` captures the named session created by `bp connect`; it does not create a named session.
+`bp record derive` writes replayable browser-pilot JSON for `bp run`. It does not emit Flightplan TOML.
+Translate the derived steps into Flightplan manually when you need a Flightplan flow.
 
 Do not start by opening the raw artifact. Use `record summary`, `record inspect`, or `trace summary --view ...` first.
 
@@ -177,6 +184,10 @@ await page.batch([
 
 await browser.close();
 ```
+
+New tabs are created in the background by default, including `browser.newPage()` and the
+`newTab` action. Pass `{ background: false }` to `browser.newPage()` (or set
+`"background": false` on a `newTab` action) when foreground behavior is intentional.
 
 Resolve and diagnose targets without executing anything:
 

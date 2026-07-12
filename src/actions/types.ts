@@ -154,6 +154,9 @@ export interface Step {
   /** URL for goto action */
   url?: string;
 
+  /** Create a new tab in the background by default; set false to foreground it. */
+  background?: boolean;
+
   /** Value for fill, type, select, evaluate actions */
   value?: string | string[];
 

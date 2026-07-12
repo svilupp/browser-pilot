@@ -5668,9 +5668,12 @@ export class Page {
    * Click an element by node ID using Playwright's 3-event sequence:
    * mouseMoved → mousePressed → mouseReleased (sequential).
    * Uses DOM.getContentQuads for accurate coordinates (handles CSS transforms).
-   * Falls back to JS this.click() only when coordinate dispatch fails before
-   * an effectful mouse event was accepted. Once mousePressed or mouseReleased
-   * may have reached the page, the error is surfaced as uncertain.
+   * Uses JS this.click() for hidden documents because Chrome acknowledges
+   * coordinate input on background targets without delivering DOM mouse/click
+   * events. Visible documents use the trusted coordinate sequence. If that
+   * sequence fails before an effectful mouse event was accepted, JS fallback is
+   * still safe; once mousePressed or mouseReleased may have reached the page,
+   * the error is surfaced as uncertain.
    */
   private async clickElement(nodeId: number, dispatch: ActionDispatch): Promise<void> {
     // Get objectId for getContentQuads
@@ -5699,6 +5702,29 @@ export class Page {
       if (!box) throw new Error('Could not get element position for click');
       x = box.content[0]! + box.width / 2;
       y = box.content[1]! + box.height / 2;
+    }
+
+    // Chrome accepts Input.dispatchMouseEvent for a background target but
+    // suppresses the renderer's pointer/mouse/click dispatch. Use the DOM
+    // activation path before sending any effectful input event so the click
+    // still mutates page state without foregrounding the tab. This remains
+    // synthetic (untrusted), matching the existing OOPIF click path.
+    const visibility = await this.cdp.send<{
+      result: { value?: string };
+    }>('Runtime.evaluate', {
+      expression: 'document.visibilityState',
+      returnByValue: true,
+    });
+    if (visibility.result.value === 'hidden') {
+      await dispatch.send(
+        () =>
+          this.cdp.send('Runtime.callFunctionOn', {
+            objectId: object.objectId,
+            functionDeclaration: 'function() { this.click(); }',
+          }),
+        'javascriptClick'
+      );
+      return;
     }
 
     // Sequential mouse events (Playwright pattern). mouseMoved is preparatory;

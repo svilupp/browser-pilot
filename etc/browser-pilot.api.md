@@ -172,7 +172,7 @@ export class Browser {
     // Warning: (ae-forgotten-export) The symbol "TargetInfo" needs to be exported by the entry point index.d.ts
     listTargets(): Promise<TargetInfo[]>;
     get metadata(): Record<string, unknown> | undefined;
-    newPage(url?: string): Promise<Page>;
+    newPage(url?: string, options?: NewPageOptions): Promise<Page>;
     page(name?: string, options?: PageOptions): Promise<Page>;
     get provenance(): BuildProvenance;
     get sessionId(): string | undefined;
@@ -1100,6 +1100,11 @@ export class NetworkResponseTracker {
 }
 
 // @public (undocumented)
+export interface NewPageOptions {
+    background?: boolean;
+}
+
+// @public (undocumented)
 export type OutcomeStatus = 'success' | 'failed' | 'ambiguous' | 'unsafe_to_retry';
 
 // @public
@@ -1269,6 +1274,7 @@ export interface PageError {
 
 // @public (undocumented)
 export interface PageOptions {
+    background?: boolean;
     blockNativePrint?: boolean;
     fallbackToBestTarget?: boolean;
     minViewport?: {
@@ -1892,6 +1898,7 @@ export interface Step {
     amount?: number;
     anchor?: string;
     any?: ReadyCondition[];
+    background?: boolean;
     blur?: boolean;
     checked?: boolean;
     combo?: string;
@@ -2409,9 +2416,9 @@ export interface WorkflowSummary {
 // Warnings were encountered during analysis:
 //
 // dist/index.d.ts:361:5 - (ae-forgotten-export) The symbol "CanonicalTraceEvent" needs to be exported by the entry point index.d.ts
-// dist/page-LVBmxA-p.d.ts:1025:9 - (ae-forgotten-export) The symbol "CoveringElement" needs to be exported by the entry point index.d.ts
-// dist/page-LVBmxA-p.d.ts:1026:9 - (ae-forgotten-export) The symbol "HitElement" needs to be exported by the entry point index.d.ts
-// dist/page-LVBmxA-p.d.ts:1027:9 - (ae-forgotten-export) The symbol "PointerEventsDiagnosis" needs to be exported by the entry point index.d.ts
+// dist/page-DtL83d0U.d.ts:1025:9 - (ae-forgotten-export) The symbol "CoveringElement" needs to be exported by the entry point index.d.ts
+// dist/page-DtL83d0U.d.ts:1026:9 - (ae-forgotten-export) The symbol "HitElement" needs to be exported by the entry point index.d.ts
+// dist/page-DtL83d0U.d.ts:1027:9 - (ae-forgotten-export) The symbol "PointerEventsDiagnosis" needs to be exported by the entry point index.d.ts
 // dist/types-D2pJQpWs.d.ts:67:9 - (ae-forgotten-export) The symbol "LocalBrowserCandidate" needs to be exported by the entry point index.d.ts
 // dist/types-D2pJQpWs.d.ts:68:9 - (ae-forgotten-export) The symbol "LocalDiscoveryFailure" needs to be exported by the entry point index.d.ts
 

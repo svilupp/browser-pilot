@@ -134,6 +134,23 @@ bp close -s my-session
 
 Use `bp diagnose -s my-session '<selector>'` when targeting fails, and keep `bp eval` as a last-resort escape hatch.
 
+### Record a manual workflow
+
+Create the named session before recording. `bp record` captures that existing session and writes the artifact to the path passed to `-f`.
+
+```bash
+bp connect --name demo
+bp record -s demo --profile automation -f ./artifacts/demo.recording.json
+# perform the flow manually, then stop with Ctrl+C
+bp record summary ./artifacts/demo.recording.json
+bp record inspect ./artifacts/demo.recording.json
+bp record derive ./artifacts/demo.recording.json -o ./artifacts/demo.workflow.json
+jq . ./artifacts/demo.workflow.json
+bp run ./artifacts/demo.workflow.json -s demo
+```
+
+`bp record derive` emits browser-pilot workflow JSON for `bp run`, not Flightplan TOML. Translate the derived steps into Flightplan manually.
+
 ## Next Steps
 
 - [Providers](./providers.md) - Configure Browser Use, BrowserBase, Browserless, or local Chrome

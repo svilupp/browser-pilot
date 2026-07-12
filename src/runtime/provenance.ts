@@ -13,7 +13,7 @@ export interface BuildProvenance {
 export function getBuildProvenance(): BuildProvenance {
   return {
     packageVersion:
-      typeof __BP_PACKAGE_VERSION__ === 'string' ? __BP_PACKAGE_VERSION__ : '0.1.0-dev',
+      typeof __BP_PACKAGE_VERSION__ === 'string' ? __BP_PACKAGE_VERSION__ : '0.0.1-dev',
     gitSourceHash: typeof __BP_GIT_SOURCE_HASH__ === 'string' ? __BP_GIT_SOURCE_HASH__ : 'unknown',
     buildHash: typeof __BP_BUILD_HASH__ === 'string' ? __BP_BUILD_HASH__ : 'development',
   };

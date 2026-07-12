@@ -66,10 +66,17 @@ Golden paths:
      bp review -s dev --json
 
   3. Capture a manual workflow and derive automation
-     bp record -s demo --profile automation
-     bp record summary demo/recording.json
-     bp record derive demo/recording.json -o workflow.json
-     bp run workflow.json
+     bp connect --name demo
+     bp record -s demo --profile automation -f ./artifacts/demo.recording.json
+     # perform the flow, then stop with Ctrl+C
+     bp record summary ./artifacts/demo.recording.json
+     bp record inspect ./artifacts/demo.recording.json
+     bp record derive ./artifacts/demo.recording.json -o ./artifacts/demo.workflow.json
+     jq . ./artifacts/demo.workflow.json
+     bp run ./artifacts/demo.workflow.json -s demo
+
+     record derive writes browser-pilot JSON steps, not Flightplan TOML.
+     Translate the derived steps into Flightplan manually.
 
   4. Debug a realtime or voice session
      bp trace start -s dev

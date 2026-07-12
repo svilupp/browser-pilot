@@ -96,7 +96,7 @@ Typical workflows:
 
 Likely next commands:
   bp trace summary -s vt --view voice
-  bp record -s vt --profile voice
+  bp record -s vt --profile voice -f ./artifacts/voice.recording.json
   bp env permissions grant -s vt microphone
 
 Tips:

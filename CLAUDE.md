@@ -30,7 +30,7 @@ Before PR: run `bun run check:quiet`
 ### Git Hooks (prek)
 Pre-commit (≤15s): biome (changed files), oxlint, tsc
 Pre-push (≤90s): + unit tests, integration tests, CLI tests
-Install: `bun install` (triggers `prek install` via prepare script)
+Install: `bun install`, then run `bun run setup:hooks` when working with local git hooks.
 
 > **Dev tip:** Use `bun run dev:bp` (or `bun ./src/cli/index.ts`) instead of `bp` during development to avoid stale binaries.
 

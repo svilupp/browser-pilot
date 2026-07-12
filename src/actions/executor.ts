@@ -1354,6 +1354,7 @@ export class BatchExecutor {
           'Target.createTarget',
           {
             url: step.url ?? 'about:blank',
+            background: step.background ?? true,
           },
           null
         );

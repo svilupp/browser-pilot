@@ -68,7 +68,9 @@ const page = await browser.page('checkout'); // Another named page
 
 `options` can pin selection to `targetId` or `targetUrl`. Explicit target selection is strict by
 default; set `fallbackToBestTarget: true` only when best-effort fallback is intentional. Other
-options include `minViewport` (or `false` to disable validation) and `blockNativePrint`.
+options include `minViewport` (or `false` to disable validation), `blockNativePrint`, and
+`background`. When `page()` must create a page because no target exists, it uses
+`background: true` by default; pass `background: false` to opt into foreground behavior.
 
 If the page doesn't exist, it's created. If it exists, the cached instance is returned.
 
@@ -88,14 +90,19 @@ const popup = await browser.expectNewPage(
 URL and title constraints may be strings or regular expressions; `about:blank` and empty titles
 remain pending when those constraints are supplied.
 
-### newPage(url?)
+### newPage(url?, options?)
 
 Create a new page (tab).
 
 ```typescript
 const page = await browser.newPage();
 const page = await browser.newPage('https://example.com');
+const foregroundPage = await browser.newPage('https://example.com', { background: false });
 ```
+
+New pages are created in the background by default so connecting to a non-headless or
+attached Chrome does not change the user's active tab. Pass `{ background: false }` only when
+foreground behavior is intentional.
 
 **Returns:** `Promise<Page>`
 

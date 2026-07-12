@@ -25,11 +25,24 @@ export interface BrowserOptions extends ConnectOptions {
   debug?: boolean;
 }
 
+export interface NewPageOptions {
+  /**
+   * Whether to create the new page in the background. Defaults to true.
+   * Set to false to opt into foreground behavior.
+   */
+  background?: boolean;
+}
+
 export interface PageOptions {
   /** Specific target ID to attach to */
   targetId?: string;
   /** Filter targets to those whose URL contains this string */
   targetUrl?: string;
+  /**
+   * Whether a page created because no matching target exists should stay in the
+   * background. Defaults to true. Set to false to opt into foreground behavior.
+   */
+  background?: boolean;
   /**
    * Compatibility escape hatch for callers that previously accepted a best
    * effort target when an explicit target disappeared. Defaults to false.
@@ -305,6 +318,7 @@ export class Browser {
         'Target.createTarget',
         {
           url: 'about:blank',
+          background: options?.background ?? true,
         },
         null
       );
@@ -361,11 +375,12 @@ export class Browser {
   /**
    * Create a new page (tab)
    */
-  async newPage(url = 'about:blank'): Promise<Page> {
+  async newPage(url = 'about:blank', options?: NewPageOptions): Promise<Page> {
     const result = await this.cdp.send<{ targetId: string }>(
       'Target.createTarget',
       {
         url,
+        background: options?.background ?? true,
       },
       null
     );
