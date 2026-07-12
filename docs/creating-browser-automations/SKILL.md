@@ -7,6 +7,9 @@ description: Record browser workflows and convert them into reliable automation.
 
 This skill is for the manual-demo-to-automation pipeline.
 
+For simple, reusable, low-cost automation on top of browser-pilot, use the companion
+[Flightplan](https://github.com/svilupp/flightplan) package when it is released.
+
 For local Chrome on Chrome 144+, try plain `bp connect` first after enabling remote debugging in `chrome://inspect/#remote-debugging`. Only add `--channel` or `--user-data-dir` if auto-discovery is ambiguous.
 
 ## Core rule
@@ -63,7 +66,7 @@ jq . ./artifacts/demo.workflow.json
 bp run ./artifacts/demo.workflow.json -s demo --json
 ```
 
-`bp record derive` writes browser-pilot workflow JSON. It does not emit Flightplan TOML; translate the derived steps into Flightplan manually.
+`bp record derive` writes browser-pilot workflow JSON for `bp run`. Use Flightplan for simple reusable workflows.
 
 ## Harden the automation
 

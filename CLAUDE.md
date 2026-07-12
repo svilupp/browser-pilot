@@ -4,6 +4,9 @@
 
 Lightweight CDP-based browser automation for AI agents. Zero production dependencies. Works in Node.js, Bun, and Cloudflare Workers.
 
+The current public interface is version 0.1.0. [Flightplan](https://github.com/svilupp/flightplan)
+is the companion package for simple, reusable, low-cost automation on top of browser-pilot.
+
 ## Commands
 
 ```bash
@@ -53,7 +56,7 @@ One WebSocket per browser, but each `Page` is pinned to its own flat CDP session
 `Page.dispose()`/`close()` cleans up event listeners; `Browser.closePage`/`close`/`disconnect` dispose their pages. Browser automation never activates a tab or forces the browser application into the foreground.
 
 ### Target Selection & Viewport Validation
-When `browser.page()` picks a target, it scores candidates (prefers http URLs, unattached targets, targets with titles; penalizes chrome://, devtools://, extensions). After attaching, validates the viewport — if dimensions are pathological (e.g. 56px height from a side panel), auto-applies 1280x720 override with a warning.
+When `browser.page()` picks a target, it scores candidates (prefers http URLs, unattached targets, targets with titles; penalizes chrome://, devtools://, extensions). After attaching, it validates the viewport. If dimensions are pathological (e.g. 56px height from a side panel), it applies a 1280x720 override with a warning.
 - Scoring: `src/browser/browser.ts` (`scoreTarget()`, `pickBestTarget()`)
 - Viewport check: `src/browser/browser.ts` (in `page()` method after `init()`)
 - `PageOptions.targetUrl`: filter targets by URL substring
@@ -174,22 +177,22 @@ bp daemon logs                      # View daemon log
 - **Heartbeat**: Daemon updates session file every 30s; stale heartbeat triggers fallback
 - **Platform**: Linux, macOS, GitHub Actions (Unix sockets) for daemon mode. Cloudflare Workers use direct WS. Workers now expose parts of `node:net` (with compatibility flags), but daemon mode still depends on Unix domain sockets + local process lifecycle, which are CLI/Node runtime concerns.
 - **Session-scoped events**: `DaemonEvent` carries `sessionId`, so session-scoped event routing works over the daemon.
-- **Auto-resume**: The daemon unpauses auto-attached children that stop for the debugger — immediately when no client is connected, with a 2s fallback otherwise (timers cleaned on close). Prevents a paused OOPIF/worker from freezing the user's live tab.
+- **Auto-resume**: The daemon unpauses auto-attached children that stop for the debugger immediately when no client is connected, with a 2s fallback otherwise. Timers are cleaned on close, preventing a paused OOPIF/worker from freezing the user's live tab.
 - Implementation: `src/daemon/` (server, lifecycle, transport, types), `src/cli/daemon-spawn.ts`
 
 
 ### CLI Discovery Surface
 The CLI now includes lightweight page-inspection commands in addition to `snapshot`:
-- `bp page` — compact overview: URL, title, headings, form fields, interactive controls
-- `bp forms` — structured form metadata only
-- `bp targets` — list browser tabs/targets with URLs and IDs
-- `bp review` — structured business state: headings, forms, alerts, tables, key-values, status labels
-- `bp connect --new-tab [--page-url <url>]` — create and attach to a fresh tab
+- `bp page`: compact overview with URL, title, headings, form fields, and interactive controls
+- `bp forms`: structured form metadata only
+- `bp targets`: list browser tabs/targets with URLs and IDs
+- `bp review`: structured business state with headings, forms, alerts, tables, key-values, and status labels
+- `bp connect --new-tab [--page-url <url>]`: create and attach to a fresh tab
 
 Snapshot text output now uses `ref:e12` notation, which is also the selector syntax agents should reuse in later commands. Refs are cached per session+URL after a snapshot.
 
 ### Exec Recording
-`bp exec --record` writes a lightweight screenshot trail for the latest replay into the session directory (or `--record-dir` when provided): `recording.json` plus `screenshots/`. `bp connect --record` enables session-level recording for all subsequent exec calls — recording is accumulative across exec calls (frames append, not replace). Session-level settings are stored in `session.metadata.record`. Sensitive field values are redacted based on the field's actual input settings (`password`, `hidden`, `one-time-code`, `cc-number`, etc.). `bp clean --max-size 500MB` trims old sessions by total disk usage and now stops any attached daemons before deletion.
+`bp exec --record` writes a lightweight screenshot trail for the latest replay into the session directory (or `--record-dir` when provided): `recording.json` plus `screenshots/`. `bp connect --record` enables session-level recording for all subsequent exec calls. Frames accumulate across exec calls. Session-level settings are stored in `session.metadata.record`. Sensitive field values are redacted based on the field's actual input settings (`password`, `hidden`, `one-time-code`, `cc-number`, etc.). `bp clean --max-size 500MB` trims old sessions by total disk usage and stops attached daemons before deletion.
 
 ## Audio I/O Pattern
 
@@ -240,7 +243,7 @@ ws.send(JSON.stringify({ id, method, params, sessionId }));
 Interface additions for flat-session/OOPIF plumbing: `onSessionEvent`, `onTargetAttached`, `setAutoAttach`, `runIfWaitingForDebugger`, `sessions`, `hasSession`. The `onAny` handler signature is now `(method, params, sessionId?)`.
 
 ### Cross-Origin (OOPIF) Iframes
-Out-of-process iframes are supported. Per page, auto-attach is armed (`flatten`, `waitForDebuggerOnStart`) so cross-origin frames attach as their own flat child sessions; nested OOPIFs are supported. `switchToFrame` classifies same- vs cross-origin by whether the frame has a child session. Inside a cross-origin frame the supported action subset is `click`/`fill`/`type`/`focus`/`press`/`shortcut`/`text`/`waitFor`/`evaluate`; unsupported actions (`select`/`check`/`uncheck`/`submit`/`hover`/`scroll`/`snapshot`/`forms`/`diagnose`/`upload`, etc.) throw a clear error via `assertOopifUnsupported` — `switchToMain` first. Requires Chrome site isolation (`--site-per-process`). A same-origin iframe nested inside a cross-origin frame (full Stripe Elements) is not supported.
+Out-of-process iframes are supported. Per page, auto-attach is armed (`flatten`, `waitForDebuggerOnStart`) so cross-origin frames attach as their own flat child sessions; nested OOPIFs are supported. `switchToFrame` classifies same- vs cross-origin by whether the frame has a child session. Inside a cross-origin frame the supported action subset is `click`/`fill`/`type`/`focus`/`press`/`shortcut`/`text`/`waitFor`/`evaluate`. Unsupported actions (`select`/`check`/`uncheck`/`submit`/`hover`/`scroll`/`snapshot`/`forms`/`diagnose`/`upload`, etc.) throw a clear error via `assertOopifUnsupported`; call `switchToMain` first. Requires Chrome site isolation (`--site-per-process`). A same-origin iframe nested inside a cross-origin frame (full Stripe Elements) is not supported.
 - Implementation: `src/browser/page.ts` (`oopifFrames` registry, `switchToFrame`, `assertOopifUnsupported`)
 
 ## Provider Pattern
@@ -268,11 +271,11 @@ const result = await page.batch([
 
 ### Assertion Steps
 Batch steps support page-state assertion actions for verifying page state:
-- `assertVisible` — requires `selector`, waits for element to be visible
-- `assertExists` — requires `selector`, waits for element to be attached to DOM
-- `assertText` — requires `expect` (or `value`), optional `selector` (defaults to full page text), substring match
-- `assertUrl` — requires `expect` (or `url`), checks current URL contains expected substring
-- `assertValue` — requires `selector` and `expect` (or `value`), waits for element then checks its value (exact match)
+- `assertVisible`: requires `selector`, waits for element to be visible
+- `assertExists`: requires `selector`, waits for element to be attached to DOM
+- `assertText`: requires `expect` (or `value`), optional `selector` (defaults to full page text), substring match
+- `assertUrl`: requires `expect` (or `url`), checks current URL contains expected substring
+- `assertValue`: requires `selector` and `expect` (or `value`), waits for element then checks its value (exact match)
 Trace-backed assertions include `assertNoConsoleErrors`, `assertTextChanged`, `assertPermission`,
 and `assertMediaTrackLive`; `review` and `delta` expose structured/read-diff surfaces.
 
@@ -288,7 +291,7 @@ policy explicit.
 ```
 
 ### Outcome-Based Execution
-Batch steps support outcome conditions to verify state transitions, not just mechanical success. Optional on all steps — simple actions work exactly as before.
+Batch steps support outcome conditions to verify state transitions, not just mechanical success. They are optional on all steps, so simple actions work as before.
 
 ```typescript
 await page.batch([
@@ -324,28 +327,28 @@ Dangerous steps that result in ambiguous outcome get `unsafe_to_retry` and are n
 ### Delta & Review Surfaces
 Two read surfaces for "what changed?" and "what is the business state?":
 
-- `page.captureState()` → `PageState` — lightweight state snapshot
-- `page.delta(before)` → `DeltaResult` — URL, heading, field, button, alert changes
-- `page.review()` → `ReviewResult` — headings, forms, alerts, tables, key-value pairs, status labels
+- `page.captureState()` -> `PageState`: lightweight state snapshot
+- `page.delta(before)` -> `DeltaResult`: URL, heading, field, button, and alert changes
+- `page.review()` -> `ReviewResult`: headings, forms, alerts, tables, key-value pairs, and status labels
 - Batch actions: `{ action: 'review' }`, `{ action: 'delta' }`
 - CLI: `bp review`
 - Implementation: `src/browser/delta.ts`, `src/browser/review.ts`
 
 ### Semantic Fingerprints
 Stable element identity across rerenders using semantic fingerprints (role + name + section path + stable attributes).
-- `buildFingerprintMap(nodes)` — fingerprints all interactive nodes
-- `recoverStaleRef(staleFingerprint, currentFingerprints)` — recovers stale refs with confidence scoring
+- `buildFingerprintMap(nodes)`: fingerprints all interactive nodes
+- `recoverStaleRef(staleFingerprint, currentFingerprints)`: recovers stale refs with confidence scoring
 - Implementation: `src/browser/fingerprint.ts`
 
 ### Smart Widget Primitives
-- `chooseOption(page, config)` — state machine for custom comboboxes: open → search → select → verify
-- `uploadFiles(page, config)` — file upload with CDP `setInputFiles` + acceptance verification
-- `detectOverlay(page)` — detect visible modal/overlay with role/z-index heuristics
+- `chooseOption(page, config)`: state machine for custom comboboxes: open -> search -> select -> verify
+- `uploadFiles(page, config)`: file upload with CDP `setInputFiles` and acceptance verification
+- `detectOverlay(page)`: detect visible modal/overlay with role/z-index heuristics
 - Batch actions: `{ action: 'chooseOption', ... }`, `{ action: 'upload', selector: '...', files: [...] }`
 - Implementation: `src/browser/combobox.ts`, `src/browser/upload.ts`, `src/browser/overlay-detect.ts`
 
 ### Safe Submit
-`submitAndVerify(page, options)` — submit with built-in outcome evaluation. Never auto-retries.
+`submitAndVerify(page, options)`: submit with built-in outcome evaluation. Never auto-retries.
 - Implementation: `src/browser/safe-submit.ts`
 
 ### Target Pinning

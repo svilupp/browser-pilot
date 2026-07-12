@@ -13,7 +13,7 @@ browser-pilot is designed to work in Cloudflare Workers. This guide covers deplo
 
 1. A Cloudflare Workers account
 2. A browser provider that supports external connections:
-   - [Browser Use](https://browser-use.com) (recommended — CAPTCHA solving, anti-detect, residential proxies)
+   - [Browser Use](https://browser-use.com) (recommended: CAPTCHA solving, anti-detect, residential proxies)
    - [BrowserBase](https://browserbase.com)
    - [Browserless](https://browserless.io)
 

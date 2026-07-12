@@ -28,6 +28,8 @@ interface ConnectOptions {
   apiKey?: string;        // For browser-use, browserbase, browserless
   projectId?: string;     // For browserbase
   wsUrl?: string;         // For generic, or override others
+  channel?: 'stable' | 'beta' | 'dev' | 'canary'; // Local Chrome channel
+  userDataDir?: string;   // Local Chrome profile directory
 
   // Session options
   session?: {
@@ -232,10 +234,11 @@ const page = await browser.page();
 ### Basic Usage
 
 ```typescript
-import { connect } from 'browser-pilot';
+import { connect, getBrowserWebSocketUrl } from 'browser-pilot';
 
 const browser = await connect({
   provider: 'generic',
+  wsUrl: await getBrowserWebSocketUrl(),
 });
 
 const page = await browser.page();
@@ -310,7 +313,12 @@ await browser.disconnect(); // Keep session for next time
 ### Direct CDP Access
 
 ```typescript
-const browser = await connect({ provider: 'generic' });
+import { connect, getBrowserWebSocketUrl } from 'browser-pilot';
+
+const browser = await connect({
+  provider: 'generic',
+  wsUrl: await getBrowserWebSocketUrl(),
+});
 const cdp = browser.cdpClient;
 
 // Emulate mobile device

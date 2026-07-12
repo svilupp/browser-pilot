@@ -2,6 +2,9 @@
 
 This reference is for command and action details. For workflow routing, see [SKILL.md](./SKILL.md).
 
+For simple, reusable, low-cost automation on top of browser-pilot, use the companion
+[Flightplan](https://github.com/svilupp/flightplan) package when it is released.
+
 ## Route first
 
 - Inspect page state: `snapshot`, `page`, `forms`, `text`, `diagnose`
@@ -229,7 +232,7 @@ jq . ./artifacts/demo.workflow.json
 bp run ./artifacts/demo.workflow.json -s demo
 ```
 
-`record derive` writes browser-pilot workflow JSON, not Flightplan TOML. Translate the derived steps into Flightplan manually.
+`record derive` writes browser-pilot workflow JSON for `bp run`. Use Flightplan for simple reusable workflows.
 
 ### Outcome-aware submit
 

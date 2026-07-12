@@ -5,9 +5,12 @@ The `Page` class provides the main interface for browser automation.
 ## Getting a Page
 
 ```typescript
-import { connect } from 'browser-pilot';
+import { connect, getBrowserWebSocketUrl } from 'browser-pilot';
 
-const browser = await connect({ provider: 'generic' });
+const browser = await connect({
+  provider: 'generic',
+  wsUrl: await getBrowserWebSocketUrl(),
+});
 const page = await browser.page();        // Get or create default page
 const page2 = await browser.page('tab2'); // Named page
 const page3 = await browser.newPage();    // Always creates new
@@ -261,6 +264,21 @@ await page.scroll('#footer');
 await page.scroll('body', { x: 0, y: 1000 });
 ```
 
+### switchToFrame(selector, options?)
+
+Enter a same-origin or supported cross-origin iframe. Use `switchToMain()` to return to the
+top-level document.
+
+```typescript
+await page.switchToFrame('iframe#payment');
+await page.fill('#card-number', '4242424242424242');
+await page.switchToMain();
+```
+
+Cross-origin frames support `click`, `fill`, `type`, `focus`, `press`, `shortcut`, `text`,
+`waitFor`, and `evaluate`. Other actions fail with a clear error. Chrome site isolation is
+required: `--site-per-process`.
+
 ## Waiting
 
 ### waitFor(selector, options?)
@@ -359,6 +377,22 @@ Get text content from the page or a specific element.
 ```typescript
 const allText = await page.text();
 const mainText = await page.text('.main-content');
+```
+
+### forms()
+
+Return metadata for input, select, and textarea controls.
+
+```typescript
+const fields = await page.forms();
+```
+
+### elementState(selector)
+
+Read an element's existence, visibility, count, text, value, and bounding box without acting on it.
+
+```typescript
+const state = await page.elementState('#submit');
 ```
 
 ### review()

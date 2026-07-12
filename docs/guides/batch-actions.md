@@ -393,9 +393,9 @@ const result = await page.batch([
 
 ### Evaluation Order
 
-1. `failIf` conditions checked first — any match = `failed`
-2. `expectAll` conditions — all must match
-3. `expectAny` conditions — any match = `success`
+1. `failIf` conditions checked first: any match = `failed`
+2. `expectAll` conditions: all must match
+3. `expectAny` conditions: any match = `success`
 
 ### Dangerous Steps
 
@@ -456,7 +456,7 @@ const result = await page.batch([
 ]);
 ```
 
-With `onFail: 'stop'` (the default), a failed assertion halts the batch immediately — useful for fast-fail validation after form submissions or navigations.
+With `onFail: 'stop'` (the default), a failed assertion halts the batch immediately. This is useful for validation after form submissions or navigations.
 
 ## Recording
 

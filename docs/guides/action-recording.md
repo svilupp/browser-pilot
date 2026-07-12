@@ -4,6 +4,9 @@ Use `bp record` to capture a human workflow into the canonical Browser Pilot art
 
 Use `bp exec --record` when you already have steps and want screenshot proof of replay.
 
+For simple, reusable, low-cost automation on top of browser-pilot, use the companion
+[Flightplan](https://github.com/svilupp/flightplan) package when it is released.
+
 ## The model
 
 - `record` captures a human demonstration
@@ -90,7 +93,7 @@ jq . ./artifacts/demo.workflow.json
 bp run ./artifacts/demo.workflow.json -s demo --json
 ```
 
-`record derive` does not emit Flightplan TOML. Translate the derived JSON into Flightplan manually.
+`record derive` emits browser-pilot workflow JSON for `bp run`. Use Flightplan for simple reusable workflows.
 
 Then harden the flow with trace-backed assertions if needed:
 

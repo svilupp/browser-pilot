@@ -25,8 +25,8 @@ Version changes belong to release preparation after the release gate is approved
 
 ## Promote the changelog
 
-- [ ] Keep `## [Unreleased]` at the top of `CHANGELOG.md`.
-- [ ] Move its current `Added`, `Changed`, `Fixed`, and other release-note sections into a new section directly below it.
+- [ ] Keep `## [Unreleased]` at the top of `CHANGELOG.md` while preparing a future release.
+- [ ] Move its current release-note sections into a new section directly below it.
 - [ ] Name the new section `## [x.y.z] - YYYY-MM-DD` with the approved version and release date.
 - [ ] Preserve breaking-change notes and make the public impact clear.
 - [ ] Confirm that no intended release entries remain under `Unreleased`.

@@ -8,6 +8,10 @@ compatibility: Requires browser-pilot CLI (bp). For local Chrome on Chrome 144+,
 
 Route the task before choosing commands.
 
+Use [Flightplan](https://github.com/svilupp/flightplan) for simple, reusable, low-cost automation
+on top of browser-pilot when it is released. Use this skill when you need direct browser control,
+inspection, recording, tracing, voice testing, or browser-state controls.
+
 For local Chrome on Chrome 144+, try plain `bp connect` first after enabling remote debugging in `chrome://inspect/#remote-debugging`. Only narrow with `--channel` or `--user-data-dir` if auto-discovery is ambiguous.
 
 ## Routing tree
@@ -98,7 +102,8 @@ bp run ./artifacts/demo.workflow.json -s demo
 ```
 
 Do not start by reading the raw artifact.
-`record` captures the existing named session. It does not create a named session, and `record derive` does not emit Flightplan TOML. Translate the derived JSON into Flightplan manually.
+`record` captures the existing named session. It does not create a named session, and `record derive`
+produces browser-pilot workflow JSON for `bp run`. Use Flightplan for simple reusable workflows.
 
 ## When to use trace
 

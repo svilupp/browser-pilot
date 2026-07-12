@@ -2,6 +2,9 @@
 
 Browser Pilot artifacts are meant to be analyzed without opening raw JSON first.
 
+For simple, reusable, low-cost automation on top of browser-pilot, use the companion
+[Flightplan](https://github.com/svilupp/flightplan) package when it is released.
+
 Use this order:
 
 1. `record summary`
@@ -77,7 +80,7 @@ jq . ./artifacts/demo.workflow.json
 bp run ./artifacts/demo.workflow.json -s demo --json
 ```
 
-`bp record derive` writes browser-pilot workflow JSON for `bp run`, not Flightplan TOML. Translate the derived steps into Flightplan manually.
+`bp record derive` writes browser-pilot workflow JSON for `bp run`. Use Flightplan for simple reusable workflows.
 
 ## Common mistakes
 

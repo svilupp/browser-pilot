@@ -2,6 +2,10 @@
 
 The `bp` CLI is organized around jobs, not alphabetical commands.
 
+browser-pilot is the lower-level browser interface. For simple, reusable, low-cost automation,
+use the companion [Flightplan](https://github.com/svilupp/flightplan) package when released:
+`bunx flightplan --help`.
+
 For local Chrome on Chrome 144+, try plain `bp connect` first after enabling remote debugging in `chrome://inspect/#remote-debugging`. Only add `--channel` or `--user-data-dir` when auto-discovery finds multiple eligible profiles.
 
 Get oriented first:
@@ -126,8 +130,8 @@ bp exec -s dev '[
 
 Outcome conditions available on any action step:
 
-- `expectAny`, `expectAll`, `failIf` — verify the action's effect
-- `dangerous` — prevent auto-retry on ambiguous outcomes
+- `expectAny`, `expectAll`, `failIf`: verify the action's effect
+- `dangerous`: prevent auto-retry on ambiguous outcomes
 
 Supported condition kinds are `urlMatches`, `elementVisible`, `elementHidden`, `textAppears`,
 `textChanges`, `networkResponse`, `stateSignatureChanges`, `selectedTab`, `fieldValue`,
@@ -152,10 +156,10 @@ bp exec -s dev '[
 
 New widget actions:
 
-- `chooseOption` — custom combobox interaction
-- `upload` — file upload with verification
-- `review` — structured page state extraction
-- `delta` — page change detection
+- `chooseOption`: custom combobox interaction
+- `upload`: file upload with verification
+- `review`: structured page state extraction
+- `delta`: page change detection
 
 Likely next steps:
 
@@ -204,7 +208,7 @@ Rules:
 
 - Summary first, raw JSON later.
 - `record` captures an existing named session; it does not create one.
-- `record derive` writes browser-pilot workflow JSON, not Flightplan TOML. Translate it into Flightplan manually.
+- `record derive` writes browser-pilot workflow JSON for `bp run`. Use Flightplan for simple reusable workflows.
 - Use `record` for human capture.
 - Use `exec --record` when you already have steps and want screenshot proof of replay.
 

@@ -308,6 +308,8 @@ interface ConnectOptions {
   provider: 'browserbase' | 'browserless' | 'browser-use' | 'generic';
   apiKey?: string;
   wsUrl?: string;
+  channel?: 'stable' | 'beta' | 'dev' | 'canary';
+  userDataDir?: string;
   timeout?: number;           // Connection timeout in ms (default: 30000)
   debug?: boolean;            // Enable debug logging
   proxyCountryCode?: string | null;  // Browser Use proxy (default: 'uk')
@@ -343,7 +345,12 @@ console.log(browser.metadata);
 All providers expose the underlying CDP client:
 
 ```typescript
-const browser = await connect({ provider: 'generic' });
+import { connect, getBrowserWebSocketUrl } from 'browser-pilot';
+
+const browser = await connect({
+  provider: 'generic',
+  wsUrl: await getBrowserWebSocketUrl(),
+});
 const cdp = browser.cdpClient;
 
 // Send raw CDP commands

@@ -1,6 +1,6 @@
 # Multi-Selector Guide
 
-Multi-selector is browser-pilot's approach to building robust automations that don't break when websites change.
+Multi-selector is browser-pilot's approach to building resilient automations that tolerate website changes.
 
 ## The Problem
 

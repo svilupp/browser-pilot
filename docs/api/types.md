@@ -10,6 +10,8 @@ interface ConnectOptions {
   apiKey?: string;
   projectId?: string;
   wsUrl?: string;
+  channel?: 'stable' | 'beta' | 'dev' | 'canary';
+  userDataDir?: string;
   session?: CreateSessionOptions;
   debug?: boolean;
   timeout?: number;
@@ -66,6 +68,7 @@ interface FillOptions extends ActionOptions {
 
 interface TypeOptions extends ActionOptions {
   delay?: number;
+  blur?: boolean;
 }
 
 interface SubmitOptions extends ActionOptions {
@@ -75,6 +78,7 @@ interface SubmitOptions extends ActionOptions {
 
 interface WaitForOptions extends ActionOptions {
   state?: 'visible' | 'hidden' | 'attached' | 'detached';
+  pollInterval?: number;
 }
 
 interface NetworkIdleOptions extends ActionOptions {
@@ -137,6 +141,7 @@ interface Step {
   selector?: string | string[];
   url?: string;
   value?: string | string[];
+  background?: boolean;
   targetId?: string;
   key?: string;
   combo?: string;
@@ -152,6 +157,7 @@ interface Step {
   trigger?: string | string[];
   option?: string | string[];
   match?: 'text' | 'value' | 'contains';
+  where?: Record<string, unknown>;
   x?: number;
   y?: number;
   direction?: 'up' | 'down' | 'left' | 'right';
@@ -160,6 +166,8 @@ interface Step {
   quality?: number;
   fullPage?: boolean;
   expect?: string;
+  from?: string;
+  to?: string;
   urlMode?: 'exact' | 'origin_path' | 'glob' | 'contains';
   textMode?: 'exact' | 'contains' | 'regex';
   landmark?: string;
@@ -170,6 +178,10 @@ interface Step {
   transition?: 'urlChanged' | 'fieldChanged';
   retry?: number;
   retryDelay?: number;
+  name?: string;
+  state?: string;
+  kind?: 'audio' | 'video';
+  windowMs?: number;
   files?: string[];
   expectAny?: Condition[];
   expectAll?: Condition[];
