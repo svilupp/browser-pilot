@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.2.0] - 2026-08-11
+
+- Added `bp emit ws`: send text or binary frames on a WebSocket the page already owns (real
+  headers, cookies, and session token). Discovers sockets across the main frame, same-origin
+  iframes, OOPIFs, and dedicated workers via `--list`, selects by URL glob with `--match`, and
+  refuses to guess when several sockets match.
+- Delivery is confirmed on the wire, and `--await`/`--await-match` replies are correlated to the
+  target socket, so a matched reply is genuinely a response to your frame. The CLI exits as soon
+  as the reply arrives and exits non-zero when an awaited reply never does.
+- Added an `emit` batch action for `bp exec`/`bp run` (retries are rejected: sends are
+  at-most-once).
+- Glob matching (`--await-match` and other `--match` filters) now matches multi-line payloads
+  such as pretty-printed JSON.
+
 ## [0.1.0] - 2026-07-12
 
 - Added cross-origin iframe, worker/service-worker, multi-tab, and popup support.

@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>WebSocket Fixture</title>
+</head>
+<body>
+  <h1>WebSocket fixture</h1>
+  <p>
+    Opens sockets in three realms so emit's realm sweep can be exercised end to end:
+    the main frame, a same-origin iframe, and a dedicated worker. The main-frame
+    socket binds <code>send</code> at construction, reproducing the app pattern that
+    defeats <code>WebSocket.prototype</code> patching.
+  </p>
+  <pre id="log" data-testid="log"></pre>
+  <iframe id="child" data-testid="child" title="WebSocket child frame" src="/websocket-frame.html"></iframe>
+
+  <script>
+    window.__received = [];
+    function log(entry) {
+      window.__received.push(entry);
+      document.getElementById('log').textContent += `${entry}\n`;
+    }
+
+    const base = `ws://${location.host}/ws-echo`;
+
+    // Main-frame socket with a bound send: only a heap sweep can reach it.
+    (() => {
+      const socket = new WebSocket(`${base}?name=main`);
+      window.__mainBoundSend = socket.send.bind(socket);
+      socket.onmessage = (event) => log(`main:${event.data}`);
+      socket.onopen = () => log('main:open');
+    })();
+
+    // A closed socket: must never be selected as an emit target.
+    (() => {
+      const socket = new WebSocket(`${base}?name=closed`);
+      socket.onopen = () => socket.close();
+    })();
+
+    // Worker-owned socket: lives in its own CDP target.
+    const workerSource = `
+      const ws = new WebSocket('${base}?name=worker');
+      ws.onmessage = (e) => postMessage(e.data);
+      ws.onopen = () => postMessage('worker:open');
+    `;
+    const worker = new Worker(
+      URL.createObjectURL(new Blob([workerSource], { type: 'application/javascript' }))
+    );
+    worker.onmessage = (event) => log(`worker:${event.data}`);
+
+    window.addEventListener('message', (event) => {
+      if (typeof event.data === 'string' && event.data.startsWith('frame:')) {
+        log(event.data);
+      }
+    });
+  </script>
+</body>
+</html>

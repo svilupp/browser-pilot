@@ -118,6 +118,30 @@ bp trace watch -s dev --view console --assert no-console-errors --timeout 5000
 
 `bp listen ...` is compatibility only. Prefer `bp trace tail ...`.
 
+## When to use emit
+
+Use `bp emit ws` when the message you need cannot be produced through the UI - it sends a
+frame on a WebSocket the page already owns, so it carries the app's real headers, cookies,
+and session token.
+
+Always confirm the message type with a real frame before injecting - the same-looking type
+can be a server-to-client echo that is silently ignored. Proven live on a voice/chat commerce
+app:
+
+```bash
+bp emit ws --list -s mysession
+# OPEN       wss://worker-uat....workers.dev/session/...  [main]
+
+# bp trace/bp listen showed the UI sends client.response.text; "user.transcript"
+# looks similar but is a server-to-client echo and is ignored if injected.
+bp emit ws '{"type":"client.response.text","content":"show me black shirts"}' \
+  --match 'wss://worker-uat*' \
+  --await-match '*search_results_surfaced*' --await-timeout 30000 -s mysession
+# delivered: <socketUrl>; correlated reply with search results, UI rendered 12 products
+```
+
+Avoid `--await-match '*'` on chatty sockets - heartbeat frames match it too. Prefer `--await type=...` on a specific field or a narrow glob.
+
 ## Voice and environment workflows
 
 Voice control:
@@ -188,6 +212,7 @@ needs to be explicit.
 - Execute saved file: `bp run`
 - Record demo: `bp record`
 - Summarize artifact or live trace: `bp trace summary`
+- Inject a protocol frame: `bp emit ws`
 - Review structured state: `bp review`
 - Active voice control: `bp audio`
 - Browser conditions: `bp env`

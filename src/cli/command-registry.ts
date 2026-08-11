@@ -32,6 +32,11 @@ export const CLI_COMMANDS: readonly CLICommandMeta[] = [
   },
   { name: 'trace', description: 'Inspect and analyze behavior over time', showInRootHelp: true },
   {
+    name: 'emit',
+    description: "Send a WebSocket frame on the page's own connection",
+    showInRootHelp: true,
+  },
+  {
     name: 'audio',
     description: 'Set up, validate, and drive voice pipelines',
     showInRootHelp: true,
@@ -63,6 +68,10 @@ export const CLI_ROUTE_GROUPS: readonly CLIRouteGroup[] = [
     label: 'Analyze behavior over time',
     commands: ['trace'],
     note: '(listen is a compatibility alias)',
+  },
+  {
+    label: 'Send WebSocket frames',
+    commands: ['emit'],
   },
   {
     label: 'Exercise voice/media',

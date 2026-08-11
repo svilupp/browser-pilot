@@ -54,7 +54,7 @@ export interface ActionResult {
 }
 
 // @public (undocumented)
-export type ActionType = 'goto' | 'click' | 'fill' | 'type' | 'select' | 'check' | 'uncheck' | 'submit' | 'press' | 'shortcut' | 'focus' | 'hover' | 'scroll' | 'wait' | 'waitForReady' | 'snapshot' | 'forms' | 'screenshot' | 'evaluate' | 'text' | 'newTab' | 'closeTab' | 'switchFrame' | 'switchToMain' | 'assertVisible' | 'assertExists' | 'assertText' | 'assertUrl' | 'assertValue' | 'waitForWsMessage' | 'assertNoConsoleErrors' | 'assertTextChanged' | 'assertPermission' | 'assertMediaTrackLive' | 'delta' | 'review' | 'chooseOption' | 'upload';
+export type ActionType = 'goto' | 'click' | 'fill' | 'type' | 'select' | 'check' | 'uncheck' | 'submit' | 'press' | 'shortcut' | 'focus' | 'hover' | 'scroll' | 'wait' | 'waitForReady' | 'snapshot' | 'forms' | 'screenshot' | 'evaluate' | 'text' | 'newTab' | 'closeTab' | 'switchFrame' | 'switchToMain' | 'assertVisible' | 'assertExists' | 'assertText' | 'assertUrl' | 'assertValue' | 'waitForWsMessage' | 'assertNoConsoleErrors' | 'assertTextChanged' | 'assertPermission' | 'assertMediaTrackLive' | 'delta' | 'review' | 'chooseOption' | 'upload' | 'emit';
 
 // @public
 export function addBatchToPage(page: Page): Page & {
@@ -131,6 +131,13 @@ export class AudioOutput {
     start(): Promise<void>;
     stop(): Promise<CaptureResult>;
     teardown(): Promise<void>;
+}
+
+// @public
+export interface AwaitReplyOptions {
+    match?: string;
+    timeout?: number;
+    where?: Record<string, unknown>;
 }
 
 // @public
@@ -838,6 +845,53 @@ export interface ElementState {
     visible: boolean;
 }
 
+// @public
+export interface EmitRealm {
+    // (undocumented)
+    kind: EmitRealmKind;
+    label?: string;
+    sessionId?: string;
+}
+
+// @public
+export type EmitRealmKind = 'main' | 'frame' | 'worker';
+
+// @public
+export interface EmitReply {
+    latencyMs: number;
+    // (undocumented)
+    payload: string;
+}
+
+// @public
+export interface EmitResult {
+    candidates: SocketCandidate[];
+    delivered: boolean;
+    // (undocumented)
+    realm: EmitRealmKind;
+    reason?: 'dispatched-unconfirmed';
+    reply?: EmitReply;
+    socketUrl: string;
+}
+
+// @public
+export class EmitTargetError extends Error {
+    constructor(message: string, candidates: SocketCandidate[]);
+    // (undocumented)
+    readonly candidates: SocketCandidate[];
+}
+
+// @public
+export function emitWsMessage(cdp: CDPClient, realms: EmitRealm[], payload: string, options?: EmitWsOptions): Promise<EmitResult>;
+
+// @public (undocumented)
+export interface EmitWsOptions {
+    awaitReply?: AwaitReplyOptions;
+    base64?: boolean;
+    confirmTimeout?: number;
+    match?: string;
+}
+
 // @public (undocumented)
 export interface EmulationState {
     // (undocumented)
@@ -1055,6 +1109,9 @@ export interface KeyValuePair {
     value: string;
 }
 
+// @public
+export function listSockets(cdp: CDPClient, realms: EmitRealm[]): Promise<SocketCandidate[]>;
+
 // @public (undocumented)
 export interface MatchedCondition {
     // (undocumented)
@@ -1150,6 +1207,7 @@ export class Page {
     disableInterception(): Promise<void>;
     dispose(): void;
     elementState(selector: string): Promise<ElementState>;
+    emitMessage(payload: string, options?: EmitWsOptions): Promise<EmitResult>;
     emulate(device: DeviceDescriptor): Promise<void>;
     evaluate<T = unknown, Args extends unknown[] = unknown[]>(expression: string | ((...args: Args) => T), ...args: Args): Promise<T>;
     exportRefMap(): Record<string, number>;
@@ -1192,6 +1250,7 @@ export class Page {
     importRefMap(refMap: Record<string, number>): void;
     init(): Promise<void>;
     intercept(pattern: string | RequestPattern, handler: RequestHandler): Promise<() => void>;
+    listMessageTargets(): Promise<SocketCandidate[]>;
     locateSelectorFrame(selector: string): Promise<'main' | 'iframe' | 'none'>;
     // (undocumented)
     markLastActionNavigationObserved(): void;
@@ -1856,6 +1915,16 @@ export interface SnapshotOptions {
     roles?: string[];
 }
 
+// @public
+export interface SocketCandidate {
+    readyState: number;
+    // (undocumented)
+    realm: EmitRealmKind;
+    realmLabel?: string;
+    // (undocumented)
+    url: string;
+}
+
 // @public (undocumented)
 export interface StaleErrorClassification {
     // (undocumented)
@@ -1898,8 +1967,15 @@ export interface Step {
     amount?: number;
     anchor?: string;
     any?: ReadyCondition[];
+    awaitReply?: {
+        match?: string;
+        where?: Record<string, unknown>;
+        timeout?: number;
+    };
     background?: boolean;
+    base64?: boolean;
     blur?: boolean;
+    channel?: 'ws';
     checked?: boolean;
     combo?: string;
     dangerous?: boolean;
@@ -1930,6 +2006,7 @@ export interface Step {
     name?: string;
     option?: string | string[];
     optional?: boolean;
+    payload?: string | Record<string, unknown>;
     // (undocumented)
     pollInterval?: number;
     // (undocumented)
@@ -2416,9 +2493,9 @@ export interface WorkflowSummary {
 // Warnings were encountered during analysis:
 //
 // dist/index.d.ts:361:5 - (ae-forgotten-export) The symbol "CanonicalTraceEvent" needs to be exported by the entry point index.d.ts
-// dist/page-DtL83d0U.d.ts:1025:9 - (ae-forgotten-export) The symbol "CoveringElement" needs to be exported by the entry point index.d.ts
-// dist/page-DtL83d0U.d.ts:1026:9 - (ae-forgotten-export) The symbol "HitElement" needs to be exported by the entry point index.d.ts
-// dist/page-DtL83d0U.d.ts:1027:9 - (ae-forgotten-export) The symbol "PointerEventsDiagnosis" needs to be exported by the entry point index.d.ts
+// dist/page-C00rTmiM.d.ts:1025:9 - (ae-forgotten-export) The symbol "CoveringElement" needs to be exported by the entry point index.d.ts
+// dist/page-C00rTmiM.d.ts:1026:9 - (ae-forgotten-export) The symbol "HitElement" needs to be exported by the entry point index.d.ts
+// dist/page-C00rTmiM.d.ts:1027:9 - (ae-forgotten-export) The symbol "PointerEventsDiagnosis" needs to be exported by the entry point index.d.ts
 // dist/types-D2pJQpWs.d.ts:67:9 - (ae-forgotten-export) The symbol "LocalBrowserCandidate" needs to be exported by the entry point index.d.ts
 // dist/types-D2pJQpWs.d.ts:68:9 - (ae-forgotten-export) The symbol "LocalDiscoveryFailure" needs to be exported by the entry point index.d.ts
 

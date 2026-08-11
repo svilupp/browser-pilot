@@ -164,6 +164,22 @@ ASSERTIONS
   {"action":"assertValue","selector":"#email","expect":"user@example.com"}
     Assertion steps verify state inline inside a batch workflow.
 
+MESSAGE INJECTION
+  {"action":"emit","payload":{"type":"ping"}}
+    Send a message on a WebSocket the page already owns.
+
+  {"action":"emit","payload":{"type":"ping"},"match":"*realtime*"}
+    Select the socket by URL. Required when several sockets are open - emit
+    fails with the candidate list rather than guessing.
+
+  {"action":"emit","payload":{"type":"ping"},
+   "awaitReply":{"where":{"type":"pong"},"timeout":5000}}
+    Wait for a correlated reply; the step fails if none arrives.
+
+  Emits are at_most_once and "retry" is rejected: a re-sent frame duplicates a
+  server-side action. A send on a closed socket is silently discarded by the
+  browser, so delivery is confirmed against the frame leaving the wire.
+
 EXECUTION RECORDING
   Replay with a screenshot trail:
     bp exec --record --file workflow.json

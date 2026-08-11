@@ -36,6 +36,14 @@ import { ActionDispatch } from './action-dispatch.ts';
 import { ActionabilityError, ensureActionable } from './actionability.ts';
 import { computeDelta, type DeltaResult, extractPageState, type PageState } from './delta.ts';
 import { type DiagnoseOptions, type DiagnoseResult, diagnoseElement } from './diagnose.ts';
+import {
+  type EmitRealm,
+  type EmitResult,
+  type EmitWsOptions,
+  emitWsMessage,
+  listSockets,
+  type SocketCandidate,
+} from './emit.ts';
 import { buildFingerprintMap, fingerprintSimilarity, recoverStaleRef } from './fingerprint.ts';
 import { generateHints } from './hint-generator.ts';
 import {
@@ -359,6 +367,8 @@ export class Page {
    * the live-session set before use (stale ones are dropped).
    */
   private oopifFrames = new Map<string, { sessionId: string; targetId: string; url: string }>();
+  /** Worker targetId → flat session id, so emit reuses sessions instead of re-attaching. */
+  private workerEmitSessions = new Map<string, string>();
   /** Guards against wiring OOPIF auto-attach more than once. */
   private oopifAutoAttachInstalled = false;
   /**
@@ -4484,6 +4494,70 @@ export class Page {
       this.text(),
     ]);
     return extractReview(url, title, snapshot, forms, text);
+  }
+
+  // ============ Emit ============
+
+  /**
+   * Collect every CDP session belonging to this page that may own a WebSocket:
+   * the page itself, its attached OOPIF sessions, and its dedicated workers.
+   * Same-origin frames are found by the sweep itself, which walks `window`.
+   */
+  private async collectEmitRealms(): Promise<EmitRealm[]> {
+    const realms: EmitRealm[] = [{ kind: 'main', label: 'main' }];
+
+    for (const record of this.oopifFrames.values()) {
+      realms.push({ kind: 'frame', sessionId: record.sessionId, label: `oopif:${record.url}` });
+    }
+
+    try {
+      const { targetInfos } = await this.cdp.send<{
+        targetInfos: Array<{ targetId: string; type: string; url: string; parentId?: string }>;
+      }>('Target.getTargets');
+
+      for (const info of targetInfos) {
+        if (info.type !== 'worker' || info.parentId !== this._targetId) continue;
+
+        // Reuse an existing session rather than attaching again on every emit.
+        const cached = this.workerEmitSessions.get(info.targetId);
+        if (cached && this.cdp.hasSession(cached)) {
+          realms.push({ kind: 'worker', sessionId: cached, label: `worker:${info.url}` });
+          continue;
+        }
+
+        const attached = await this.cdp.send<{ sessionId: string }>('Target.attachToTarget', {
+          targetId: info.targetId,
+          flatten: true,
+        });
+        this.workerEmitSessions.set(info.targetId, attached.sessionId);
+        realms.push({
+          kind: 'worker',
+          sessionId: attached.sessionId,
+          label: `worker:${info.url}`,
+        });
+      }
+    } catch {
+      // Workers are best-effort: a page without them is the common case.
+    }
+
+    return realms;
+  }
+
+  /**
+   * List every live WebSocket this page can reach, across all realms.
+   * Sends nothing - this is the dry run for {@link Page.emitMessage}.
+   */
+  async listMessageTargets(): Promise<SocketCandidate[]> {
+    return listSockets(this.cdp, await this.collectEmitRealms());
+  }
+
+  /**
+   * Send a message on a WebSocket the page itself opened, so it travels the
+   * app's real connection. Never retried automatically: a dispatched frame is
+   * an irreversible side effect on the server.
+   */
+  async emitMessage(payload: string, options?: EmitWsOptions): Promise<EmitResult> {
+    return emitWsMessage(this.cdp, await this.collectEmitRealms(), payload, options);
   }
 
   // ============ Batch Execution ============

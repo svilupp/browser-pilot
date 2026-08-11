@@ -131,6 +131,7 @@ type FieldType =
   | 'boolean'
   | 'boolean|auto'
   | 'object'
+  | 'string|object'
   | 'array';
 
 interface FieldRule {
@@ -390,6 +391,15 @@ const ACTION_RULES: Record<ActionType, ActionRule> = {
     },
     optional: {},
   },
+  emit: {
+    required: { payload: { type: 'string|object' } },
+    optional: {
+      channel: { type: 'string', enum: ['ws'] },
+      match: { type: 'string' },
+      base64: { type: 'boolean' },
+      awaitReply: { type: 'object' },
+    },
+  },
 };
 
 const VALID_ACTIONS = Object.keys(ACTION_RULES) as ActionType[];
@@ -456,6 +466,10 @@ const KNOWN_STEP_FIELDS = new Set([
   'enabled',
   'targetCount',
   'transition',
+  'channel',
+  'payload',
+  'base64',
+  'awaitReply',
 ]);
 
 // --- Action resolution ---
@@ -547,6 +561,12 @@ function checkFieldType(value: unknown, rule: FieldRule): string | null {
     case 'object':
       if (!value || typeof value !== 'object' || Array.isArray(value)) {
         return `expected object, got ${Array.isArray(value) ? 'array' : typeof value}`;
+      }
+      return null;
+    case 'string|object':
+      if (typeof value === 'string') return null;
+      if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        return `expected string or object, got ${Array.isArray(value) ? 'array' : typeof value}`;
       }
       return null;
     case 'array':
@@ -709,6 +729,15 @@ export function validateSteps(steps: unknown[]): ValidationResult {
           stepIndex: i,
           field: 'retry',
           message: `"retry" expected number, got ${typeof obj['retry']}.`,
+        });
+      } else if (obj['action'] === 'emit' && obj['retry'] > 0) {
+        // An emitted frame is an at_most_once side effect on someone's server.
+        // Rejecting the field is safer than silently ignoring it.
+        errors.push({
+          stepIndex: i,
+          field: 'retry',
+          message:
+            '"retry" is not allowed on emit: a re-sent frame duplicates a server-side action. Handle failure explicitly instead.',
         });
       }
     }

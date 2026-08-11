@@ -142,7 +142,8 @@ export type ActionType =
   | 'delta'
   | 'review'
   | 'chooseOption'
-  | 'upload';
+  | 'upload'
+  | 'emit';
 
 export interface Step {
   /** Action type */
@@ -207,6 +208,25 @@ export interface Step {
 
   /** Structured matcher for trace-backed waits */
   where?: Record<string, unknown>;
+
+  /** emit: transport to inject on (default 'ws') */
+  channel?: 'ws';
+
+  /** emit: message body. Objects are JSON-serialized before sending. */
+  payload?: string | Record<string, unknown>;
+
+  /** emit: payload is base64 and should be sent as a binary frame */
+  base64?: boolean;
+
+  /** emit: wait for a correlated reply frame after dispatch */
+  awaitReply?: {
+    /** Glob matched against the reply payload */
+    match?: string;
+    /** Dot-path field equality against the parsed JSON reply */
+    where?: Record<string, unknown>;
+    /** Milliseconds to wait (default 10000) */
+    timeout?: number;
+  };
 
   /** Scroll coordinates */
   x?: number;

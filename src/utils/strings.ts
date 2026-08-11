@@ -17,5 +17,5 @@ export function formatConsoleArg(entry: Record<string, unknown>): string {
 export function globToRegex(pattern: string): RegExp {
   const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&');
   const withWildcards = escaped.replace(/\*/g, '.*');
-  return new RegExp(`^${withWildcards}$`);
+  return new RegExp(`^${withWildcards}$`, 's');
 }

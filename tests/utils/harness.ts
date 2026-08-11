@@ -89,11 +89,20 @@ export async function createTestHarness(
   options: CreateTestHarnessOptions = {}
 ): Promise<TestHarness> {
   // 1. Start fixture server
-  const server = Bun.serve({
+  const server = Bun.serve<{ name: string }, never>({
     port: 0, // Random available port
-    async fetch(req) {
+    async fetch(req, srv) {
       const url = new URL(req.url);
       let pathname = url.pathname;
+
+      // WebSocket echo endpoint for emit/listen fixtures. The echo carries the
+      // socket's name so a test can prove WHICH socket a frame went out on.
+      if (pathname === '/ws-echo') {
+        if (srv.upgrade(req, { data: { name: url.searchParams.get('name') ?? 'default' } })) {
+          return undefined as unknown as Response;
+        }
+        return new Response('Upgrade failed', { status: 400 });
+      }
 
       // Default to index.html for directories
       if (pathname.endsWith('/')) {
@@ -116,6 +125,16 @@ export async function createTestHarness(
       }
 
       return new Response('Not Found', { status: 404 });
+    },
+    websocket: {
+      message(ws, message) {
+        const { name } = ws.data;
+        if (typeof message === 'string') {
+          ws.send(JSON.stringify({ from: name, echo: message }));
+        } else {
+          ws.send(JSON.stringify({ from: name, binaryBytes: message.byteLength }));
+        }
+      },
     },
   });
 

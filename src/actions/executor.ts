@@ -309,6 +309,7 @@ function defaultActionEffect(action: ActionType): ActionEffect {
     case 'press':
     case 'shortcut':
     case 'evaluate':
+    case 'emit':
       return 'at_most_once';
     default:
       return 'idempotent';
@@ -1472,6 +1473,32 @@ export class BatchExecutor {
         }
         const message = await this.waitForWsMessage(step.match, step.where, timeout);
         return { value: message };
+      }
+
+      case 'emit': {
+        if (step.payload === undefined) {
+          throw new Error('emit requires payload');
+        }
+        const channel = step.channel ?? 'ws';
+        if (channel !== 'ws') {
+          throw new Error(`emit supports channel "ws", got "${channel}"`);
+        }
+        const body = typeof step.payload === 'string' ? step.payload : JSON.stringify(step.payload);
+
+        const result = await this.page.emitMessage(body, {
+          ...(typeof step.match === 'string' ? { match: step.match } : {}),
+          ...(step.base64 ? { base64: true } : {}),
+          ...(step.awaitReply ? { awaitReply: { timeout, ...step.awaitReply } } : {}),
+        });
+
+        // A requested reply that never arrived is a failed step, not a quiet
+        // success - the point of awaitReply is evidence the server acted.
+        if (step.awaitReply && !result.reply) {
+          throw new Error(
+            `emit sent on ${result.socketUrl} but no matching reply arrived within ${step.awaitReply.timeout ?? timeout}ms`
+          );
+        }
+        return { value: result };
       }
 
       case 'assertNoConsoleErrors': {

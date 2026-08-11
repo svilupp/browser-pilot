@@ -35,6 +35,7 @@ Use `bp --help` to route a task by job and `bp --version` to check the CLI build
 | Act in the browser | `exec`, `run` |
 | Capture a human workflow | `record` |
 | Analyze behavior over time | `trace` |
+| Inject protocol traffic | `emit` |
 | Exercise voice and media | `audio` |
 | Change browser conditions | `env` |
 
@@ -116,6 +117,26 @@ For proof while replaying known steps:
 bp connect --name validation --record
 bp exec -s validation -f ./artifacts/demo.workflow.json
 ```
+
+## Drive the protocol with emit
+
+When the UI cannot produce the message you need, send a frame on a WebSocket the page already
+owns with `bp emit ws`. It travels the app's real connection, so it carries real headers, cookies,
+and session tokens.
+
+```bash
+bp emit ws --list -s mysession
+# OPEN       wss://worker-uat....workers.dev/session/...  [main]
+bp emit ws '{"type":"client.response.text","content":"show me black shirts"}' \
+  --match 'wss://worker-uat*' \
+  --await-match '*search_results_surfaced*' --await-timeout 30000 -s mysession
+# delivered: <socketUrl>; reply correlates to the injected turn, UI renders 12 products
+```
+
+Before injecting, capture one real client-to-server frame with `bp trace`/`bp listen` to confirm
+the message type the UI actually sends - a similarly named type can be a server-to-client echo
+that is silently ignored if you send it instead. Prefer `--await` on a specific field or a narrow
+`--await-match` glob over `'*'`, which also matches heartbeat frames on chatty sockets.
 
 ## Iframes and tabs
 
