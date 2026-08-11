@@ -1,8 +1,7 @@
 /**
  * Unit tests for emit (message injection) against a mocked CDP surface.
  *
- * The behaviours pinned here come from learning tests against real Chrome
- * (see docs/research/emit-implementation-plan.md):
+ * The behaviours pinned here come from learning tests against real Chrome:
  *   - closed sockets stay enumerable and swallow sends silently
  *   - sockets live in exactly one realm, so sweeps must cover all of them
  *   - delivery is only proven by Network.webSocketFrameSent
