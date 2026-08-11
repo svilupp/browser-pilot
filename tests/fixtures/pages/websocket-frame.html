@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>WebSocket Fixture Frame</title>
+</head>
+<body>
+  <p>same-origin frame</p>
+  <script>
+    const socket = new WebSocket(`ws://${location.host}/ws-echo?name=frame`);
+    socket.onmessage = (event) => parent.postMessage(`frame:${event.data}`, '*');
+    socket.onopen = () => parent.postMessage('frame:open', '*');
+  </script>
+</body>
+</html>

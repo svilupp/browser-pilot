@@ -25,6 +25,18 @@ export {
   diagnoseElement,
 } from './diagnose.ts';
 export {
+  type AwaitReplyOptions,
+  type EmitRealm,
+  type EmitRealmKind,
+  type EmitReply,
+  type EmitResult,
+  EmitTargetError,
+  type EmitWsOptions,
+  emitWsMessage,
+  listSockets,
+  type SocketCandidate,
+} from './emit.ts';
+export {
   buildFingerprintMap,
   createFingerprint,
   fingerprintKey,

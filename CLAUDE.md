@@ -154,6 +154,8 @@ Complex patterns (custom dropdowns, multi-step forms) are composed from primitiv
 | Target pinning | `src/browser/target-pin.ts` |
 | Workflow summaries | `src/trace/workflow-summary.ts` |
 | CLI review command | `src/cli/commands/review.ts` |
+| Message injection (emit) | `src/browser/emit.ts` |
+| CLI emit command | `src/cli/commands/emit.ts` |
 
 ### Lazy Session Attach (CLI)
 `bp exec` and `bp eval` try the daemon fast-path first (Unix socket), then fall back to direct WebSocket. Stale daemons are auto-cleaned. Implementation: `src/cli/attach.ts`.
@@ -188,11 +190,32 @@ The CLI now includes lightweight page-inspection commands in addition to `snapsh
 - `bp targets`: list browser tabs/targets with URLs and IDs
 - `bp review`: structured business state with headings, forms, alerts, tables, key-values, and status labels
 - `bp connect --new-tab [--page-url <url>]`: create and attach to a fresh tab
+- `bp emit ws <payload>`: send a message on a WebSocket the page already owns (see Message Injection)
 
 Snapshot text output now uses `ref:e12` notation, which is also the selector syntax agents should reuse in later commands. Refs are cached per session+URL after a snapshot.
 
 ### Exec Recording
 `bp exec --record` writes a lightweight screenshot trail for the latest replay into the session directory (or `--record-dir` when provided): `recording.json` plus `screenshots/`. `bp connect --record` enables session-level recording for all subsequent exec calls. Frames accumulate across exec calls. Session-level settings are stored in `session.metadata.record`. Sensitive field values are redacted based on the field's actual input settings (`password`, `hidden`, `one-time-code`, `cc-number`, etc.). `bp clean --max-size 500MB` trims old sessions by total disk usage and stops attached daemons before deletion.
+
+### Message Injection (emit)
+`bp emit ws <payload>` / `page.emitMessage()` / `{ action: 'emit' }` send a frame on a WebSocket the
+page itself opened, so it travels the app's real connection. The write-side counterpart to `bp listen`.
+
+Sockets are located by sweeping the JS heap (`Runtime.queryObjects`) rather than by patching
+`WebSocket.prototype.send` — patching misses sockets created before injection and is bypassed
+entirely by apps that bind `send` at construction. No reload is needed, so the session under test
+survives. Non-obvious constraints, all verified against Chrome:
+- `queryObjects` searches the heap of the context that **owns the prototype object id**. A frame's
+  prototype must come from `DOM.resolveNode` on its own contentDocument, not from `window[0]`.
+- Frames are enumerated via `Page.getFrameTree`, never from `executionContextCreated` history —
+  Chrome replays those events only on a connection's first `Runtime.enable`, so the long-lived
+  daemon connection would otherwise miss every frame on an already-loaded page.
+- `send()` on a CLOSED socket does not throw; the browser discards the data. Only `readyState === 1`
+  is targeted, re-checked inside the page atomically with the send, and delivery is confirmed
+  against `Network.webSocketFrameSent`.
+- Ambiguity is an error: several open sockets and no `--match` fails with the candidate list.
+- `emit` is `at_most_once`; `retry` on an emit step is rejected by validation.
+- Implementation: `src/browser/emit.ts`, `src/cli/commands/emit.ts`
 
 ## Audio I/O Pattern
 

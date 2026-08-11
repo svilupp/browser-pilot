@@ -11,6 +11,7 @@ import { closeCommand } from './commands/close.ts';
 import { connectCommand } from './commands/connect.ts';
 import { daemonCommand } from './commands/daemon.ts';
 import { diagnoseCommand } from './commands/diagnose.ts';
+import { emitCommand } from './commands/emit.ts';
 import { envCommand } from './commands/env.ts';
 import { evalCommand } from './commands/eval.ts';
 import { execCommand } from './commands/exec.ts';
@@ -81,6 +82,7 @@ Golden paths:
   4. Debug a realtime or voice session
      bp trace start -s dev
      bp trace summary -s dev --view ws
+     bp emit ws '{"type":"ping"}' --await 'type=pong' -s dev
      bp audio check -s dev
      bp trace summary -s dev --view voice
 
@@ -330,6 +332,10 @@ async function main(): Promise<void> {
       case 'listen':
         // Backward compatibility alias: `listen` → `trace tail`
         await traceCommand(['tail', ...remaining], options);
+        break;
+
+      case 'emit':
+        await emitCommand(remaining, options);
         break;
 
       case 'daemon':
