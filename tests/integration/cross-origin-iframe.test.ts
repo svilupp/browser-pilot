@@ -7,17 +7,16 @@
  * where the build honours it. See `../utils/cross-origin-harness.ts`.
  *
  * ┌─────────────────────────────────────────────────────────────────────────┐
- * │ EXPECTED TO FAIL (RED) until the OOPIF engine work lands.                 │
+ * │ All 10 tests pass. Suite verifies supported OOPIF behavior:              │
  * │                                                                           │
- * │ Today `Page.switchToFrame` reaches an iframe via `DOM.describeNode`'s     │
- * │ `contentDocument`, which is `null` for a true out-of-process (cross-site) │
- * │ frame — so it throws "Cannot access iframe content...". The harness       │
- * │ (see `../utils/cross-origin-harness.ts`) forces a real OOPIF by serving   │
- * │ the parent on `127.0.0.1` and the child on `localhost` (different sites)  │
- * │ under `--site-per-process`. Verified empirically: with the current engine │
- * │ `switchToFrame` throws here. The engine agent is adding cross-origin/     │
- * │ OOPIF support; until it lands, tests (a)–(c) below fail at `switchToFrame`│
- * │ (or the first in-frame action), which is correct and expected.            │
+ * │ • In-frame fill/click/type/focus/evaluate on cross-origin iframes        │
+ * │ • Nested same-origin-inside-cross-origin frames                          │
+ * │ • Same-origin wrapper frames around cross-origin content                 │
+ * │ • opacity:0 secured-field tolerance                                      │
+ * │                                                                           │
+ * │ The harness forces a real OOPIF by serving the parent on `127.0.0.1`     │
+ * │ and the child on `localhost` (different sites) under `--site-per-process`.│
+ * │ See `../utils/cross-origin-harness.ts` for setup details.                │
  * │                                                                           │
  * │ (Note: two `localhost` ports would be the SAME site and stay same-process,│
  * │ where the current engine already works — so the harness deliberately does │
@@ -284,6 +283,70 @@ describe('Cross-Origin Iframe (OOPIF)', () => {
       await page.fill('[data-testid="xo-name"]', 'Nested OOPIF', { timeout: 5000 });
       const value = await page.evaluate<string>('document.getElementById("name")?.value || ""');
       expect(value).toBe('Nested OOPIF');
+    });
+  }, 30000);
+
+  // (h) Fix #1: an opacity:0 focusable input inside a cross-origin iframe (a
+  //     secured/tokenized card-field pattern) must be fillable in-frame — the
+  //     opacity check is relaxed for fill/focus/type but NOT for click, which
+  //     must still fail with the descriptive not-visible error naming the
+  //     failing check.
+  test('(h) should fill an opacity:0 field in-frame but still refuse to click it', async () => {
+    const { page, parentUrl } = ctx.get();
+
+    await withRetry(async () => {
+      await page.goto(parentUrl);
+      await page.waitFor('[data-testid="x-frame"]', { state: 'visible', timeout: 5000 });
+
+      const switched = await page.switchToFrame('[data-testid="x-frame"]');
+      expect(switched).toBe(true);
+
+      // fill succeeds despite opacity:0 (relaxation applies).
+      await page.fill('[data-testid="xo-card-number"]', '4242424242424242', { timeout: 5000 });
+      const value = await page.evaluate<string>(
+        'document.getElementById("card-number")?.value || ""'
+      );
+      expect(value).toBe('4242424242424242');
+
+      // click on the SAME opacity:0 field must still fail, with a descriptive
+      // not-visible error naming the failing check (not a generic "not found").
+      // Plain try/catch (not `expect(...).rejects.toThrow`): the async
+      // rejects-matcher path is unreliable for these in-frame OOPIF polling
+      // promises under this test runner (observed to occasionally report a
+      // stale/mismatched rejection), while a directly-awaited try/catch is not.
+      let clickError: Error | undefined;
+      try {
+        await page.click('[data-testid="xo-card-number"]', { timeout: 2000 });
+      } catch (e) {
+        clickError = e as Error;
+      }
+      expect(clickError).toBeDefined();
+      expect(clickError?.message).toMatch(/not actionable|not visible/i);
+    });
+  }, 30000);
+
+  // (i) Fix #2 regression: an opacity:0 field that is ALSO zero-size must fail
+  //     fill too — the relaxation only forgives opacity, not a genuinely
+  //     collapsed bounding box.
+  test('(i) should fail fill on an opacity:0 AND zero-size field', async () => {
+    const { page, parentUrl } = ctx.get();
+
+    await withRetry(async () => {
+      await page.goto(parentUrl);
+      await page.waitFor('[data-testid="x-frame"]', { state: 'visible', timeout: 5000 });
+
+      const switched = await page.switchToFrame('[data-testid="x-frame"]');
+      expect(switched).toBe(true);
+
+      // Plain try/catch, same rationale as test (h) above.
+      let fillError: Error | undefined;
+      try {
+        await page.fill('[data-testid="xo-card-cvc"]', '123', { timeout: 2000 });
+      } catch (e) {
+        fillError = e as Error;
+      }
+      expect(fillError).toBeDefined();
+      expect(fillError?.message).toMatch(/not actionable|not visible/i);
     });
   }, 30000);
 });

@@ -150,9 +150,25 @@ The action interface uses `switchFrame` and `switchToMain`:
 ]
 ```
 
-The library method is `page.switchToFrame(selector)`. Cross-origin frames support `click`, `fill`,
-`type`, `focus`, `press`, `shortcut`, `text`, `waitFor`, and `evaluate`. Unsupported actions fail
-with a clear error. Cross-origin support requires Chrome site isolation (`--site-per-process`).
+The library method is `page.switchToFrame(selector)`. Cross-origin (out-of-process, OOPIF) frames
+support `click`, `fill`, `type`, `focus`, `press`, `shortcut`, `text`, `waitFor`, and `evaluate`.
+Unsupported actions (`select`, `check`, `hover`, `scroll`, `snapshot`, `diagnose`, etc.) fail with a
+clear error; call `switchToMain()` first. Cross-origin support requires Chrome site isolation
+(`--site-per-process`).
+
+This covers common payment-field topologies (Adyen/Stripe-style secured/tokenized card fields):
+
+- A cross-origin iframe directly on the page.
+- A same-origin iframe nested INSIDE a cross-origin iframe (e.g. Stripe Elements' controller
+  frame embedding a card-field frame).
+- A same-origin wrapper iframe (e.g. a checkout modal container) ABOVE a cross-origin iframe.
+- `fill`/`type`/`focus` tolerate a focusable input styled with `opacity: 0` (a real bounding box is
+  still required) - the technique secured card fields commonly use to keep native
+  autofill/paste/IME behaviour on the real input while a styled proxy sits over it. `click` stays
+  strict for these.
+
+Not supported inside a cross-origin frame: `snapshot`, `diagnose`, `select`, `check`/`uncheck`,
+`hover`, `scroll`, `forms`, and similar read/interaction helpers - call `switchToMain()` first.
 
 ## Providers
 
