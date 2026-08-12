@@ -96,8 +96,18 @@ export interface ActionOptions {
 export interface FillOptions extends ActionOptions {
   /** Trigger blur after filling (useful for React/Vue frameworks that update on blur) */
   blur?: boolean;
-  /** Verify value stuck after fill; falls back to char-by-char typing if not (default: true) */
-  verify?: boolean;
+  /**
+   * Verify value stuck after fill; falls back to char-by-char typing if not.
+   * - `true` / `"exact"` (default): exact string comparison.
+   * - `false`: skip verification entirely.
+   * - `"normalized"`: tolerate auto-formatting (e.g. phone/card masks, NBSP
+   *   formatters) by comparing with unicode-whitespace collapsed and, failing
+   *   that, whitespace stripped entirely. Still case-sensitive; punctuation is
+   *   not stripped. The char-by-char fallback only runs if the normalized
+   *   comparison also fails, to avoid retyping into a field that merely
+   *   reformatted the value.
+   */
+  verify?: boolean | 'exact' | 'normalized';
 }
 
 export interface TypeOptions extends ActionOptions {

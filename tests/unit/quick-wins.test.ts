@@ -400,6 +400,22 @@ describe('Iframe Actions', () => {
     expect(page.calls[3]?.method).toBe('click');
   });
 
+  test('should pass through fill verify option', async () => {
+    const page = createMockPage();
+    const executor = new BatchExecutor(page as unknown as Page);
+
+    const result = await executor.execute([
+      { action: 'fill', selector: '#card-number', value: '4242424242424242', verify: 'normalized' },
+      { action: 'fill', selector: '#name', value: 'Jane' },
+    ] satisfies Step[]);
+
+    expect(result.success).toBe(true);
+    expect(page.calls[0]?.method).toBe('fill');
+    expect((page.calls[0]?.args[2] as { verify?: unknown })?.verify).toBe('normalized');
+    // Default (no verify set) should pass through as undefined, leaving Page.fill's own default.
+    expect((page.calls[1]?.args[2] as { verify?: unknown })?.verify).toBeUndefined();
+  });
+
   test('should require selector for switchFrame', async () => {
     const page = createMockPage();
     const executor = new BatchExecutor(page as unknown as Page);

@@ -216,29 +216,53 @@ describe('Cross-Origin Iframe (OOPIF)', () => {
   // `bun test` runner (the identical steps run cleanly standalone), and the
   // nested-OOPIF descent itself is an acknowledged out-of-scope follow-up.
 
-  // (d) STRETCH — nested OOPIF (Stripe-Elements-like): the parent embeds a
-  //     controller frame on origin B, which itself embeds the field form.
-  //     Reaching the field means descending two frame levels, the second
-  //     inside an OOPIF. Skipped until basic OOPIF support (a–c) is solid.
-  //
-  // STILL SKIPPED — and the reason is a fixture/topology fact, not an engine gap.
-  //
-  // Recursive auto-attach IS implemented (the engine arms Target.setAutoAttach on
-  // every attached child session), so a frame that is genuinely cross-SITE inside
-  // an OOPIF would attach as its own grandchild session and descend fine. But in
-  // THIS fixture the controller frame and the field frame are both served from
-  // origin B (`%%CHILD_ORIGIN%%` === localhost:portB) — i.e. the SAME origin. Under
-  // `--site-per-process` Chrome isolates by site, so the same-site field frame stays
-  // in the controller's renderer and is NOT promoted to a separate OOPIF. Verified
-  // empirically: exactly two child sessions attach (x-frame + stripe-controller),
-  // and from the controller session `describeNode(stripe-field-frame).contentDocument`
-  // is PRESENT (reachable) — proving it is a same-origin child of the controller,
-  // not a nested OOPIF. Descending into it would need same-origin-iframe-inside-OOPIF
-  // support (contentDocument-subtree queries on the child session + per-child-session
-  // execution-context tracking for evaluate), which is outside the OOPIF child-session
-  // recipe and the checkout-fill subset this work targets. To exercise a TRUE nested
-  // OOPIF, the field frame's src would need a different site than the controller.
-  test.skip('(d) should fill a field in a nested OOPIF (stripe-like)', async () => {
+  // (g) Fix #3: a SAME-ORIGIN wrapper iframe (served by origin A, the same
+  //     origin as the top page — e.g. a modal/checkout-container) sits ABOVE
+  //     the cross-origin OOPIF field frame. switchToFrame must first descend
+  //     into the same-origin wrapper (the existing top-level same-origin path)
+  //     and THEN, from inside it, descend into the cross-origin OOPIF nested
+  //     inside that wrapper. This is the mirror image of fix #2 (same-origin
+  //     frame INSIDE an OOPIF) — here the same-origin frame is OUTSIDE/ABOVE.
+  test('(g) should descend through a same-origin wrapper into an OOPIF nested inside it', async () => {
+    const { page, parentUrl } = ctx.get();
+
+    await withRetry(async () => {
+      await page.goto(parentUrl);
+      await page.waitFor('[data-testid="wrapper-frame"]', { state: 'visible', timeout: 5000 });
+
+      // Level 1: the same-origin wrapper iframe (unchanged top-level path).
+      const level1 = await page.switchToFrame('[data-testid="wrapper-frame"]');
+      expect(level1).toBe(true);
+      expect(page.getCurrentFrame()).not.toBe(null);
+
+      // Level 2: the cross-origin OOPIF nested inside the wrapper.
+      await page.waitFor('[data-testid="wrapped-x-frame"]', { state: 'visible', timeout: 5000 });
+      const level2 = await page.switchToFrame('[data-testid="wrapped-x-frame"]');
+      expect(level2).toBe(true);
+
+      await page.fill('[data-testid="xo-name"]', 'Through Wrapper', { timeout: 5000 });
+      const value = await page.evaluate<string>('document.getElementById("name")?.value || ""');
+      expect(value).toBe('Through Wrapper');
+
+      // Round-trip back to the top document.
+      await page.switchToMain();
+      expect(page.getCurrentFrame()).toBe(null);
+    });
+  }, 30000);
+
+  // (d) Stripe-Elements-like nested topology: the parent embeds a controller
+  //     frame on origin B (an OOPIF), which itself embeds a SAME-ORIGIN field
+  //     frame (both served from `%%CHILD_ORIGIN%%`). Under `--site-per-process`
+  //     the same-site field frame stays in the controller's renderer and is
+  //     NOT promoted to its own OOPIF — it is reached via the same-origin
+  //     `contentDocument` path FROM the controller's own child session, with
+  //     its own execution context tracked per-frameId in
+  //     `oopifFrameExecutionContexts` (fix #2) so `evaluate()`/fill resolve
+  //     against the nested document instead of the controller's top document.
+  //     This is now supported: switching two frame levels deep (an OOPIF, then
+  //     a same-origin frame nested inside it) and filling the in-frame field
+  //     works end-to-end.
+  test('(d) should fill a field in a same-origin frame nested inside an OOPIF (stripe-like)', async () => {
     const { page, parentUrl } = ctx.get();
 
     await withRetry(async () => {

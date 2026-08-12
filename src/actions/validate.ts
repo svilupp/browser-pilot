@@ -130,6 +130,7 @@ type FieldType =
   | 'number'
   | 'boolean'
   | 'boolean|auto'
+  | 'boolean|verifyMode'
   | 'object'
   | 'string|object'
   | 'array';
@@ -162,6 +163,7 @@ const ACTION_RULES: Record<ActionType, ActionRule> = {
     required: { selector: { type: 'string|string[]' }, value: { type: 'string' } },
     optional: {
       blur: { type: 'boolean' },
+      verify: { type: 'boolean|verifyMode' },
     },
   },
   type: {
@@ -421,6 +423,7 @@ const KNOWN_STEP_FIELDS = new Set([
   'optional',
   'method',
   'blur',
+  'verify',
   'delay',
   'waitForNavigation',
   'waitUntil',
@@ -556,6 +559,11 @@ function checkFieldType(value: unknown, rule: FieldRule): string | null {
     case 'boolean|auto':
       if (typeof value !== 'boolean' && value !== 'auto') {
         return `expected boolean or "auto", got ${typeof value}`;
+      }
+      return null;
+    case 'boolean|verifyMode':
+      if (typeof value !== 'boolean' && value !== 'exact' && value !== 'normalized') {
+        return `expected boolean, "exact", or "normalized", got ${typeof value}`;
       }
       return null;
     case 'object':

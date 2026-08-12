@@ -91,6 +91,11 @@
       <textarea id="message" name="message" placeholder="Enter your message" rows="4"></textarea>
     </div>
 
+    <div class="form-group">
+      <label for="card-number">Card Number (auto-formatted)</label>
+      <input type="text" id="card-number" name="cardNumber" placeholder="Card number">
+    </div>
+
     <button type="submit" id="submit-btn">Submit Form</button>
   </form>
 
@@ -99,6 +104,14 @@
   <script>
     const form = document.getElementById('test-form');
     const result = document.getElementById('result');
+
+    // Simulate an auto-formatting input (e.g. credit-card grouping): strips
+    // non-digits and re-inserts a space every 4 digits as the user types.
+    const cardNumberInput = document.getElementById('card-number');
+    cardNumberInput.addEventListener('input', () => {
+      const digits = cardNumberInput.value.replace(/\D/g, '');
+      cardNumberInput.value = digits.replace(/(.{4})/g, '$1 ').trim();
+    });
 
     form.addEventListener('submit', (e) => {
       e.preventDefault();

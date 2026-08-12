@@ -26,7 +26,9 @@ import type {
 import { stringifyUnknown } from '../utils/json.ts';
 import {
   DEEP_QUERY_SCRIPT,
+  FOCUSABLE_INPUT_PREDICATE_SCRIPT,
   VISIBLE_PREDICATE_SCRIPT,
+  VISIBLE_REASON_PREDICATE_SCRIPT,
   waitForAnyElement,
   waitForNetworkIdle as waitForIdle,
   waitForNavigation as waitForNav,
@@ -44,6 +46,7 @@ import {
   listSockets,
   type SocketCandidate,
 } from './emit.ts';
+import { fillValuesMatchNormalized } from './fill-normalize.ts';
 import { buildFingerprintMap, fingerprintSimilarity, recoverStaleRef } from './fingerprint.ts';
 import { generateHints } from './hint-generator.ts';
 import {
@@ -360,6 +363,31 @@ export class Page {
    */
   private currentFrameSession: string | null = null;
   /**
+   * Fix #2: nodeId of the query ROOT to use within `currentFrameSession`, when
+   * the active frame is a SAME-ORIGIN iframe nested INSIDE an OOPIF (e.g. a
+   * real Stripe-Elements-style controller frame that itself embeds the card
+   * field form, both same-origin with each other but the controller is
+   * cross-origin from the top page). `null` = use the child session's own
+   * top-level document as the query root (the common, non-nested case).
+   * Cleared by `switchToMain`/`resetFrameState`/`dropOopifSession`.
+   */
+  private oopifFrameRootNodeId: number | null = null;
+  /**
+   * Fix #2: frameId of the same-origin nested iframe currently rooted onto
+   * (`oopifFrameRootNodeId`), if any. Used by `evaluate()` to look up that
+   * frame's OWN execution context in `oopifFrameExecutionContexts` instead of
+   * evaluating in the OOPIF's top document. `null` = not nested / use the
+   * child session's default context (unchanged behaviour).
+   */
+  private oopifFrameRootFrameId: string | null = null;
+  /**
+   * frameId → execution contextId for contexts created WITHIN an OOPIF child
+   * session (fix #2). Populated per attached iframe child session in
+   * `handleTargetAttached` via `onSessionEvent`, since these events carry the
+   * child session's own sessionId (not delivered to the page's pinned `on()`).
+   */
+  private oopifFrameExecutionContexts = new Map<string, number>();
+  /**
    * Registry of attached OOPIF child sessions, keyed by targetId. For an OOPIF
    * the target's `targetId` equals the iframe element's `frameId`, so this is
    * also the frameId→session map used by `switchToFrame`. Populated by the
@@ -367,6 +395,17 @@ export class Page {
    * the live-session set before use (stale ones are dropped).
    */
   private oopifFrames = new Map<string, { sessionId: string; targetId: string; url: string }>();
+  /**
+   * Per-child-session unsubscribers for the `onSessionEvent(sessionId,
+   * 'Runtime.executionContextCreated', ...)` handler registered in
+   * {@link handleTargetAttached}. Without storing these, every OOPIF child
+   * session attached over the page's lifetime would leak its listener on the
+   * shared connection forever. Also doubles as the "already registered for
+   * this session" guard, since `handleTargetAttached` can run for the same
+   * sessionId from both the live `Target.attachedToTarget` event AND the
+   * daemon-gap reconciliation path ({@link reconcileExistingOopifTargets}).
+   */
+  private oopifSessionUnsubscribers = new Map<string, () => void>();
   /** Worker targetId → flat session id, so emit reuses sessions instead of re-attaching. */
   private workerEmitSessions = new Map<string, string>();
   /** Guards against wiring OOPIF auto-attach more than once. */
@@ -686,6 +725,20 @@ export class Page {
           // a race when two pages init concurrently (BUG D).
           await this.cdp.setAutoAttach({ sessionId: this.cdp.sessionId });
           this.oopifAutoAttachInstalled = true;
+          // Daemon/shared-connection gap: on a long-lived (daemon) CDP
+          // connection, `Target.setAutoAttach` re-armed on a session that
+          // already has child targets attached does NOT re-emit
+          // `Target.attachedToTarget` for those already-attached children —
+          // Chrome only fires it for NEWLY attached/created targets. Without
+          // this reconciliation, a `bp` CLI process that attaches to a page
+          // via the daemon AFTER an OOPIF child already attached (e.g. the
+          // daemon kept the browser connection open across CLI invocations)
+          // would see an empty `oopifFrames` registry forever, even though
+          // the child session is live on the shared connection. Enumerate
+          // existing targets and register any iframe targets that belong to
+          // this page's own frame tree through the same
+          // `handleTargetAttached` path used for live attach events.
+          await this.reconcileExistingOopifTargets();
         } catch (e) {
           // Real client but auto-attach failed: OOPIF frames will be unreachable.
           // Surface it instead of silently degrading.
@@ -746,6 +799,62 @@ export class Page {
     }
     try {
       if (targetInfo.type === 'iframe') {
+        // Fix #2/#4: register the `Runtime.executionContextCreated` listener
+        // BEFORE awaiting `Runtime.enable` below. Enabling the Runtime domain can
+        // synchronously replay already-existing execution contexts as events;
+        // registering the listener only AFTER the `await` resolves would miss any
+        // context replayed during that call (event-ordering race). Guarded
+        // against double-registration: `handleTargetAttached` can run twice for
+        // the same sessionId (once via the live `Target.attachedToTarget` event,
+        // once via the daemon-gap reconciliation path), which would otherwise
+        // stack duplicate listeners.
+        if (
+          typeof this.cdp.onSessionEvent === 'function' &&
+          !this.oopifSessionUnsubscribers.has(sessionId)
+        ) {
+          // Fix #2: track execution contexts CREATED WITHIN this OOPIF child
+          // session, keyed by frameId. A same-origin iframe nested inside this
+          // OOPIF (e.g. a Stripe-Elements-style card-field iframe nested inside a
+          // same-origin "controller" iframe that is itself the OOPIF) shares this
+          // session/renderer but gets its OWN execution context, distinguishable
+          // via `auxData.frameId`. Without this, `evaluate()` while re-rooted onto
+          // that nested frame (`oopifFrameRootNodeId`) would silently run in the
+          // OOPIF's own top document instead — `document.querySelector` inside
+          // `evaluate()` would resolve against the WRONG document. `onSessionEvent`
+          // is used (not the page's pinned `on()`) because these events carry the
+          // CHILD session's sessionId, which the pinned view does not deliver.
+          const unsubscribeCreated = this.cdp.onSessionEvent(
+            sessionId,
+            'Runtime.executionContextCreated',
+            (params) => {
+              const context = (
+                params as { context: { id: number; auxData?: { frameId?: string } } }
+              ).context;
+              if (context.auxData?.frameId) {
+                this.oopifFrameExecutionContexts.set(context.auxData.frameId, context.id);
+              }
+            }
+          );
+          // Prune destroyed contexts (fix #4) so a stale contextId is never
+          // reused once the frame reloads/navigates and gets a fresh context.
+          const unsubscribeDestroyed = this.cdp.onSessionEvent(
+            sessionId,
+            'Runtime.executionContextDestroyed',
+            (params) => {
+              const contextId = (params as { executionContextId: number }).executionContextId;
+              for (const [frameId, ctxId] of this.oopifFrameExecutionContexts) {
+                if (ctxId === contextId) {
+                  this.oopifFrameExecutionContexts.delete(frameId);
+                  break;
+                }
+              }
+            }
+          );
+          this.oopifSessionUnsubscribers.set(sessionId, () => {
+            unsubscribeCreated();
+            unsubscribeDestroyed();
+          });
+        }
         await Promise.all([
           this.cdp.send('Page.enable', undefined, sessionId),
           this.cdp.send('DOM.enable', undefined, sessionId),
@@ -1327,18 +1436,27 @@ export class Page {
           }
 
           if (options.verify !== false) {
+            const verifyMode = options.verify === 'normalized' ? 'normalized' : 'exact';
             let actualValue = await this.readEditableValue(objectId);
+            let matches =
+              verifyMode === 'normalized'
+                ? fillValuesMatchNormalized(value, actualValue)
+                : actualValue === value;
 
-            if (actualValue !== value && !isSpecialInput) {
+            if (!matches && !isSpecialInput) {
               if (value === '') {
                 await this.clearEditableSelection(objectId, 'Backspace', dispatch);
               } else {
                 await this.typeEditableFallback(element.nodeId, objectId, value, dispatch);
               }
               actualValue = await this.readEditableValue(objectId);
+              matches =
+                verifyMode === 'normalized'
+                  ? fillValuesMatchNormalized(value, actualValue)
+                  : actualValue === value;
             }
 
-            if (actualValue !== value) {
+            if (!matches) {
               if (options.optional) return false;
               throw new Error(
                 `Fill value did not stick. Expected ${JSON.stringify(value)} but got ${JSON.stringify(actualValue)}.`
@@ -2166,10 +2284,47 @@ export class Page {
     const frameKey = Array.isArray(selector) ? selector[0]! : selector;
 
     // Nested descent: we are already inside an OOPIF child session, so the
-    // target <iframe> element lives in THAT session. Resolve its frameId there
-    // and descend into the (grand)child OOPIF.
+    // target <iframe> element lives in THAT session (rooted at
+    // `oopifFrameRootNodeId` if we already descended into a same-origin nested
+    // frame). Resolve it there and either (a) re-root onto it if it is a
+    // SAME-ORIGIN child of the current document (fix #2 — e.g. a real
+    // Stripe-Elements-style card-field iframe nested inside a same-origin
+    // "controller" iframe that is itself the cross-origin OOPIF), or (b)
+    // descend into its own (grand)child OOPIF session if it is ITSELF
+    // cross-origin.
     if (this.currentFrameSession) {
-      const frameId = await this.resolveFrameIdInSession(selector, this.currentFrameSession);
+      const sessionId = this.currentFrameSession;
+      const timeout = options.timeout ?? DEFAULT_TIMEOUT;
+      const nestedElement = await this.findElementInSession(selector, sessionId, timeout);
+      if (!nestedElement) {
+        if (options.optional) return false;
+        throw new ElementNotFoundError(selector);
+      }
+      const desc = await this.cdp
+        .send<{
+          node: { contentDocument?: { nodeId: number }; frameId?: string };
+        }>('DOM.describeNode', { objectId: nestedElement.objectId, depth: 1 }, sessionId)
+        .catch(
+          () =>
+            ({ node: {} }) as { node: { contentDocument?: { nodeId: number }; frameId?: string } }
+        );
+
+      // (a) SAME-ORIGIN nested frame (fix #2): its contentDocument is directly
+      // reachable from the PARENT OOPIF's own session — re-root subsequent
+      // in-frame queries onto it without leaving `currentFrameSession`.
+      if (desc.node.contentDocument?.nodeId !== undefined) {
+        this.oopifFrameRootNodeId = desc.node.contentDocument.nodeId;
+        // `node.frameId` on an <iframe> element is the frame it OWNS (its
+        // content frame), which is exactly the frameId execution contexts are
+        // tagged with via `auxData.frameId` — use it so `evaluate()` can find
+        // the nested frame's own context instead of the OOPIF's top one.
+        this.oopifFrameRootFrameId = desc.node.frameId ?? null;
+        this.currentFrame = frameKey;
+        this.refMap.clear();
+        return true;
+      }
+
+      const frameId = desc.node.frameId;
       if (!frameId) {
         if (options.optional) return false;
         throw new ElementNotFoundError(selector);
@@ -2178,17 +2333,17 @@ export class Page {
       // `currentFrameSession`, so we remain in the PARENT OOPIF. Do NOT silently
       // return false leaving the parent retargeted (M3): throw a clear error for
       // the non-optional case so the caller cannot mistake "still in parent" for
-      // "descended into child". The common cause is a same-origin iframe nested
-      // inside an OOPIF (e.g. real Stripe Elements), which stays in the parent
-      // renderer and never attaches as its own child session — unsupported.
+      // "descended into child".
       const entered = await this.enterOopifFrame(frameKey, frameId, options);
       if (!entered) {
         if (options.optional) return false;
         throw new Error(
-          `Cannot descend into nested frame "${frameKey}": no cross-origin child ` +
-            'session attached for it. A same-origin iframe nested inside a ' +
-            'cross-origin iframe is not yet supported (the active frame is left ' +
-            'unchanged at the parent). switchToMain() and restructure the flow.'
+          `Cannot descend into nested frame "${frameKey}": it is cross-origin from its ` +
+            'parent frame but no child debugging session attached for it within the ' +
+            `timeout (${Math.max(timeout, OOPIF_ATTACH_MIN_TIMEOUT_MS)}ms). It may still be ` +
+            'loading, or auto-attach may be unavailable for it. The active frame is ' +
+            'left unchanged at the parent; switchToMain() and restructure the flow if ' +
+            'this persists.'
         );
       }
       return true;
@@ -2397,6 +2552,8 @@ export class Page {
     this.brokenFrame = null;
     // Leave any OOPIF child frame: subsequent actions route to the top session.
     this.currentFrameSession = null;
+    this.oopifFrameRootNodeId = null;
+    this.oopifFrameRootFrameId = null;
     this.refMap.clear();
   }
 
@@ -2420,6 +2577,8 @@ export class Page {
     this.frameContexts.clear();
     this.brokenFrame = null;
     this.currentFrameSession = null;
+    this.oopifFrameRootNodeId = null;
+    this.oopifFrameRootFrameId = null;
     this.pruneOopifFrames();
   }
 
@@ -2447,6 +2606,14 @@ export class Page {
     for (const [key, record] of this.oopifFrames) {
       if (record.sessionId === sessionId) this.oopifFrames.delete(key);
     }
+    // Unsubscribe the per-session `Runtime.executionContextCreated` listener
+    // registered in `handleTargetAttached`, or it leaks on the shared
+    // connection for the lifetime of the underlying CDP client.
+    const unsubscribe = this.oopifSessionUnsubscribers.get(sessionId);
+    if (unsubscribe) {
+      unsubscribe();
+      this.oopifSessionUnsubscribers.delete(sessionId);
+    }
     if (this.currentFrameSession === sessionId) {
       // The active frame's session died mid-interaction. A partial reset that
       // only cleared `currentFrameSession` would leave `rootNodeId`,
@@ -2456,6 +2623,91 @@ export class Page {
       // Fall all the way back to the top-level document instead.
       this.rootNodeId = null;
       this.resetFrameState();
+    }
+  }
+
+  /**
+   * Reconcile the `oopifFrames` registry against targets that were ALREADY
+   * attached (flatten:true) on this shared CDP connection before this page
+   * armed `Target.setAutoAttach` (M4 daemon gap). Chrome only fires
+   * `Target.attachedToTarget` for targets attached AFTER auto-attach is armed
+   * (or newly created ones), so a daemon connection that kept an OOPIF child
+   * session alive across CLI invocations would otherwise never be discovered.
+   *
+   * Related to THIS page: we cross-reference `Target.getTargets()`' iframe
+   * targets against this page's own frame tree (`Page.getFrameTree`, which
+   * lists OOPIF child frames as nodes even though their document lives out of
+   * process) so we never claim another page's iframes. Best-effort: any
+   * failure degrades to "nothing reconciled" (same as today, before this fix).
+   */
+  private async reconcileExistingOopifTargets(): Promise<void> {
+    interface FrameTreeNode {
+      frame: { id: string };
+      childFrames?: FrameTreeNode[];
+    }
+    if (typeof this.cdp.attachToTarget !== 'function') return;
+    try {
+      const [targetsRes, frameTreeRes] = await Promise.all([
+        this.cdp.send<{
+          targetInfos: Array<{
+            targetId: string;
+            type: string;
+            url: string;
+            attached: boolean;
+          }>;
+        }>('Target.getTargets', undefined, this.cdp.sessionId),
+        this.cdp
+          .send<{ frameTree: FrameTreeNode }>('Page.getFrameTree', undefined, this.cdp.sessionId)
+          .catch(() => null),
+      ]);
+      if (!frameTreeRes) return;
+
+      const ownFrameIds = new Set<string>();
+      const collectFrameIds = (node: FrameTreeNode): void => {
+        ownFrameIds.add(node.frame.id);
+        for (const child of node.childFrames ?? []) collectFrameIds(child);
+      };
+      collectFrameIds(frameTreeRes.frameTree);
+
+      for (const info of targetsRes.targetInfos) {
+        if (info.type !== 'iframe') continue;
+        if (this.oopifFrames.has(info.targetId)) continue;
+        // A cross-origin child frame's target id equals its frame id (verified
+        // empirically elsewhere in this file); only claim ones in OUR tree.
+        if (!ownFrameIds.has(info.targetId)) continue;
+        try {
+          const sessionId = info.attached
+            ? await this.findExistingSessionForTarget(info.targetId)
+            : await this.cdp.attachToTarget(info.targetId);
+          if (!sessionId) continue;
+          await this.handleTargetAttached({
+            sessionId,
+            targetInfo: { type: info.type, url: info.url, targetId: info.targetId },
+            waitingForDebugger: false,
+            parentSessionId: this.cdp.sessionId,
+          });
+        } catch {
+          // Best-effort per-target; keep reconciling the rest.
+        }
+      }
+    } catch {
+      // Target.getTargets/getFrameTree unavailable (e.g. mocked CDP client in
+      // unit tests) — degrade silently, same as before this fix.
+    }
+  }
+
+  /**
+   * A target reported `attached: true` by `Target.getTargets` already has a
+   * live flat session somewhere on this connection, but `Target.getTargets`
+   * does not tell us its sessionId. Re-attaching (flatten:true) to an already
+   * attached target is a no-op from Chrome's perspective and returns the
+   * SAME session id, so this is safe to call even though it looks redundant.
+   */
+  private async findExistingSessionForTarget(targetId: string): Promise<string | undefined> {
+    try {
+      return await this.cdp.attachToTarget(targetId);
+    } catch {
+      return undefined;
     }
   }
 
@@ -2495,40 +2747,6 @@ export class Page {
   // frame's own CDP child session. Top-level / same-origin paths are untouched.
 
   /**
-   * Resolve the `frameId` of an <iframe>/<frame> element within a specific CDP
-   * session via the stable objectId path (Runtime.evaluate → DOM.describeNode
-   * {objectId}). For a real OOPIF the element's `frameId` equals the child
-   * target's id, which is how {@link enterOopifFrame} finds the child session.
-   * @param sessionId `undefined` = this page's default/top session.
-   */
-  private async resolveFrameIdInSession(
-    selector: string | string[],
-    sessionId: string | undefined
-  ): Promise<string | undefined> {
-    const selectors = Array.isArray(selector) ? selector : [selector];
-    for (const sel of selectors) {
-      try {
-        const evalRes = await this.cdp.send<{ result: RemoteObject }>(
-          'Runtime.evaluate',
-          { expression: `document.querySelector(${JSON.stringify(sel)})`, returnByValue: false },
-          sessionId
-        );
-        const objectId = evalRes.result.objectId;
-        if (!objectId) continue;
-        const desc = await this.cdp.send<{ node: { frameId?: string } }>(
-          'DOM.describeNode',
-          { objectId, depth: 0 },
-          sessionId
-        );
-        if (desc.node.frameId) return desc.node.frameId;
-      } catch {
-        // Try the next candidate selector.
-      }
-    }
-    return undefined;
-  }
-
-  /**
    * Activate an OOPIF child frame identified by `frameId`. Waits (briefly) for
    * the auto-attached child session to appear, then routes subsequent frame
    * actions to it. Returns false when no child session materializes.
@@ -2552,6 +2770,10 @@ export class Page {
     // numeric contextId on this page's session.
     this.currentFrameContextId = null;
     this.brokenFrame = null;
+    // A freshly-entered OOPIF's query root is its own top-level document until
+    // a same-origin nested iframe re-roots it (fix #2, see switchToFrame).
+    this.oopifFrameRootNodeId = null;
+    this.oopifFrameRootFrameId = null;
     this.refMap.clear();
 
     // Prime the child document so the first in-frame action doesn't race the
@@ -2614,12 +2836,40 @@ export class Page {
   }
 
   /**
+   * Resolve the DOM query ROOT nodeId to use for `sessionId`. When `sessionId`
+   * is the currently active OOPIF child session AND `oopifFrameRootNodeId` is
+   * set (fix #2: we descended into a SAME-ORIGIN iframe nested inside this
+   * OOPIF), that nested document's nodeId is the root. Otherwise falls back to
+   * the session's own top-level document (the common, non-nested case).
+   */
+  private async getOopifQueryRoot(sessionId: string): Promise<number | undefined> {
+    if (sessionId === this.currentFrameSession && this.oopifFrameRootNodeId !== null) {
+      return this.oopifFrameRootNodeId;
+    }
+    try {
+      const doc = await this.cdp.send<{ root: { nodeId: number } }>(
+        'DOM.getDocument',
+        { depth: 0 },
+        sessionId
+      );
+      return doc.root?.nodeId;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
    * Locate an element inside the active OOPIF child session and return both its
-   * (child-session-scoped) nodeId and a Runtime objectId. Re-fetches the child
-   * document root each poll so a mid-load `documentUpdated` can't leave us with
-   * a stale root. Supports plain CSS selectors and, as a fallback, a shadow-DOM
-   * -piercing deep query (the checkout-fill subset never needs ref:/text:/role:
-   * selectors inside a cross-origin frame).
+   * (child-session-scoped) nodeId and a Runtime objectId. Re-fetches the query
+   * root (`getOopifQueryRoot`) each poll so a mid-load `documentUpdated` can't
+   * leave us with a stale root. Supports plain CSS selectors and, as a
+   * fallback, a shadow-DOM-piercing deep query. Queries are always rooted via
+   * DOM-domain nodeId/objectId operations (never a bare `document.querySelector`
+   * `Runtime.evaluate`), which is what lets this same code path reach into a
+   * same-origin iframe nested inside the OOPIF (fix #2): the root's objectId is
+   * bound to ITS OWN JS realm regardless of which frame is the session's
+   * "default" execution context, so `Runtime.callFunctionOn(rootObjectId, ...)`
+   * below runs `deepQuery`/`querySelector` in the correct document either way.
    */
   private async findElementInSession(
     selector: string | string[],
@@ -2629,14 +2879,9 @@ export class Page {
     const selectors = Array.isArray(selector) ? selector : [selector];
     const deadline = Date.now() + timeout;
     for (;;) {
+      const root = await this.getOopifQueryRoot(sessionId);
       for (const sel of selectors) {
         try {
-          const doc = await this.cdp.send<{ root: { nodeId: number } }>(
-            'DOM.getDocument',
-            { depth: 0 },
-            sessionId
-          );
-          const root = doc.root?.nodeId;
           if (root) {
             const q = await this.cdp.send<{ nodeId: number }>(
               'DOM.querySelector',
@@ -2657,16 +2902,26 @@ export class Page {
         }
 
         // Shadow-piercing fallback (L-1): `DOM.querySelector` above does NOT
-        // pierce shadow roots, but the visibility probe `waitForSelectorInSession`
+        // pierce shadow roots, but the visibility probe (`waitForActionableInSession`)
         // proves visibility with a shadow-piercing `deepQuery`. Without this
         // fallback a shadow-encapsulated field in an OOPIF passes the visibility
         // probe then fails here with ElementNotFoundError. Resolve via the same
-        // `deepQuery`, then map the returned handle back to a nodeId.
+        // `deepQuery`, rooted at `root`'s own objectId (see doc comment above for
+        // why this must be objectId-rooted rather than a bare global `document`),
+        // then map the returned handle back to a nodeId.
         try {
+          if (!root) continue;
+          const rootObj = await this.cdp.send<{ object: { objectId: string } }>(
+            'DOM.resolveNode',
+            { nodeId: root },
+            sessionId
+          );
           const deep = await this.cdp.send<{ result: { objectId?: string } }>(
-            'Runtime.evaluate',
+            'Runtime.callFunctionOn',
             {
-              expression: `(() => { ${DEEP_QUERY_SCRIPT} return deepQuery(${JSON.stringify(sel)}); })()`,
+              objectId: rootObj.object.objectId,
+              functionDeclaration: `function(sel) { ${DEEP_QUERY_SCRIPT} return deepQuery(sel, this); }`,
+              arguments: [{ value: sel }],
               returnByValue: false,
             },
             sessionId
@@ -2692,9 +2947,52 @@ export class Page {
   }
 
   /**
+   * Evaluate a `functionDeclaration(sel)` (given a selector string) against the
+   * DOM query root for `sessionId` (see {@link getOopifQueryRoot}) via
+   * `Runtime.callFunctionOn` on the root's own objectId, rather than a bare
+   * `Runtime.evaluate("document...")` expression. This is what lets the OOPIF
+   * in-frame probes reach into a same-origin iframe nested inside the OOPIF
+   * (fix #2): the root objectId is bound to its OWN document/realm, so the
+   * function body's `this` is always the correct document regardless of which
+   * frame the session's default execution context points at. Returns
+   * `undefined` if no root is available (e.g. the child document is not ready
+   * yet) or the call throws (evaluated during load).
+   */
+  private async evalInOopifRoot<T>(
+    sel: string,
+    sessionId: string,
+    functionDeclaration: string
+  ): Promise<T | undefined> {
+    const root = await this.getOopifQueryRoot(sessionId);
+    if (!root) return undefined;
+    try {
+      const rootObj = await this.cdp.send<{ object: { objectId: string } }>(
+        'DOM.resolveNode',
+        { nodeId: root },
+        sessionId
+      );
+      const res = await this.cdp.send<{ result: { value: T } }>(
+        'Runtime.callFunctionOn',
+        {
+          objectId: rootObj.object.objectId,
+          functionDeclaration,
+          arguments: [{ value: sel }],
+          returnByValue: true,
+        },
+        sessionId
+      );
+      return res.result.value;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
    * Poll for a selector (any of several) to reach `state` inside the active
    * OOPIF child session, evaluating the same visibility/attachment predicates
-   * the top-level wait subsystem uses, but on the child session's own context.
+   * the top-level wait subsystem uses, but rooted via {@link evalInOopifRoot}
+   * so it also works when the active OOPIF has a same-origin nested iframe
+   * root (fix #2).
    */
   private async waitForSelectorInSession(
     selectors: string[],
@@ -2703,28 +3001,99 @@ export class Page {
     timeout: number
   ): Promise<boolean> {
     const wantPresent = state === 'visible' || state === 'attached';
-    const buildExpr = (sel: string): string =>
+    const buildFn = (): string =>
       state === 'attached' || state === 'detached'
-        ? `(() => { ${DEEP_QUERY_SCRIPT} return deepQuery(${JSON.stringify(sel)}) !== null; })()`
-        : `(() => { ${DEEP_QUERY_SCRIPT} ${VISIBLE_PREDICATE_SCRIPT} return bpElementVisible(deepQuery(${JSON.stringify(sel)})); })()`;
+        ? `function(sel) { ${DEEP_QUERY_SCRIPT} return deepQuery(sel, this) !== null; }`
+        : `function(sel) { ${DEEP_QUERY_SCRIPT} ${VISIBLE_PREDICATE_SCRIPT} return bpElementVisible(deepQuery(sel, this)); }`;
 
     const deadline = Date.now() + timeout;
+    const fn = buildFn();
     for (;;) {
       for (const sel of selectors) {
-        let present = false;
-        try {
-          const res = await this.cdp.send<{ result: { value: boolean } }>(
-            'Runtime.evaluate',
-            { expression: buildExpr(sel), returnByValue: true },
-            sessionId
-          );
-          present = res.result.value === true;
-        } catch {
-          present = false;
-        }
+        const present = (await this.evalInOopifRoot<boolean>(sel, sessionId, fn)) === true;
         if ((wantPresent && present) || (!wantPresent && !present)) return true;
       }
       if (Date.now() >= deadline) return false;
+      await sleep(100);
+    }
+  }
+
+  /**
+   * Diagnostic variant of {@link waitForSelectorInSession} for `state ===
+   * 'visible'` only: instead of a boolean, polls until an element EXISTS and
+   * reports WHY it is/isn't actionable — distinguishing "never found in the
+   * DOM" from "found but not visible", and naming the SPECIFIC failing check
+   * (display / visibility / opacity / zero-size bounding box) instead of a
+   * generic "Element not found". This is the error-quality half of fix #1:
+   * `resolveActionableInSession` used to poll the plain boolean predicate and,
+   * on timeout, always threw `ElementNotFoundError` — which is misleading when
+   * the element exists but is merely `opacity:0` or has a collapsed bounding
+   * box (common for secured/tokenized card-field widgets).
+   *
+   * `allowOpacityZero`: when true, an element failing ONLY the opacity check
+   * is reported as PASSING (`ok: true`, with `relaxed: true` so callers can
+   * still tell). Intended for fill/focus/type on focusable form inputs; NOT
+   * used for click (kept strict — see {@link FOCUSABLE_INPUT_PREDICATE_SCRIPT}
+   * doc comment for the rationale).
+   */
+  private async waitForActionableInSession(
+    selectors: string[],
+    sessionId: string,
+    timeout: number,
+    opts: { allowOpacityZero?: boolean } = {}
+  ): Promise<
+    | { ok: true; selector: string; relaxed: boolean }
+    | { ok: false; found: false }
+    | { ok: false; found: true; selector: string; reason: string }
+  > {
+    const allowOpacityZero = opts.allowOpacityZero === true;
+    const fn = `function(sel) {
+        ${DEEP_QUERY_SCRIPT}
+        ${VISIBLE_REASON_PREDICATE_SCRIPT}
+        ${FOCUSABLE_INPUT_PREDICATE_SCRIPT}
+        const el = deepQuery(sel, this);
+        if (!el) return { found: false };
+        let reason = bpElementVisibleReason(el, { allowOpacityZero: false });
+        if (reason === 'opacity:0' && ${allowOpacityZero ? 'true' : 'false'} && bpIsFocusableInput(el)) {
+          // Re-evaluate the FULL predicate with opacity relaxed, so an
+          // opacity:0 element that ALSO fails a later check (e.g. zero-size
+          // bounding box) still fails overall (opacity is checked BEFORE
+          // bbox in bpElementVisibleReason, so the first pass above cannot
+          // see a bbox failure hiding behind it).
+          const relaxedReason = bpElementVisibleReason(el, { allowOpacityZero: true });
+          if (relaxedReason === null) {
+            return { found: true, reason: null, relaxed: true };
+          }
+          return { found: true, reason: relaxedReason };
+        }
+        return { found: true, reason };
+      }`;
+
+    const deadline = Date.now() + timeout;
+    let lastFound = false;
+    let lastReason = 'unknown';
+    for (;;) {
+      for (const sel of selectors) {
+        const result = await this.evalInOopifRoot<{
+          found: boolean;
+          reason?: string | null;
+          relaxed?: boolean;
+        }>(sel, sessionId, fn);
+        if (!result) continue;
+        const { found, reason, relaxed } = result;
+        if (found && (reason === null || reason === undefined)) {
+          return { ok: true, selector: sel, relaxed: relaxed === true };
+        }
+        if (found) {
+          lastFound = true;
+          lastReason = reason ?? 'unknown';
+        }
+      }
+      if (Date.now() >= deadline) {
+        return lastFound
+          ? { ok: false, found: true, selector: selectors[0]!, reason: lastReason }
+          : { ok: false, found: false };
+      }
       await sleep(100);
     }
   }
@@ -2768,15 +3137,29 @@ export class Page {
     selector: string | string[],
     sessionId: string,
     timeout: number,
-    opts: { optional?: boolean; requireEnabled?: boolean }
+    opts: { optional?: boolean; requireEnabled?: boolean; allowOpacityZero?: boolean }
   ): Promise<{ nodeId: number; objectId: string; selector: string } | null> {
     const selectors = Array.isArray(selector) ? selector : [selector];
 
-    // Existence + visibility, polled on the child session's own context.
-    const visible = await this.waitForSelectorInSession(selectors, sessionId, 'visible', timeout);
-    if (!visible) {
+    // Existence + visibility, polled on the child session's own context. Uses
+    // the diagnostic predicate (fix #1) so a timeout can distinguish "never
+    // found" from "found but not visible" and name the failing check, instead
+    // of always throwing a generic ElementNotFoundError.
+    const status = await this.waitForActionableInSession(selectors, sessionId, timeout, {
+      allowOpacityZero: opts.allowOpacityZero,
+    });
+    if (!status.ok) {
       if (opts.optional) return null;
-      throw new ElementNotFoundError(selector);
+      if (!status.found) {
+        throw new ElementNotFoundError(selector);
+      }
+      throw new ActionabilityError(
+        `Element ${JSON.stringify(status.selector)} exists inside the cross-origin ` +
+          `iframe but is not actionable (failed visibility check: ${status.reason}). ` +
+          'The element was found in the DOM but is not visible/interactable ' +
+          '(e.g. hidden, zero-size, or off-screen).',
+        'visible'
+      );
     }
 
     const found = await this.findElementInSession(
@@ -2816,8 +3199,12 @@ export class Page {
     const sessionId = this.currentFrameSession!;
     const timeout = options.timeout ?? DEFAULT_TIMEOUT;
     // H1: enforce visible + enabled before acting (parity with top-level fill).
+    // allowOpacityZero (fix #1): secured card-field widgets often style the
+    // real input with opacity:0; an attached focusable input failing ONLY that
+    // check should still be fillable.
     const found = await this.resolveActionableInSession(selector, sessionId, timeout, {
       optional: options.optional,
+      allowOpacityZero: true,
     });
     if (!found) return false;
     this._lastMatchedSelector = found.selector;
@@ -2853,8 +3240,11 @@ export class Page {
     }
 
     if (options.verify !== false) {
+      const verifyMode = options.verify === 'normalized' ? 'normalized' : 'exact';
       const actual = await this.readEditableValue(found.objectId, sessionId);
-      if (actual !== value) {
+      const matches =
+        verifyMode === 'normalized' ? fillValuesMatchNormalized(value, actual) : actual === value;
+      if (!matches) {
         if (options.optional) return false;
         throw new Error(
           `Fill value did not stick. Expected ${JSON.stringify(value)} but got ${JSON.stringify(actual)}.`
@@ -2919,8 +3309,11 @@ export class Page {
     const sessionId = this.currentFrameSession!;
     const timeout = options.timeout ?? DEFAULT_TIMEOUT;
     const { delay = 50 } = options;
+    // allowOpacityZero (fix #1): see fillInFrame's comment; type() has the
+    // same secured-field rationale.
     const found = await this.resolveActionableInSession(selector, sessionId, timeout, {
       optional: options.optional,
+      allowOpacityZero: true,
     });
     if (!found) return false;
     this._lastMatchedSelector = found.selector;
@@ -2978,9 +3371,12 @@ export class Page {
   ): Promise<boolean> {
     const sessionId = this.currentFrameSession!;
     const timeout = options.timeout ?? DEFAULT_TIMEOUT;
+    // allowOpacityZero (fix #1): focus, like fill/type, must reach
+    // opacity:0-styled secured inputs.
     const found = await this.resolveActionableInSession(selector, sessionId, timeout, {
       optional: options.optional,
       requireEnabled: false,
+      allowOpacityZero: true,
     });
     if (!found) return false;
     this._lastMatchedSelector = found.selector;
@@ -3203,10 +3599,30 @@ export class Page {
     };
 
     // Cross-origin (OOPIF) frame active: evaluate in the child session's own
-    // default context (no numeric contextId). Otherwise use the same-origin
-    // iframe execution context if we're in a frame.
+    // default context (no numeric contextId) UNLESS we're re-rooted onto a
+    // same-origin nested iframe inside it (fix #2), in which case use THAT
+    // frame's own execution context so `document`/globals resolve against the
+    // nested document, not the OOPIF's top one. Otherwise use the same-origin
+    // iframe execution context if we're in a (non-OOPIF) frame.
     const evalSessionId = this.currentFrameSession ?? undefined;
-    if (evalSessionId === undefined && this.currentFrameContextId !== null) {
+    if (evalSessionId !== undefined && this.oopifFrameRootFrameId) {
+      const nestedContextId = this.oopifFrameExecutionContexts.get(this.oopifFrameRootFrameId);
+      if (nestedContextId === undefined) {
+        // We're re-rooted onto a same-origin nested iframe INSIDE this OOPIF
+        // child session, but its execution context was never observed (e.g.
+        // it hasn't been created yet, or was destroyed and pruned). Silently
+        // falling back to the OOPIF's own top-level context would evaluate
+        // `document.querySelector`/globals against the WRONG document — fail
+        // loudly instead so callers don't get results from an unrelated frame.
+        throw new Error(
+          `Cannot evaluate: no execution context tracked for the current nested ` +
+            `frame (frameId ${JSON.stringify(this.oopifFrameRootFrameId)}) inside the ` +
+            'cross-origin iframe. The frame may not have finished loading yet, or its ' +
+            'context was destroyed (e.g. by a reload).'
+        );
+      }
+      params['contextId'] = nestedContextId;
+    } else if (evalSessionId === undefined && this.currentFrameContextId !== null) {
       params['contextId'] = this.currentFrameContextId;
     }
 
@@ -5133,9 +5549,12 @@ export class Page {
     this.brokenFrame = null;
     this.frameContexts.clear();
     this.currentFrameSession = null;
+    this.oopifFrameRootNodeId = null;
+    this.oopifFrameRootFrameId = null;
     // Full teardown of the OOPIF registry (M5): a reset abandons the current
     // document, so no previously attached child session is relevant anymore.
     this.oopifFrames.clear();
+    this.oopifFrameExecutionContexts.clear();
     this.dialogHandler = null;
 
     // Stop any pending loading
@@ -5173,6 +5592,13 @@ export class Page {
       this.cdp.offAny(this.oopifAnyHandler);
     }
     this.oopifAnyHandler = null;
+    // Release every per-session `Runtime.executionContextCreated` listener
+    // registered by `handleTargetAttached` (same connection-global leak
+    // concern as `oopifAnyHandler` above, one entry per attached child session).
+    for (const unsubscribe of this.oopifSessionUnsubscribers.values()) {
+      unsubscribe();
+    }
+    this.oopifSessionUnsubscribers.clear();
   }
 
   /**

@@ -88,6 +88,30 @@ describe('validateSteps', () => {
       expect(fields).toContain('value');
     });
 
+    test('fill accepts verify as boolean, exact, or normalized', () => {
+      expect(
+        validateSteps([{ action: 'fill', selector: '#input', value: 'hi', verify: true }]).valid
+      ).toBe(true);
+      expect(
+        validateSteps([{ action: 'fill', selector: '#input', value: 'hi', verify: false }]).valid
+      ).toBe(true);
+      expect(
+        validateSteps([{ action: 'fill', selector: '#input', value: 'hi', verify: 'exact' }]).valid
+      ).toBe(true);
+      expect(
+        validateSteps([{ action: 'fill', selector: '#input', value: 'hi', verify: 'normalized' }])
+          .valid
+      ).toBe(true);
+    });
+
+    test('fill rejects invalid verify value', () => {
+      const result = validateSteps([
+        { action: 'fill', selector: '#input', value: 'hi', verify: 'loose' as unknown as boolean },
+      ]);
+      expect(result.valid).toBe(false);
+      expect(result.errors[0]!.field).toBe('verify');
+    });
+
     test('press needs key', () => {
       const result = validateSteps([{ action: 'press' }]);
       expect(result.valid).toBe(false);

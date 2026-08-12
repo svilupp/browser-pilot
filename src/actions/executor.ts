@@ -1095,6 +1095,7 @@ export class BatchExecutor {
           timeout,
           optional,
           blur: step.blur,
+          verify: step.verify,
         });
         return {
           selectorUsed: this.getUsedSelector(step.selector),

@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.2.1] - 2026-08-18
+
+- `Page.fill()`'s `verify` option now accepts `"normalized"` in addition to `true`/`"exact"`/`false`.
+  Normalized verification tolerates auto-formatting inputs (phone/card masks, NBSP-inserting
+  formatters) by comparing values with unicode whitespace collapsed, and, failing that, whitespace
+  stripped entirely; it stays case-sensitive and does not strip punctuation. The char-by-char
+  typing fallback now only runs when the normalized comparison also fails, avoiding a re-type that
+  could double-mangle masked inputs.
+- Batch/`bp run` `fill` steps can now pass `verify` (`true`/`false`/`"exact"`/`"normalized"`)
+  through to `Page.fill()`; previously only `blur` and `timeout`/`optional` were forwarded.
+
 ## [0.2.0] - 2026-08-11
 
 - Added `bp emit ws`: send text or binary frames on a WebSocket the page already owns (real

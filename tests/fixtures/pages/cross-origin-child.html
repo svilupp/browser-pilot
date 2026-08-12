@@ -27,6 +27,33 @@
     <label for="name">Name:</label>
     <input type="text" id="name" name="name" data-testid="xo-name" placeholder="Enter name">
 
+    <!--
+      Secured/tokenized card-field style input: real, attached, focusable
+      <input> styled with opacity:0 (a real proxy would overlay it visually).
+      Exercises fix #1 (opacity relaxation for fill/focus/type, still strict
+      for click) inside a cross-origin OOPIF.
+    -->
+    <input
+      type="text"
+      id="card-number"
+      name="card-number"
+      data-testid="xo-card-number"
+      style="opacity: 0; width: 200px; height: 30px;"
+      placeholder="Card number">
+
+    <!--
+      Adversarial: opacity:0 AND zero-size. Must fail EVEN with the opacity
+      relaxation applied — proves the relaxation re-checks the full predicate
+      (bbox included) rather than passing on opacity alone (fix #2 review).
+    -->
+    <input
+      type="text"
+      id="card-cvc"
+      name="card-cvc"
+      data-testid="xo-card-cvc"
+      style="opacity: 0; width: 0; height: 0;"
+      placeholder="CVC">
+
     <button type="submit" data-testid="xo-submit">Submit</button>
   </form>
 

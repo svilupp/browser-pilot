@@ -90,6 +90,56 @@ function bpElementVisible(el) {
 `;
 
 /**
+ * Diagnostic sibling of {@link VISIBLE_PREDICATE_SCRIPT}: instead of a boolean,
+ * returns the SPECIFIC reason an element fails the visibility gate (or `null`
+ * when it passes), so callers can tell "not found" apart from "found but not
+ * visible" and report WHICH check failed (opacity / bbox / visibility /
+ * display) instead of a generic "Element not found".
+ *
+ * `opts.allowOpacityZero` relaxes the opacity check. This exists because
+ * secured/tokenized card-field widgets (Adyen, Stripe, Braintree) commonly
+ * style their real `<input>` with `opacity: 0` (or a near-zero value) while
+ * visually overlaying a styled proxy, to keep native autofill/paste/IME
+ * behaviour on the real input while controlling its appearance themselves. An
+ * ATTACHED, focusable form input in that state can still be focused and typed
+ * into (that's the whole point of the technique), so treating opacity:0 as a
+ * hard failure for FILL/FOCUS/TYPE would make those legitimate fields
+ * unreachable. `click` intentionally does NOT use this relaxation (kept
+ * strict elsewhere) because a real mouse click could otherwise land on
+ * whatever visually overlays the invisible input.
+ */
+export const VISIBLE_REASON_PREDICATE_SCRIPT = `
+function bpElementVisibleReason(el, opts) {
+  opts = opts || {};
+  if (!el) return 'not-found';
+  const style = getComputedStyle(el);
+  if (style.display === 'none') return 'display:none';
+  if (style.visibility === 'hidden') return 'visibility:hidden';
+  if (!opts.allowOpacityZero && parseFloat(style.opacity) === 0) return 'opacity:0';
+  const rect = el.getBoundingClientRect();
+  if (!(rect.width > 0 && rect.height > 0)) return 'zero-size-bounding-box';
+  return null;
+}
+`;
+
+/**
+ * True for elements the opacity relaxation above is intended for: native
+ * focusable form controls (and contenteditable hosts) where an attached node
+ * failing ONLY the opacity check can still legitimately receive focus/input.
+ * Kept as a named predicate (rather than inlining the tag check at every call
+ * site) so the "which elements qualify" decision lives in one place.
+ */
+export const FOCUSABLE_INPUT_PREDICATE_SCRIPT = `
+function bpIsFocusableInput(el) {
+  if (!el) return false;
+  const tag = el.tagName ? el.tagName.toLowerCase() : '';
+  if (tag === 'input' || tag === 'textarea' || tag === 'select') return true;
+  if (el.isContentEditable) return true;
+  return false;
+}
+`;
+
+/**
  * Check if an element is visible in the viewport
  * Pierces shadow DOM boundaries automatically
  */

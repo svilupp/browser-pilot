@@ -69,6 +69,20 @@
     </iframe>
   </div>
 
+  <!-- Fix #3: SAME-ORIGIN wrapper (modal/checkout-container-like) around the
+       cross-origin OOPIF field frame. Exercised by test (g). -->
+  <div class="section">
+    <h2>Same-Origin Wrapper Around an OOPIF</h2>
+    <iframe
+      id="wrapper-frame"
+      data-testid="wrapper-frame"
+      src="cross-origin-wrapper.html"
+      width="400"
+      height="220"
+      title="Same-Origin Wrapper Frame">
+    </iframe>
+  </div>
+
   <script>
     document.getElementById('parent-btn').addEventListener('click', () => {
       const el = document.getElementById('parent-result');
