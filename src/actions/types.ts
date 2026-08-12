@@ -191,6 +191,12 @@ export interface Step {
   /** Trigger blur after filling (for React/Vue frameworks) */
   blur?: boolean;
 
+  /**
+   * Verify mode for fill steps: exact (default), normalized (tolerate
+   * auto-formatting), or false to skip verification.
+   */
+  verify?: boolean | 'exact' | 'normalized';
+
   /** Delay between keystrokes for type action */
   delay?: number;
 

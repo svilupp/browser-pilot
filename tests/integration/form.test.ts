@@ -223,4 +223,87 @@ describe('Form Fill and Submit Actions', () => {
       expect(result.text).toContain('Form submitted successfully');
     });
   });
+
+  // === Fill Verification Modes ===
+
+  test('exact verify (default) throws when an auto-formatter reshapes the value', async () => {
+    const { page, baseUrl } = ctx.get();
+
+    await withRetry(async () => {
+      await page.goto(`${baseUrl}/form.html`);
+
+      let thrown: Error | null = null;
+      try {
+        await page.fill('#card-number', '4111111111111111');
+      } catch (e) {
+        thrown = e as Error;
+      }
+      expect(thrown).not.toBeNull();
+      expect(thrown?.message).toMatch(/did not stick/);
+    });
+  });
+
+  test('verify: "normalized" accepts auto-formatted whitespace differences', async () => {
+    const { page, baseUrl } = ctx.get();
+
+    await withRetry(async () => {
+      await page.goto(`${baseUrl}/form.html`);
+
+      await page.fill('#card-number', '4111111111111111', { verify: 'normalized' });
+
+      await expectInputValue(page, '#card-number', '4111 1111 1111 1111');
+    });
+  });
+
+  test('verify: false skips verification for a formatted value', async () => {
+    const { page, baseUrl } = ctx.get();
+
+    await withRetry(async () => {
+      await page.goto(`${baseUrl}/form.html`);
+
+      await page.fill('#card-number', '4111111111111111', { verify: false });
+
+      await expectInputValue(page, '#card-number', '4111 1111 1111 1111');
+    });
+  });
+
+  test('verify: "normalized" still throws when non-whitespace content is dropped', async () => {
+    const { page, baseUrl } = ctx.get();
+
+    await withRetry(async () => {
+      await page.goto(`${baseUrl}/form.html`);
+
+      // The fixture's formatter strips non-digit characters, so requesting a
+      // value with letters in it changes more than whitespace and must still
+      // fail even under normalized verification.
+      let thrown: Error | null = null;
+      try {
+        await page.fill('#card-number', 'abcd1111efgh2222', { verify: 'normalized' });
+      } catch (e) {
+        thrown = e as Error;
+      }
+      expect(thrown).not.toBeNull();
+      expect(thrown?.message).toMatch(/did not stick/);
+    });
+  });
+
+  test('fill via batch step passes through verify: "normalized"', async () => {
+    const { page, baseUrl } = ctx.get();
+
+    await withRetry(async () => {
+      await page.goto(`${baseUrl}/form.html`);
+
+      const result = await page.batch([
+        {
+          action: 'fill',
+          selector: '#card-number',
+          value: '4111111111111111',
+          verify: 'normalized',
+        },
+      ]);
+
+      expect(result.success).toBe(true);
+      await expectInputValue(page, '#card-number', '4111 1111 1111 1111');
+    });
+  });
 });

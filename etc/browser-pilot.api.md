@@ -966,7 +966,7 @@ export interface FileInput {
 // @public (undocumented)
 export interface FillOptions extends ActionOptions {
     blur?: boolean;
-    verify?: boolean;
+    verify?: boolean | 'exact' | 'normalized';
 }
 
 // @public
@@ -2030,6 +2030,7 @@ export interface Step {
     url?: string;
     urlMode?: UrlMatchMode;
     value?: string | string[];
+    verify?: boolean | 'exact' | 'normalized';
     waitFor?: 'visible' | 'hidden' | 'attached' | 'detached' | 'navigation' | 'networkIdle' | 'ready';
     waitForNavigation?: boolean | 'auto';
     waitUntil?: 'commit' | 'domcontentloaded' | 'load' | 'networkidle';
@@ -2493,9 +2494,9 @@ export interface WorkflowSummary {
 // Warnings were encountered during analysis:
 //
 // dist/index.d.ts:361:5 - (ae-forgotten-export) The symbol "CanonicalTraceEvent" needs to be exported by the entry point index.d.ts
-// dist/page-C00rTmiM.d.ts:1025:9 - (ae-forgotten-export) The symbol "CoveringElement" needs to be exported by the entry point index.d.ts
-// dist/page-C00rTmiM.d.ts:1026:9 - (ae-forgotten-export) The symbol "HitElement" needs to be exported by the entry point index.d.ts
-// dist/page-C00rTmiM.d.ts:1027:9 - (ae-forgotten-export) The symbol "PointerEventsDiagnosis" needs to be exported by the entry point index.d.ts
+// dist/page-okxSvrbO.d.ts:1035:9 - (ae-forgotten-export) The symbol "CoveringElement" needs to be exported by the entry point index.d.ts
+// dist/page-okxSvrbO.d.ts:1036:9 - (ae-forgotten-export) The symbol "HitElement" needs to be exported by the entry point index.d.ts
+// dist/page-okxSvrbO.d.ts:1037:9 - (ae-forgotten-export) The symbol "PointerEventsDiagnosis" needs to be exported by the entry point index.d.ts
 // dist/types-D2pJQpWs.d.ts:67:9 - (ae-forgotten-export) The symbol "LocalBrowserCandidate" needs to be exported by the entry point index.d.ts
 // dist/types-D2pJQpWs.d.ts:68:9 - (ae-forgotten-export) The symbol "LocalDiscoveryFailure" needs to be exported by the entry point index.d.ts
 

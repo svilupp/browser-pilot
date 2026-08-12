@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.2.1] - 2026-08-18
+
+- `Page.fill()`'s `verify` option now accepts `"normalized"` in addition to `true`/`"exact"`/`false`.
+  Normalized verification tolerates auto-formatting inputs (phone/card masks, NBSP-inserting
+  formatters) by comparing values with unicode whitespace collapsed, and, failing that, whitespace
+  stripped entirely; it stays case-sensitive and does not strip punctuation. The char-by-char
+  typing fallback now only runs when the normalized comparison also fails, avoiding a re-type that
+  could double-mangle masked inputs.
+- Batch/`bp run` `fill` steps can now pass `verify` (`true`/`false`/`"exact"`/`"normalized"`)
+  through to `Page.fill()`; previously only `blur` and `timeout`/`optional` were forwarded.
+
+### Fixed
+
+- Fixed element actionability errors inside cross-origin iframes reporting "not found" when the
+  element existed but was hidden: the error now names the specific failing visibility check
+  (display/visibility/opacity/zero-size), and `fill`/`type`/`focus` now tolerate `opacity: 0`
+  secured/tokenized card fields (a real bounding box is still required).
+- Fixed `switch_frame` failing for a same-origin iframe nested inside a cross-origin frame
+  (Stripe/Adyen-style payment fields), and for a same-origin wrapper frame above a cross-origin
+  frame.
+- Fixed OOPIF frames not being detected when connecting through the daemon to a page that already
+  had iframe targets attached before the connection armed cross-origin auto-attach.
+
 ## [0.2.0] - 2026-08-11
 
 - Added `bp emit ws`: send text or binary frames on a WebSocket the page already owns (real

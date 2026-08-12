@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Same-Origin Wrapper Around OOPIF</title>
+  <style>
+    body { font-family: system-ui, sans-serif; padding: 12px; background: #fff3e0; }
+    iframe { border: 2px solid #ef6c00; border-radius: 4px; }
+    h3 { margin-top: 0; color: #e65100; }
+  </style>
+</head>
+<body>
+  <!--
+    Fix #3 topology: a SAME-ORIGIN wrapper (modal/checkout-container-like)
+    served by ORIGIN A (the same origin as the top-level parent page), which
+    itself embeds the CROSS-ORIGIN (origin B) OOPIF field frame.
+
+    switchToFrame must first descend into THIS wrapper (a normal same-origin
+    iframe, reachable via `contentDocument` from the top page) and THEN, from
+    inside it, descend into the cross-origin OOPIF nested inside — i.e. a
+    same-origin frame ABOVE an OOPIF, the mirror image of fix #2 (a
+    same-origin frame INSIDE an OOPIF).
+  -->
+  <h3>Same-Origin Wrapper (Origin A)</h3>
+
+  <iframe
+    id="wrapped-x-frame"
+    data-testid="wrapped-x-frame"
+    src="%%CHILD_ORIGIN%%/cross-origin-child.html"
+    width="360"
+    height="180"
+    title="Wrapped Cross-Origin Child Frame">
+  </iframe>
+</body>
+</html>

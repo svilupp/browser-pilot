@@ -40,13 +40,27 @@ function createMockCDPClient(opts: MockOptions = {}): CDPClient {
       if (method === 'DOM.getDocument') {
         return Promise.resolve({ root: { nodeId: 1 } });
       }
-      if (method === 'Runtime.evaluate') {
-        const expr = params?.['expression'] as string | undefined;
-        // resolveFrameIdInSession probes `document.querySelector(<sel>)`.
-        if (expr?.startsWith('document.querySelector(') && opts.frameElementObjectId) {
-          return Promise.resolve({ result: { objectId: opts.frameElementObjectId } });
+      // The nested-descent path (fix #2/#3 rewrite) resolves the target
+      // <iframe> element via `findElementInSession` (DOM.querySelector +
+      // DOM.resolveNode), not a bare `Runtime.evaluate("document.querySelector")`
+      // expression. Stub a fixed nodeId/objectId pair when the test wants the
+      // element to "exist".
+      if (method === 'DOM.querySelector') {
+        return Promise.resolve({ nodeId: opts.frameElementObjectId ? 99 : 0 });
+      }
+      if (method === 'DOM.resolveNode') {
+        const nodeId = params?.['nodeId'] as number | undefined;
+        if (nodeId === 99 && opts.frameElementObjectId) {
+          return Promise.resolve({ object: { objectId: opts.frameElementObjectId } });
         }
+        return Promise.resolve({ object: {} });
+      }
+      if (method === 'Runtime.evaluate') {
         return Promise.resolve({ result: { value: null } });
+      }
+      if (method === 'Runtime.callFunctionOn') {
+        // No shadow-DOM candidates in this mock.
+        return Promise.resolve({ result: {} });
       }
       if (method === 'DOM.describeNode') {
         return Promise.resolve({ node: { frameId: opts.frameElementFrameId } });
@@ -119,12 +133,15 @@ describe('OOPIF action guards (C1)', () => {
 
 describe('OOPIF nested switchToFrame (M3)', () => {
   it('throws (not silent false) and preserves the frame session when no child frame resolves', async () => {
-    // Runtime.evaluate returns no objectId → resolveFrameIdInSession → undefined.
+    // DOM.querySelector reports no match (nodeId 0) → findElementInSession →
+    // null → ElementNotFoundError. Short timeout: findElementInSession polls
+    // like any other element finder, so give it a bounded window instead of
+    // waiting out the full default timeout for an element that never exists.
     const page = new Page(createMockCDPClient(), 'target-1');
     await page.init();
     enterOopif(page, 'parent-oopif');
 
-    await expect(page.switchToFrame('iframe#nested')).rejects.toThrow();
+    await expect(page.switchToFrame('iframe#nested', { timeout: 200 })).rejects.toThrow();
     // The active frame session must NOT be silently dropped or retargeted.
     expect(currentFrameSession(page)).toBe('parent-oopif');
   });
@@ -134,7 +151,7 @@ describe('OOPIF nested switchToFrame (M3)', () => {
     await page.init();
     enterOopif(page, 'parent-oopif');
 
-    const result = await page.switchToFrame('iframe#nested', { optional: true });
+    const result = await page.switchToFrame('iframe#nested', { optional: true, timeout: 200 });
     expect(result).toBe(false);
     expect(currentFrameSession(page)).toBe('parent-oopif');
   });
