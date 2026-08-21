@@ -46,6 +46,11 @@ Use a profile that matches the job:
 - `voice`
 - `auth`
 
+If the target sits behind Cloudflare Access, authenticate before capturing — otherwise the
+recording just captures the Access login redirect. Run `bp connect --cf-access` (or
+`bp env auth set-headers`/`set-cookie` for persisted auth) before `bp record`, not as part
+of the demoed flow. See `docs/proposals/cloudflare-access-auth.md`.
+
 ## Understand the artifact before deriving
 
 ```bash

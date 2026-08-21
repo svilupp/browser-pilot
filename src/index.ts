@@ -67,6 +67,12 @@ export {
   type TranscribeResult,
   transcribe,
 } from './audio/index.ts';
+// Cloudflare Access auth helpers
+export {
+  type CfAccessJwtResult,
+  type MintCfAccessJwtOptions,
+  mintCfAccessJwt,
+} from './auth/index.ts';
 // Browser & Page
 // Includes the Phase 7 resolution / diagnostics / fuzzy-matching / structural-signature
 // APIs (rankCandidates, rankSelectorCandidates, diagnoseElement, scoreElement,

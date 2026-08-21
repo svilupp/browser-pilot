@@ -54,7 +54,7 @@ export interface ActionResult {
 }
 
 // @public (undocumented)
-export type ActionType = 'goto' | 'click' | 'fill' | 'type' | 'select' | 'check' | 'uncheck' | 'submit' | 'press' | 'shortcut' | 'focus' | 'hover' | 'scroll' | 'wait' | 'waitForReady' | 'snapshot' | 'forms' | 'screenshot' | 'evaluate' | 'text' | 'newTab' | 'closeTab' | 'switchFrame' | 'switchToMain' | 'assertVisible' | 'assertExists' | 'assertText' | 'assertUrl' | 'assertValue' | 'waitForWsMessage' | 'assertNoConsoleErrors' | 'assertTextChanged' | 'assertPermission' | 'assertMediaTrackLive' | 'delta' | 'review' | 'chooseOption' | 'upload' | 'emit';
+export type ActionType = 'goto' | 'click' | 'fill' | 'type' | 'select' | 'check' | 'uncheck' | 'submit' | 'press' | 'shortcut' | 'focus' | 'hover' | 'scroll' | 'wait' | 'waitForReady' | 'snapshot' | 'forms' | 'screenshot' | 'evaluate' | 'text' | 'newTab' | 'closeTab' | 'switchFrame' | 'switchToMain' | 'assertVisible' | 'assertExists' | 'assertText' | 'assertUrl' | 'assertValue' | 'waitForWsMessage' | 'assertNoConsoleErrors' | 'assertTextChanged' | 'assertPermission' | 'assertMediaTrackLive' | 'delta' | 'review' | 'chooseOption' | 'upload' | 'emit' | 'setCookie' | 'setHeaders';
 
 // @public
 export function addBatchToPage(page: Page): Page & {
@@ -372,6 +372,11 @@ export class CDPError extends Error {
     code: number;
     // (undocumented)
     data?: string;
+}
+
+// @public (undocumented)
+export interface CfAccessJwtResult {
+    cookie: SetCookieOptions;
 }
 
 // @public
@@ -1128,6 +1133,16 @@ export function matchText(actual: string, expected: string, mode?: TextMatchMode
 // @public (undocumented)
 export function matchUrl(actual: string, expected: string, mode?: UrlMatchMode): boolean;
 
+// @public
+export function mintCfAccessJwt(options: MintCfAccessJwtOptions): Promise<CfAccessJwtResult>;
+
+// @public
+export interface MintCfAccessJwtOptions {
+    clientId: string;
+    clientSecret: string;
+    url: string;
+}
+
 // @public (undocumented)
 export class NavigationError extends Error {
     constructor(message: string);
@@ -1292,6 +1307,7 @@ export class Page {
     select(config: CustomSelectConfig, options?: ActionOptions): Promise<boolean>;
     setCookie(options: SetCookieOptions): Promise<boolean>;
     setCookies(cookies: SetCookieOptions[]): Promise<void>;
+    setExtraHTTPHeaders(headers: Record<string, string>): Promise<void>;
     setGeolocation(options: GeolocationOptions): Promise<void>;
     setInputFiles(selector: string | string[], files: FileInput[], options?: ActionOptions): Promise<boolean>;
     setLocale(locale: string): Promise<void>;
@@ -1978,6 +1994,7 @@ export interface Step {
     channel?: 'ws';
     checked?: boolean;
     combo?: string;
+    cookie?: SetCookieOptions;
     dangerous?: boolean;
     delay?: number;
     direction?: 'up' | 'down' | 'left' | 'right';
@@ -1995,6 +2012,7 @@ export interface Step {
     from?: string;
     // (undocumented)
     fullPage?: boolean;
+    headers?: Record<string, string>;
     key?: string;
     kind?: 'audio' | 'video';
     landmark?: string;
@@ -2493,10 +2511,10 @@ export interface WorkflowSummary {
 
 // Warnings were encountered during analysis:
 //
-// dist/index.d.ts:361:5 - (ae-forgotten-export) The symbol "CanonicalTraceEvent" needs to be exported by the entry point index.d.ts
-// dist/page-okxSvrbO.d.ts:1035:9 - (ae-forgotten-export) The symbol "CoveringElement" needs to be exported by the entry point index.d.ts
-// dist/page-okxSvrbO.d.ts:1036:9 - (ae-forgotten-export) The symbol "HitElement" needs to be exported by the entry point index.d.ts
-// dist/page-okxSvrbO.d.ts:1037:9 - (ae-forgotten-export) The symbol "PointerEventsDiagnosis" needs to be exported by the entry point index.d.ts
+// dist/index.d.ts:394:5 - (ae-forgotten-export) The symbol "CanonicalTraceEvent" needs to be exported by the entry point index.d.ts
+// dist/page-C0C-tu2h.d.ts:1035:9 - (ae-forgotten-export) The symbol "CoveringElement" needs to be exported by the entry point index.d.ts
+// dist/page-C0C-tu2h.d.ts:1036:9 - (ae-forgotten-export) The symbol "HitElement" needs to be exported by the entry point index.d.ts
+// dist/page-C0C-tu2h.d.ts:1037:9 - (ae-forgotten-export) The symbol "PointerEventsDiagnosis" needs to be exported by the entry point index.d.ts
 // dist/types-D2pJQpWs.d.ts:67:9 - (ae-forgotten-export) The symbol "LocalBrowserCandidate" needs to be exported by the entry point index.d.ts
 // dist/types-D2pJQpWs.d.ts:68:9 - (ae-forgotten-export) The symbol "LocalDiscoveryFailure" needs to be exported by the entry point index.d.ts
 

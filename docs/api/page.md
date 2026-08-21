@@ -729,6 +729,31 @@ Disable all request interception.
 await page.disableInterception();
 ```
 
+## Headers
+
+### setExtraHTTPHeaders(headers)
+
+Set extra HTTP headers sent on every subsequent request from this page.
+
+```typescript
+await page.setExtraHTTPHeaders({
+  'CF-Access-Client-Id': clientId,
+  'CF-Access-Client-Secret': clientSecret,
+});
+```
+
+- **Scope:** per-CDP-session, not browser-wide (unlike `setCookie`). It must be reapplied
+  on every new target/page (new tab, popup, reattach) — it does not carry over the way
+  cookies do.
+- **Replaces the whole header set** on each call; it does not merge with a previous call.
+  Pass `{}` to clear.
+- **Blast radius caveat:** headers are not origin-scoped — once set, they are sent to
+  *every* origin the page navigates to or fetches from, not just the intended target. For
+  Cloudflare Access specifically, prefer the cookie-based flow (`mintCfAccessJwt` +
+  `setCookie`, below) unless header mode is required. See
+  [Cloudflare Access auth proposal](../proposals/cloudflare-access-auth.md) for the full
+  tradeoff.
+
 ## Cookies & Storage
 
 ### cookies(urls?)
@@ -753,6 +778,34 @@ await page.setCookies([
 ```
 
 **Options:** `name`, `value`, `domain`, `path`, `expires`, `httpOnly`, `secure`, `sameSite`
+
+### mintCfAccessJwt(options)
+
+Standalone function (not a `Page` method), exported from the package root. Exchanges a
+Cloudflare Access service token for a `CF_Authorization` JWT via an out-of-band `fetch`
+against the protected URL, returning a cookie descriptor ready for `setCookie()`.
+
+```typescript
+import { mintCfAccessJwt } from 'browser-pilot';
+
+const { cookie } = await mintCfAccessJwt({
+  url: 'https://app.example.com',
+  clientId: process.env.CF_ACCESS_CLIENT_ID!,
+  clientSecret: process.env.CF_ACCESS_CLIENT_SECRET!,
+});
+await page.setCookie(cookie);
+```
+
+**Options (`MintCfAccessJwtOptions`):** `url`, `clientId`, `clientSecret`.
+
+**Result (`CfAccessJwtResult`):** `{ cookie: SetCookieOptions }` — domain is derived from
+`url`'s hostname, `path` is `/`, `secure` is `true`.
+
+Throws if Cloudflare rejects the service token (no `CF_Authorization` cookie in the
+response) — the error message points at the `service_token_status` diagnostic. Never logs
+or persists the raw client secret. This is the library primitive behind
+`bp connect --cf-access` and `bp env auth set-cookie`'s sugar path; see
+[Cloudflare Access auth proposal](../proposals/cloudflare-access-auth.md).
 
 ### deleteCookie(options) / deleteCookies(options[])
 

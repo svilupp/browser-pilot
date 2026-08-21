@@ -134,7 +134,10 @@ type ActionType =
   | 'chooseOption'
   | 'upload'
   | 'review'
-  | 'delta';
+  | 'delta'
+  | 'emit'
+  | 'setCookie'
+  | 'setHeaders';
 
 interface Step {
   action: ActionType;
@@ -196,6 +199,15 @@ interface Step {
   pollInterval?: number;
   effect?: 'observe' | 'idempotent' | 'at_most_once';
   anchor?: string;
+  /** emit: transport ('ws'), payload, base64 flag, awaitReply */
+  channel?: 'ws';
+  payload?: string | Record<string, unknown>;
+  base64?: boolean;
+  awaitReply?: { match?: string; where?: Record<string, unknown>; timeout?: number };
+  /** setCookie: ephemeral, not persisted (see docs/proposals/cloudflare-access-auth.md) */
+  cookie?: SetCookieOptions;
+  /** setHeaders: ephemeral, replaces the whole header set for this step */
+  headers?: Record<string, string>;
 }
 
 interface RecordOptions {

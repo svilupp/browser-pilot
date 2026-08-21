@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.0] - 2026-08-21
+
+### Added
+
+- Cloudflare Access support: `bp connect --cf-access` authenticates protected sites at connect time (service token → `CF_Authorization` cookie), `bp env auth set-headers|set-cookie|clear` for persistent session auth
+- New library APIs: `page.setExtraHTTPHeaders()` and `mintCfAccessJwt()`
+- New `setCookie`/`setHeaders` actions for `bp exec`
+
 ## [0.2.1] - 2026-08-18
 
 - `Page.fill()`'s `verify` option now accepts `"normalized"` in addition to `true`/`"exact"`/`false`.

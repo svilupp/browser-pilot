@@ -38,6 +38,7 @@ Use `bp --help` to route a task by job and `bp --version` to check the CLI build
 | Inject protocol traffic | `emit` |
 | Exercise voice and media | `audio` |
 | Change browser conditions | `env` |
+| Authenticate behind Cloudflare Access | `connect --cf-access`, `env auth` |
 
 For multiple local Chrome profiles, use `--channel` or `--user-data-dir`. Use
 `bp connect --new-tab --page-url <url>` to start from a fresh tab. New tabs stay in the background
@@ -170,6 +171,35 @@ This covers common payment-field topologies (Adyen/Stripe-style secured/tokenize
 Not supported inside a cross-origin frame: `snapshot`, `diagnose`, `select`, `check`/`uncheck`,
 `hover`, `scroll`, `forms`, and similar read/interaction helpers - call `switchToMain()` first.
 
+## Authenticated targets (Cloudflare Access)
+
+Connect straight through a Cloudflare-Access-protected origin using a service token, no
+manual login step:
+
+```bash
+bp connect --new-tab --page-url https://app.example.com --cf-access
+```
+
+This mints a `CF_Authorization` JWT out-of-band (cookie mode, the default) and applies it
+before the first navigation. From the library:
+
+```typescript
+import { connect, mintCfAccessJwt } from 'browser-pilot';
+
+const browser = await connect({ provider: 'generic' });
+const page = await browser.page();
+const { cookie } = await mintCfAccessJwt({
+  url: 'https://app.example.com',
+  clientId: process.env.CF_ACCESS_CLIENT_ID!,
+  clientSecret: process.env.CF_ACCESS_CLIENT_SECRET!,
+});
+await page.setCookie(cookie);
+```
+
+For persisted auth that survives reattach/daemon restarts, use `bp env auth set-cookie` /
+`set-headers` (see [CLI Guide](./docs/cli.md)). Full design and lifecycle semantics:
+[Cloudflare Access auth proposal](./docs/proposals/cloudflare-access-auth.md).
+
 ## Providers
 
 Use [Browser Use](https://browser-use.com) when local Chrome is unavailable:
@@ -191,4 +221,5 @@ connections.
 - [Page API](./docs/api/page.md)
 - [Browser API](./docs/api/browser.md)
 - [Types](./docs/api/types.md)
+- [Cloudflare Access auth proposal](./docs/proposals/cloudflare-access-auth.md)
 - [LLM contract](./docs/llms.txt)

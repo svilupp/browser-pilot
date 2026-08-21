@@ -586,4 +586,26 @@ describe('Page network interception methods', () => {
       expect(cdp.findCall('Fetch.disable')).toBeUndefined();
     });
   });
+
+  describe('page.setExtraHTTPHeaders()', () => {
+    test('should send Network.setExtraHTTPHeaders with the exact headers', async () => {
+      const cdp = createMockCDPClient();
+      const page = await createTestPage(cdp);
+
+      await page.setExtraHTTPHeaders({
+        'CF-Access-Client-Id': 'test-id',
+        'CF-Access-Client-Secret': 'test-secret',
+      });
+
+      expect(cdp.sent).toContainEqual({
+        method: 'Network.setExtraHTTPHeaders',
+        params: {
+          headers: {
+            'CF-Access-Client-Id': 'test-id',
+            'CF-Access-Client-Secret': 'test-secret',
+          },
+        },
+      });
+    });
+  });
 });

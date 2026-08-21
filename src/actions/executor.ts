@@ -1567,6 +1567,26 @@ export class BatchExecutor {
         return { value: result };
       }
 
+      case 'setCookie': {
+        if (
+          !step.cookie ||
+          typeof step.cookie.name !== 'string' ||
+          typeof step.cookie.value !== 'string'
+        ) {
+          throw new Error('setCookie requires cookie: { name, value, ... }');
+        }
+        const success = await this.page.setCookie(step.cookie);
+        return { value: { success } };
+      }
+
+      case 'setHeaders': {
+        if (!step.headers || typeof step.headers !== 'object' || Array.isArray(step.headers)) {
+          throw new Error('setHeaders requires headers: Record<string, string>');
+        }
+        await this.page.setExtraHTTPHeaders(step.headers);
+        return {};
+      }
+
       default: {
         const action = step.action as string;
         const aliases: Record<string, string> = {

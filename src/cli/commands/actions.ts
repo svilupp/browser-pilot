@@ -118,6 +118,21 @@ IFRAME NAVIGATION
   nested inside a cross-origin frame (e.g. full Stripe Elements) is not yet supported;
   genuine cross-origin OOPIFs require Chrome site isolation (--site-per-process).
 
+AUTHENTICATION (EPHEMERAL)
+  {"action":"setCookie","cookie":{"name":"CF_Authorization","value":"...","domain":"example.com"}}
+    Set a cookie on the live CDP session for this step only. Ephemeral: not
+    persisted, lost on next attach/reattach. Useful for a one-off mid-flow
+    swap (e.g. re-minting a Cloudflare Access JWT) without a full reconnect.
+
+  {"action":"setHeaders","headers":{"CF-Access-Client-Id":"...","CF-Access-Client-Secret":"..."}}
+    Replace the extra HTTP headers on the live CDP session for this step
+    only. Same ephemeral caveats as setCookie; replaces the whole header set.
+
+  For persisted, auto-reapplied Cloudflare Access auth that survives
+  attach/reattach and daemon restarts, use 'bp env auth set-headers' /
+  'set-cookie' / 'clear' instead (see 'bp env --help' and
+  docs/proposals/cloudflare-access-auth.md).
+
 DIALOG HANDLING
   Use --dialog flag: bp exec --dialog accept '[...]'
   Modes: accept (click OK), dismiss (click Cancel)

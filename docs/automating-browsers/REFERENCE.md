@@ -15,6 +15,8 @@ For simple, reusable, low-cost automation on top of browser-pilot, use the compa
 - Exercise voice/media: `audio`
 - Review structured state: `review`
 - Change browser conditions: `env`
+- Authenticate behind Cloudflare Access: `connect --cf-access` (mint+apply once) or
+  `env auth set-headers`/`set-cookie` (persisted, reapplied on every attach)
 
 ## If the task is...
 
@@ -135,6 +137,17 @@ Result fields: `outcomeStatus`, `matchedConditions`, `retrySafe`.
 {"action":"chooseOption","trigger":"#combo-trigger","value":"United States","match":"contains"}
 {"action":"upload","selector":"#file-input","files":["/path/to/doc.pdf"]}
 ```
+
+### Ephemeral auth mutation
+
+```json
+{"action":"setCookie","cookie":{"name":"CF_Authorization","value":"...","domain":"example.com"}}
+{"action":"setHeaders","headers":{"CF-Access-Client-Id":"...","CF-Access-Client-Secret":"..."}}
+```
+
+One-shot mid-flow mutation of the live CDP session; not persisted, lost on next
+attach/reattach. For persisted auth reapplied automatically on every attach, use
+`bp env auth set-cookie`/`set-headers` instead (see `env routing` below).
 
 ### Retry
 
@@ -262,6 +275,7 @@ bp review -s dev --json
 - want focused behavior analysis: `bp trace summary --view ws|console|voice|permissions|media|ui|session`
 - want raw live stream: `bp trace tail ...`
 - want browser-state mutation: `bp env ...`
+- target is behind Cloudflare Access: `bp connect --cf-access` or `bp env auth set-headers`/`set-cookie`
 
 Compatibility:
 
