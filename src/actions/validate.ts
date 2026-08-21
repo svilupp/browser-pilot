@@ -402,6 +402,14 @@ const ACTION_RULES: Record<ActionType, ActionRule> = {
       awaitReply: { type: 'object' },
     },
   },
+  setCookie: {
+    required: { cookie: { type: 'object' } },
+    optional: {},
+  },
+  setHeaders: {
+    required: { headers: { type: 'object' } },
+    optional: {},
+  },
 };
 
 const VALID_ACTIONS = Object.keys(ACTION_RULES) as ActionType[];
@@ -473,6 +481,8 @@ const KNOWN_STEP_FIELDS = new Set([
   'payload',
   'base64',
   'awaitReply',
+  'cookie',
+  'headers',
 ]);
 
 // --- Action resolution ---

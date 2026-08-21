@@ -5229,6 +5229,16 @@ export class Page {
   }
 
   /**
+   * Set extra HTTP headers sent on every request from this page's CDP session.
+   *
+   * Unlike cookies, headers are per-CDP-session, not browser-wide, so this
+   * must be reapplied on every new target/page if persistence is desired.
+   */
+  async setExtraHTTPHeaders(headers: Record<string, string>): Promise<void> {
+    await this.cdp.send('Network.setExtraHTTPHeaders', { headers });
+  }
+
+  /**
    * Delete a specific cookie
    */
   async deleteCookie(options: DeleteCookieOptions): Promise<void> {

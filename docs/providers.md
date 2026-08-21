@@ -355,7 +355,10 @@ const cdp = browser.cdpClient;
 
 // Send raw CDP commands
 await cdp.send('Network.enable');
-await cdp.send('Network.setExtraHTTPHeaders', {
-  headers: { 'X-Custom-Header': 'value' },
-});
+await cdp.send('Network.getCookies');
 ```
+
+For extra HTTP headers, prefer the first-class `page.setExtraHTTPHeaders()` over
+`cdp.send('Network.setExtraHTTPHeaders', ...)` directly — see
+[Page API](./api/page.md#setextrahttpheadersheaders). It's the same underlying CDP call,
+just documented, and it's what `bp connect --cf-access` / `bp env auth set-headers` build on.

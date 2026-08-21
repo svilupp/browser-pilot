@@ -13,6 +13,7 @@ import { TargetNotFoundError } from '../browser/types.ts';
 import { clearDaemonFromSession, isDaemonAlive } from '../daemon/lifecycle.ts';
 import { DAEMON_MAX_AGE_MS } from '../daemon/types.ts';
 import { addBatchToPage, connect } from '../index.ts';
+import { getEnv } from '../runtime/env.ts';
 import {
   applyNetworkOverride,
   applyPermissionState,
@@ -61,6 +62,33 @@ async function applySessionEnvironment(
 
   if (settings.network) {
     await applyNetworkOverride(page.cdpClient, settings.network);
+  }
+
+  if (settings.auth?.extraHeaders) {
+    const { fromEnv, values } = settings.auth.extraHeaders;
+    const headers: Record<string, string> = { ...values };
+    if (fromEnv) {
+      for (const [headerName, envVarName] of Object.entries(fromEnv)) {
+        const resolved = getEnv(envVarName);
+        if (resolved !== undefined) {
+          headers[headerName] = resolved;
+        }
+      }
+    }
+    if (Object.keys(headers).length > 0) {
+      await page.setExtraHTTPHeaders(headers);
+    }
+  }
+
+  if (settings.auth?.cookies) {
+    for (const cookie of settings.auth.cookies) {
+      const { valueFromEnv, ...rest } = cookie;
+      const value = valueFromEnv !== undefined ? getEnv(valueFromEnv) : rest.value;
+      if (value === undefined) {
+        continue;
+      }
+      await page.setCookie({ ...rest, value });
+    }
   }
 }
 

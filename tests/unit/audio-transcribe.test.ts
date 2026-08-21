@@ -43,12 +43,12 @@ describe('transcribe', () => {
 
   test('throws without API key when env var is unset', async () => {
     const original = process.env['OPENAI_API_KEY'];
-    process.env['OPENAI_API_KEY'] = undefined;
+    delete process.env['OPENAI_API_KEY'];
 
     try {
       await expect(transcribe(fakeCaptureResult())).rejects.toThrow('API key required');
     } finally {
-      if (original) process.env['OPENAI_API_KEY'] = original;
+      if (original !== undefined) process.env['OPENAI_API_KEY'] = original;
     }
   });
 

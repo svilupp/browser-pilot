@@ -7,6 +7,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { DaemonInfo } from '../daemon/types.ts';
 import type { ChromeChannel, ResolvedBrowserSource } from '../providers/local-discovery.ts';
+import type { SetCookieOptions } from '../storage/types.ts';
 
 export type ProviderType = 'browserbase' | 'browserless' | 'browser-use' | 'generic';
 
@@ -68,6 +69,24 @@ export interface EnvSettings {
   network?: {
     offline: boolean;
     latency?: number;
+  };
+  /**
+   * Persisted Cloudflare-Access-style auth state, reapplied on every
+   * attach/reattach via `applySessionEnvironment()`. See
+   * docs/proposals/cloudflare-access-auth.md for the full lifecycle.
+   *
+   * `extraHeaders.fromEnv` stores environment variable *names*, never
+   * resolved secret values — session files are plaintext on disk.
+   */
+  auth?: {
+    extraHeaders?: {
+      /** header name -> env var name, resolved at apply time via getEnv() */
+      fromEnv?: Record<string, string>;
+      /** header name -> literal value (use sparingly; prefer fromEnv for secrets) */
+      values?: Record<string, string>;
+    };
+    /** value and valueFromEnv are mutually exclusive per entry */
+    cookies?: (Omit<SetCookieOptions, 'value'> & { value?: string; valueFromEnv?: string })[];
   };
 }
 

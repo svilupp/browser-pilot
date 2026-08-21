@@ -321,6 +321,11 @@ Primary commands:
 - `bp env network ...`
 - `bp env visibility ...`
 - `bp env geolocation ...`
+- `bp env auth ...` — persisted Cloudflare-Access-style header/cookie auth,
+  reapplied on every attach/reattach. See
+  `docs/proposals/cloudflare-access-auth.md` for the full lifecycle
+  semantics (persisted `env auth set-*` vs. ephemeral `setCookie`/`setHeaders`
+  actions).
 
 Examples:
 
@@ -330,6 +335,15 @@ bp env network offline -s dev --duration 5000
 bp env network throttle -s dev --latency 200 --down 128kbps --up 64kbps
 bp env visibility hidden -s dev
 bp env geolocation set -s dev --lat 37.7749 --lon -122.4194
+
+# Cloudflare Access auth (persisted, reapplied on every attach)
+bp env auth set-headers -s dev --from-env CF-Access-Client-Id=CF_ACCESS_CLIENT_ID --from-env CF-Access-Client-Secret=CF_ACCESS_CLIENT_SECRET
+bp env auth set-cookie CF_Authorization -s dev --value-from-env CF_ACCESS_JWT --domain example.com
+bp env auth clear -s dev
+
+# Sugar: mint the CF_Authorization cookie automatically (cookie mode, default)
+bp connect --new-tab --page-url https://app.example.com --cf-access
+bp connect --new-tab --page-url https://app.example.com --cf-access --cf-access-mode headers
 ```
 
 Likely next steps:
@@ -338,6 +352,9 @@ Likely next steps:
 - `bp exec -s dev '[{"action":"assertPermission","name":"geolocation","state":"granted"}]'`
 
 ## Session lifecycle
+
+Connecting to a target behind Cloudflare Access? See `--cf-access` in the [Env](#env)
+section above.
 
 Core session commands:
 

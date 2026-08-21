@@ -37,7 +37,10 @@ describe('emit (integration)', () => {
     const { page, baseUrl } = ctx.get();
     await page.goto(`${baseUrl}/websocket.html`);
     // All three sockets must be open before any sweep is meaningful.
-    await waitForLogEntry(page, 'entry.indexOf("open") !== -1');
+    for (const name of ['main', 'frame', 'worker']) {
+      const entries = await waitForLogEntry(page, `entry.indexOf("${name}:open") !== -1`, 15000);
+      if (entries.length === 0) throw new Error(`Timed out waiting for ${name} socket to open`);
+    }
   }, 60000);
   afterAll(() => ctx.teardown());
 

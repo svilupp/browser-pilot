@@ -5,6 +5,7 @@
 import { dirname } from 'node:path';
 import { grantAudioPermissions } from '../../audio/permissions.ts';
 import { connect, type Page } from '../../index.ts';
+import { getEnv } from '../../runtime/env.ts';
 import { formatBrowserDiscoveryError, resolveCLIEndpoint } from '../browser-endpoint.ts';
 import {
   applyNetworkOverride,
@@ -47,12 +48,15 @@ Usage:
   bp env network <action> [options]
   bp env visibility <state> [options]
   bp env geolocation <action> [options]
+  bp env auth <action> [options]
 
 Subcommands:
   permissions  grant, revoke, reset, get
   network      offline, online, throttle
   visibility   hidden, visible
   geolocation  set, clear
+  auth         set-headers, set-cookie, clear (Cloudflare-Access-style auth persistence;
+               see docs/proposals/cloudflare-access-auth.md for the full lifecycle semantics)
 
 Common options:
   -s, --session <id>     Session to use (omit: auto-connect, -s: latest, -s <id>: specific)
@@ -77,6 +81,11 @@ Examples:
   bp env geolocation set -s my-session --lat 37.7749 --lon -122.4194
   bp env geolocation clear -s my-session
 
+  # Auth (Cloudflare Access, persisted + reapplied on every attach)
+  bp env auth set-headers -s my-session --from-env CF-Access-Client-Id=CF_ACCESS_CLIENT_ID --from-env CF-Access-Client-Secret=CF_ACCESS_CLIENT_SECRET
+  bp env auth set-cookie CF_Authorization -s my-session --value-from-env CF_ACCESS_JWT --domain example.com
+  bp env auth clear -s my-session
+
 Likely next commands:
   bp trace watch -s my-session --view ws --assert profile:reconnect
   bp exec -s my-session '[{"action":"assertPermission","name":"microphone","state":"granted"}]'
@@ -95,6 +104,7 @@ type PermissionArg =
 type NetworkAction = 'offline' | 'online' | 'throttle';
 type VisibilityStateArg = 'hidden' | 'visible';
 type GeoAction = 'set' | 'clear';
+type AuthAction = 'set-headers' | 'set-cookie' | 'clear';
 
 type PermissionQuery = { name: string; state: string };
 
@@ -121,7 +131,7 @@ namespace PermissionNames {
 }
 
 interface EnvOptions {
-  topCommand?: 'permissions' | 'network' | 'visibility' | 'geolocation';
+  topCommand?: 'permissions' | 'network' | 'visibility' | 'geolocation' | 'auth';
   permissionMode?: PermissionMode;
   permissionName?: string;
   networkAction?: NetworkAction;
@@ -141,6 +151,15 @@ interface EnvOptions {
   lat?: number;
   lon?: number;
   accuracy?: number;
+
+  // Auth options
+  authAction?: AuthAction;
+  authFromEnv?: Record<string, string>;
+  authCookieName?: string;
+  authValueFromEnv?: string;
+  authDomain?: string;
+  authPath?: string;
+  authSecure?: boolean;
 }
 
 interface ResolvedConnection {
@@ -161,7 +180,11 @@ export function parseEnvArgs(args: string[]): EnvOptions {
 
     if (
       !options.topCommand &&
-      (arg === 'permissions' || arg === 'network' || arg === 'visibility' || arg === 'geolocation')
+      (arg === 'permissions' ||
+        arg === 'network' ||
+        arg === 'visibility' ||
+        arg === 'geolocation' ||
+        arg === 'auth')
     ) {
       options.topCommand = arg;
       continue;
@@ -221,6 +244,38 @@ export function parseEnvArgs(args: string[]): EnvOptions {
       continue;
     }
 
+    if (arg === '--from-env') {
+      const raw = args[++i] ?? '';
+      const eq = raw.indexOf('=');
+      if (eq === -1) {
+        throw new Error(`--from-env expects HeaderName=ENV_VAR_NAME, got: ${raw}`);
+      }
+      const headerName = raw.slice(0, eq);
+      const envVarName = raw.slice(eq + 1);
+      options.authFromEnv = { ...options.authFromEnv, [headerName]: envVarName };
+      continue;
+    }
+
+    if (arg === '--value-from-env') {
+      options.authValueFromEnv = args[++i];
+      continue;
+    }
+
+    if (arg === '--domain') {
+      options.authDomain = args[++i];
+      continue;
+    }
+
+    if (arg === '--path') {
+      options.authPath = args[++i];
+      continue;
+    }
+
+    if (arg === '--secure') {
+      options.authSecure = true;
+      continue;
+    }
+
     if (!arg.startsWith('-') && options.topCommand) {
       if (options.topCommand === 'permissions') {
         if (!options.permissionMode) {
@@ -253,6 +308,16 @@ export function parseEnvArgs(args: string[]): EnvOptions {
 
       if (options.topCommand === 'geolocation') {
         options.geoAction = arg as GeoAction;
+      }
+
+      if (options.topCommand === 'auth') {
+        if (!options.authAction) {
+          options.authAction = arg as AuthAction;
+          continue;
+        }
+        if (options.authAction === 'set-cookie' && !options.authCookieName) {
+          options.authCookieName = arg;
+        }
       }
     }
   }
@@ -544,6 +609,112 @@ async function runVisibilityCommand(
   console.log(`Session ${session.id}: visibility set to ${state}`);
 }
 
+type AuthPage = Pick<Page, 'setExtraHTTPHeaders' | 'setCookie' | 'deleteCookie'>;
+
+async function runAuthCommand(
+  action: AuthAction,
+  options: EnvOptions,
+  page: AuthPage,
+  session: SessionData,
+  existingEnv: EnvSettings
+): Promise<EnvSettings> {
+  const existingAuth = existingEnv.auth ?? {};
+
+  if (action === 'clear') {
+    // Best-effort courtesy: clear headers on the live CDP session and
+    // delete any persisted cookies from the live session too.
+    await page.setExtraHTTPHeaders({});
+    for (const cookie of existingAuth.cookies ?? []) {
+      await page.deleteCookie({ name: cookie.name, domain: cookie.domain, path: cookie.path });
+    }
+    console.log(`Session ${session.id}: auth settings cleared`);
+    return { ...existingEnv, auth: undefined };
+  }
+
+  if (action === 'set-headers') {
+    if (!options.authFromEnv || Object.keys(options.authFromEnv).length === 0) {
+      throw new Error('auth set-headers requires at least one --from-env HeaderName=ENV_VAR');
+    }
+
+    // CDP's Network.setExtraHTTPHeaders replaces the entire header set, so we
+    // must resolve and apply the full *merged* fromEnv map (existing +
+    // newly-passed), not just the newly-passed headers. Otherwise previously
+    // applied headers would silently drop from the live session even though
+    // they remain persisted, until the next attach/reattach.
+    const mergedFromEnv = { ...existingAuth.extraHeaders?.fromEnv, ...options.authFromEnv };
+
+    const headers: Record<string, string> = {};
+    const unsetVars: string[] = [];
+    for (const [headerName, envVarName] of Object.entries(mergedFromEnv)) {
+      const resolved = getEnv(envVarName);
+      if (resolved !== undefined) {
+        headers[headerName] = resolved;
+      } else {
+        unsetVars.push(envVarName);
+      }
+    }
+    await page.setExtraHTTPHeaders(headers);
+
+    const nextAuth: EnvSettings['auth'] = {
+      ...existingAuth,
+      extraHeaders: {
+        ...existingAuth.extraHeaders,
+        fromEnv: mergedFromEnv,
+      },
+    };
+    if (unsetVars.length > 0) {
+      console.warn(
+        `Warning: env var(s) not set, header(s) will be applied on next attach once set: ${unsetVars.join(', ')}`
+      );
+    }
+    console.log(
+      `Session ${session.id}: applied and persisted headers from env: ${Object.keys(options.authFromEnv).join(', ')}`
+    );
+    return { ...existingEnv, auth: nextAuth };
+  }
+
+  if (action === 'set-cookie') {
+    if (!options.authCookieName) {
+      throw new Error(
+        'auth set-cookie requires a cookie name, e.g. bp env auth set-cookie CF_Authorization --value-from-env CF_ACCESS_JWT'
+      );
+    }
+    if (!options.authValueFromEnv) {
+      throw new Error('auth set-cookie requires --value-from-env ENV_VAR');
+    }
+
+    const value = getEnv(options.authValueFromEnv);
+    if (value === undefined) {
+      throw new Error(`Environment variable ${options.authValueFromEnv} is not set`);
+    }
+
+    await page.setCookie({
+      name: options.authCookieName,
+      value,
+      domain: options.authDomain,
+      path: options.authPath,
+      secure: options.authSecure,
+    });
+
+    const nextCookie = {
+      name: options.authCookieName,
+      valueFromEnv: options.authValueFromEnv,
+      domain: options.authDomain,
+      path: options.authPath,
+      secure: options.authSecure,
+    };
+    const nextCookies = [
+      ...(existingAuth.cookies ?? []).filter((c) => c.name !== options.authCookieName),
+      nextCookie,
+    ];
+
+    console.log(`Session ${session.id}: applied and persisted cookie ${options.authCookieName}`);
+    return { ...existingEnv, auth: { ...existingAuth, cookies: nextCookies } };
+  }
+
+  throw new Error(`Unsupported auth action: ${action}`);
+}
+
 async function runGeolocationCommand(
   action: GeoAction,
   options: EnvOptions,
@@ -729,6 +900,15 @@ export async function envCommand(
           },
         },
       });
+      return;
+    }
+
+    if (options.topCommand === 'auth') {
+      if (!options.authAction) {
+        throw new Error('auth command requires: set-headers, set-cookie, or clear');
+      }
+      const nextEnv = await runAuthCommand(options.authAction, options, page, session, existingEnv);
+      await updateSession(session.id, { metadata: { env: nextEnv } });
       return;
     }
 

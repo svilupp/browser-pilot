@@ -5,12 +5,14 @@
  * for faster subsequent commands. Use --no-daemon to disable.
  */
 
-import { type BrowserOptions, connect } from '../../index.ts';
+import { type BrowserOptions, connect, mintCfAccessJwt } from '../../index.ts';
+import { getEnv } from '../../runtime/env.ts';
 import { getBuildProvenance } from '../../runtime/provenance.ts';
 import { formatBrowserDiscoveryError, resolveCLIEndpoint } from '../browser-endpoint.ts';
 import { spawnDaemon, waitForDaemonReady } from '../daemon-spawn.ts';
 import { output } from '../index.ts';
 import {
+  type EnvSettings,
   generateSessionId,
   getSessionFilePath,
   loadSession,
@@ -63,6 +65,15 @@ Local options:
   --no-highlights         Disable visual highlights on screenshots
   --no-daemon             Skip daemon creation (direct WebSocket only)
   --daemon-idle <mins>    Daemon idle timeout in minutes (default: 60)
+  --cf-access             Authenticate against Cloudflare Access using
+                          CF_ACCESS_CLIENT_ID / CF_ACCESS_CLIENT_SECRET from the
+                          environment. In cookie mode (default), mints the JWT
+                          against --page-url when given (falling back to the
+                          resolved page URL) and re-navigates afterward so the
+                          first load succeeds (see
+                          docs/proposals/cloudflare-access-auth.md)
+  --cf-access-mode <m>    cookie (default, out-of-band JWT exchange) | headers
+                          (persist raw service-token headers, global blast radius)
 
 Global options:
   --json                  Output JSON
@@ -85,6 +96,8 @@ Examples:
   bp connect --provider browser-use --proxy-country de           # German proxy
   bp connect --provider browser-use --proxy-country null         # No proxy
   bp connect --provider browser-use --cloud-timeout 30           # 30-min session
+  bp connect --new-tab --page-url https://app.example.com --cf-access      # Cloudflare Access, cookie mode
+  bp connect --new-tab --page-url https://app.example.com --cf-access --cf-access-mode headers
 
 Likely next commands:
   bp exec -s dev '{"action":"goto","url":"https://example.com"}'
@@ -116,6 +129,8 @@ interface ConnectOptions {
   recordFormat?: 'png' | 'jpeg' | 'webp';
   recordQuality?: number;
   noHighlights?: boolean;
+  cfAccess?: boolean;
+  cfAccessMode?: 'headers' | 'cookie';
 }
 
 async function resolveInitialPageUrl(
@@ -217,6 +232,14 @@ function parseConnectArgs(args: string[]): ConnectOptions {
         throw new Error('--cloud-timeout must be 1-240 minutes');
       }
       options.cloudTimeout = mins;
+    } else if (arg === '--cf-access') {
+      options.cfAccess = true;
+    } else if (arg === '--cf-access-mode') {
+      const mode = args[++i];
+      if (mode !== 'headers' && mode !== 'cookie') {
+        throw new Error('--cf-access-mode must be "headers" or "cookie"');
+      }
+      options.cfAccessMode = mode;
     }
   }
 
@@ -330,10 +353,69 @@ export async function connectCommand(
         undefined,
         options.targetUrl !== undefined ? { targetUrl: options.targetUrl } : undefined
       );
-  const currentUrl = await resolveInitialPageUrl(page, pageUrl);
+  let currentUrl = await resolveInitialPageUrl(page, pageUrl);
 
   if (browser.metadata?.['liveUrl']) {
     console.error(`\nLive viewer: ${browser.metadata['liveUrl']}\n`);
+  }
+
+  // Apply Cloudflare Access sugar (--cf-access) before persisting the session,
+  // so the resulting EnvSettings.auth is reapplied on every attach/reattach.
+  let cfAccessAuth: EnvSettings['auth'] | undefined;
+  if (options.cfAccess) {
+    const mode = options.cfAccessMode ?? 'cookie';
+    if (currentUrl === 'about:blank') {
+      throw new Error(
+        '--cf-access requires a target URL. Pass --page-url <url> (with --new-tab) or --url <url>.'
+      );
+    }
+
+    const clientId = getEnv('CF_ACCESS_CLIENT_ID');
+    const clientSecret = getEnv('CF_ACCESS_CLIENT_SECRET');
+    if (!clientId || !clientSecret) {
+      throw new Error(
+        '--cf-access requires CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET to be set in the environment.'
+      );
+    }
+
+    if (mode === 'headers') {
+      await page.setExtraHTTPHeaders({
+        'CF-Access-Client-Id': clientId,
+        'CF-Access-Client-Secret': clientSecret,
+      });
+      cfAccessAuth = {
+        extraHeaders: {
+          fromEnv: {
+            'CF-Access-Client-Id': 'CF_ACCESS_CLIENT_ID',
+            'CF-Access-Client-Secret': 'CF_ACCESS_CLIENT_SECRET',
+          },
+        },
+      };
+    } else {
+      // Mint against the explicit --page-url when given, not the possibly-racy
+      // currentUrl resolved from polling: on an Access-protected origin, the
+      // page may still be sitting on the *.cloudflareaccess.com login
+      // redirect when we sample the URL, which would mint the JWT against the
+      // wrong origin/cookie domain.
+      const mintUrl = pageUrl ?? currentUrl;
+      const { cookie } = await mintCfAccessJwt({
+        url: mintUrl,
+        clientId,
+        clientSecret,
+      });
+      await page.setCookie(cookie);
+      // If we navigated before the cookie was set, the first load may have
+      // hit the Access login redirect instead of the target origin. Re-issue
+      // the navigation now that the cookie is in place so the session lands
+      // on the intended page.
+      if (pageUrl && pageUrl !== 'about:blank') {
+        await page.goto(pageUrl);
+        currentUrl = await page.url();
+      }
+      // The minted JWT is persisted by design (proposal §3): it expires per
+      // the Access session policy, unlike a long-lived client secret.
+      cfAccessAuth = { cookies: [{ ...cookie }] };
+    }
   }
 
   // Generate session ID
@@ -365,6 +447,7 @@ export async function connectCommand(
       ...(resolvedChannel ? { resolvedChannel } : {}),
       ...(resolvedUserDataDir ? { resolvedUserDataDir } : {}),
       ...(recordSettings ? { record: recordSettings } : {}),
+      ...(cfAccessAuth ? { env: { auth: cfAccessAuth } } : {}),
       provenance: getBuildProvenance(),
     },
   };

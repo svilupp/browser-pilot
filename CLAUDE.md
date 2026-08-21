@@ -65,6 +65,7 @@ Entry: `src/index.ts`. Public API report: `etc/browser-pilot.api.md`.
 - **OOPIF support**: cross-origin iframes via auto-attach; limited action subset (`src/browser/page.ts`)
 - **Snapshot refs**: accessibility tree with `ref:e12` selectors, cached per session+URL (`docs/guides/snapshots.md`)
 - **Provider pattern**: `createSession()` → `{ wsUrl, sessionId, close() }` (`src/providers/types.ts`, `docs/providers.md`)
+- **Cloudflare Access auth**: `page.setExtraHTTPHeaders()`, `mintCfAccessJwt()`, `bp connect --cf-access`, persisted `bp env auth set-headers|set-cookie|clear`, and ephemeral `setCookie`/`setHeaders` actions (`src/auth/`, `docs/proposals/cloudflare-access-auth.md`)
 
 ## Docs Index
 

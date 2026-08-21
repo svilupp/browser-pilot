@@ -162,6 +162,14 @@ bp env network offline -s vt --duration 5000
 bp env visibility hidden -s vt
 ```
 
+Cloudflare-Access-protected targets: authenticate before automating
+
+```bash
+bp connect --new-tab --page-url https://app.example.com --cf-access
+# or, for persisted headers that survive reattach:
+bp env auth set-headers -s vt --from-env CF-Access-Client-Id=CF_ACCESS_CLIENT_ID --from-env CF-Access-Client-Secret=CF_ACCESS_CLIENT_SECRET
+```
+
 ## Trace-backed assertions in exec/run
 
 Useful steps for realtime and voice apps:

@@ -29,6 +29,7 @@ Connect to a local or cloud browser:
 ```bash
 bp connect --name dev                              # Local Chrome (default)
 bp connect --provider browser-use --name dev       # Cloud browser (recommended when no local Chrome)
+bp connect --new-tab --page-url https://app.example.com --cf-access  # Behind Cloudflare Access
 ```
 
 Inspect and act:

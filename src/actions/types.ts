@@ -8,6 +8,7 @@ import type {
   FailureHint,
   ReadyCondition,
 } from '../browser/types.ts';
+import type { SetCookieOptions } from '../storage/types.ts';
 
 export type UrlMatchMode = 'exact' | 'origin_path' | 'glob' | 'contains';
 export type TextMatchMode = 'exact' | 'contains' | 'regex';
@@ -143,7 +144,9 @@ export type ActionType =
   | 'review'
   | 'chooseOption'
   | 'upload'
-  | 'emit';
+  | 'emit'
+  | 'setCookie'
+  | 'setHeaders';
 
 export interface Step {
   /** Action type */
@@ -321,6 +324,20 @@ export interface Step {
 
   /** Natural-language target anchor supplied by a higher-level planner/driver. */
   anchor?: string;
+
+  /**
+   * Cookie descriptor for the setCookie action. Ephemeral: not persisted
+   * into EnvSettings.auth and lost on next attach/reattach. See
+   * docs/proposals/cloudflare-access-auth.md for the lifecycle contrast with
+   * `bp env auth set-cookie`.
+   */
+  cookie?: SetCookieOptions;
+
+  /**
+   * Header map for the setHeaders action. Ephemeral, same caveats as
+   * `cookie` above.
+   */
+  headers?: Record<string, string>;
 }
 
 export interface RecordOptions {

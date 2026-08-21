@@ -187,10 +187,13 @@ const cdp = browser.cdpClient;
 
 // Send any CDP command
 await cdp.send('Network.enable');
-await cdp.send('Network.setExtraHTTPHeaders', {
-  headers: { 'X-Custom': 'value' }
-});
+await cdp.send('Network.getCookies');
 ```
+
+For extra HTTP headers specifically, prefer the first-class `page.setExtraHTTPHeaders()`
+(see [Page API](./page.md#setextrahttpheadersheaders)) over calling
+`Network.setExtraHTTPHeaders` through `cdpClient` directly — it's the same CDP call, just
+documented and stable across versions.
 
 ## Session Management
 
