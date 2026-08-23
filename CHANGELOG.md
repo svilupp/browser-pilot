@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.1] - 2026-08-23
+
+### Fixed
+
+- Forward page navigation timeouts to CDP commands so slow navigations honor caller-configured limits.
+
 ## [0.3.0] - 2026-08-21
 
 ### Added

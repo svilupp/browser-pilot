@@ -940,7 +940,10 @@ export class Page {
       waitUntil: options.waitUntil ?? 'load',
     });
 
-    await this.cdp.send('Page.navigate', { url });
+    // Pass the page-level timeout through to the CDP command as well as the
+    // navigation-event wait. Without this, CDPClient's own 30s command
+    // deadline wins before Flightplan's configured navigation timeout.
+    await this.cdp.send('Page.navigate', { url }, undefined, { timeout });
 
     let result: boolean;
     try {
@@ -997,7 +1000,7 @@ export class Page {
       optional: true,
       waitUntil: options.waitUntil ?? 'load',
     });
-    await this.cdp.send('Page.reload');
+    await this.cdp.send('Page.reload', undefined, undefined, { timeout });
     let result: boolean;
     try {
       result = await navPromise;
@@ -1040,9 +1043,14 @@ export class Page {
     });
 
     // Use CDP navigation instead of history.back() - fires proper events
-    await this.cdp.send('Page.navigateToHistoryEntry', {
-      entryId: history.entries[history.currentIndex - 1]!.id,
-    });
+    await this.cdp.send(
+      'Page.navigateToHistoryEntry',
+      {
+        entryId: history.entries[history.currentIndex - 1]!.id,
+      },
+      undefined,
+      { timeout }
+    );
 
     let result: boolean;
     try {
@@ -1085,9 +1093,14 @@ export class Page {
     });
 
     // Use CDP navigation instead of history.forward() - fires proper events
-    await this.cdp.send('Page.navigateToHistoryEntry', {
-      entryId: history.entries[history.currentIndex + 1]!.id,
-    });
+    await this.cdp.send(
+      'Page.navigateToHistoryEntry',
+      {
+        entryId: history.entries[history.currentIndex + 1]!.id,
+      },
+      undefined,
+      { timeout }
+    );
 
     let result: boolean;
     try {
