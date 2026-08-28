@@ -1,7 +1,7 @@
 # browser-pilot
 
-Automation-first browser control over Chrome DevTools Protocol for AI agents. Version 0.3.1
-supports Node.js, Bun, and Cloudflare Workers with zero production dependencies.
+Automation-first browser control over Chrome DevTools Protocol for AI agents.
+Supports Node.js, Bun, and Cloudflare Workers with zero production dependencies.
 
 > Companion package: [Flightplan](https://github.com/svilupp/flightplan) provides simple,
 > reusable, cheap automation on top of browser-pilot. It will be released immediately after

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## [0.4.0] - 2026-08-28
+
 ### Added
 
 - Added `bp webmcp status|list|call` with origin filtering, mutation acknowledgement,
