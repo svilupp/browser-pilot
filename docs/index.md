@@ -28,6 +28,7 @@ For simple, reusable, low-cost automation on top of browser-pilot, use the compa
 - [Batch Actions](./guides/batch-actions.md) - Execute action sequences efficiently
 - [Snapshots](./guides/snapshots.md) - AI-optimized page state extraction
 - [Cloudflare Workers](./guides/cloudflare-workers.md) - Deploy to the edge
+- [WebMCP](./guides/webmcp.md) - Discover and invoke page-provided tools
 
 ## API Reference
 
@@ -47,6 +48,7 @@ For simple, reusable, low-cost automation on top of browser-pilot, use the compa
 | Session Persistence | Resume browsing across commands |
 | Replay Recording | Save `recording.json` + screenshots for replay debugging |
 | WebSocket Daemon | Persistent CDP connection, ~5-15ms per command |
+| WebMCP | Page-scoped tool discovery and invocation with origin and mutation checks |
 | Full CLI | Routed commands for AI agent tool calls |
 
 ## Supported Runtimes

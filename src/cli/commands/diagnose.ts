@@ -3,8 +3,8 @@
  */
 
 import { type DiagnoseResult, diagnoseElement } from '../../browser/diagnose.ts';
-import { connect } from '../../index.ts';
-import { output } from '../index.ts';
+import { attachSession } from '../attach.ts';
+import { output } from '../output.ts';
 import { getDefaultSession, loadSession, type SessionData, updateSession } from '../session.ts';
 
 const DIAGNOSE_HELP = `
@@ -168,15 +168,9 @@ export async function diagnoseCommand(
   }
 
   // Connect to browser
-  const browser = await connect({
-    provider: session.provider,
-    wsUrl: session.wsUrl,
-    debug: globalOptions.trace,
-  });
+  const { browser, page } = await attachSession(session, { trace: globalOptions.trace });
 
   try {
-    const page = await browser.page(undefined, { targetId: session.targetId });
-
     // Run diagnose
     const result = await diagnoseElement(page, selector, {
       maxCandidates: options.maxCandidates,

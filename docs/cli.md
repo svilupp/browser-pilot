@@ -29,6 +29,19 @@ Global options:
 - `--debug` enable CDP transport logs
 - `--trace` legacy alias for `--debug`
 
+Session transport:
+
+- `bp connect` uses a persistent, browser-scoped daemon by default. Follow-up
+  commands attach through its Unix socket and do not open another browser CDP
+  WebSocket.
+- `bp connect --no-daemon` selects direct mode explicitly.
+- Set `BROWSER_PILOT_NO_DAEMON=1` for CI or other environments where detached
+  processes are not allowed. The CLI never silently falls back between modes.
+- Closing the last local session removes only that logical session; its
+  browser-scoped daemon remains available until Chrome exits (or it is stopped
+  explicitly). Use `bp daemon list`, then `bp daemon stop --daemon-id <id>`
+  when no logical session remains.
+
 ## Command chooser
 
 - `bp snapshot -i`: choose clickable/fillable targets and get refs
@@ -84,6 +97,21 @@ Likely next steps:
 - `bp exec -s dev '[...]'`
 - `bp text -s dev --selector '#main'`
 - `bp diagnose -s dev '<selector>'`
+
+## WebMCP
+
+Use WebMCP when the page exposes structured tools through `document.modelContext`:
+
+```bash
+bp webmcp status -s dev
+bp webmcp list -s dev --json
+bp webmcp call addTodo --input '{"text":"Buy milk"}' --confirm-mutation -s dev --json
+```
+
+Discovery and invocation run in the attached document context. Tool lists are
+refreshed after navigation; tools without `readOnlyHint: true` require the
+explicit `--confirm-mutation` acknowledgement. See the [WebMCP guide](guides/webmcp.md)
+for secure-context, origin-isolation, origin, and Permissions Policy requirements.
 
 ## Automate
 
@@ -372,7 +400,14 @@ bp list --json
 bp close -s dev
 bp clean --max-size 500MB
 bp daemon status
+bp daemon list --json
+bp daemon stop --daemon-id <id>
 ```
+
+`daemon status` and `daemon stop` verify the control socket's daemon ID and
+browser fingerprint before trusting a live PID. If a registered daemon is
+unresponsive, inspect the PID first and pass `--force` only when you intend to
+signal it without that identity proof.
 
 ## Routing summary
 
@@ -384,4 +419,5 @@ bp daemon status
 - Need to explain behavior over time: `trace`
 - Need voice/media control: `audio`
 - Need browser-state manipulation: `env`
+- Need page-provided tools: `webmcp`
 - Need structured business state: `review`

@@ -1,6 +1,6 @@
 import type { FormField, InteractiveElement } from '../../browser/types.ts';
 import { attachSession, resolveSession } from '../attach.ts';
-import { output } from '../index.ts';
+import { output } from '../output.ts';
 import { updateSession } from '../session.ts';
 import { formatFormFieldsPretty, formatInteractiveElementsPretty } from './form-utils.ts';
 

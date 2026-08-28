@@ -8,7 +8,7 @@
  */
 
 import { isDaemonAlive } from '../../daemon/lifecycle.ts';
-import { output } from '../index.ts';
+import { output } from '../output.ts';
 import {
   deleteSessionFull,
   getDefaultSession,

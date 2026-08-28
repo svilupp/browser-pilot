@@ -49,17 +49,32 @@ jobs:
         id: setup-chrome
         uses: browser-actions/setup-chrome@v2
         with:
-          chrome-version: 147
+          # WebMCP moved to document.modelContext in Chrome 150. Keep the
+          # integration contract on that API generation.
+          chrome-version: 150
       - run: bun test tests/integration --timeout 30000
         env:
           CI: true
+          # CI must be deterministic and must not leave detached daemons
+          # behind. Daemon lifecycle is covered by local-only tests.
+          BROWSER_PILOT_NO_DAEMON: '1'
+          BROWSER_PILOT_NATIVE_WEBMCP: '1'
           CHROME_PATH: ${{ steps.setup-chrome.outputs.chrome-path }}
           BROWSER_PILOT_CHROME_PATH: ${{ steps.setup-chrome.outputs.chrome-path }}
       - run: bun test tests/cli --timeout 30000
         env:
           CI: true
+          BROWSER_PILOT_NO_DAEMON: '1'
+          BROWSER_PILOT_NATIVE_WEBMCP: '1'
           CHROME_PATH: ${{ steps.setup-chrome.outputs.chrome-path }}
           BROWSER_PILOT_CHROME_PATH: ${{ steps.setup-chrome.outputs.chrome-path }}
+      - name: Assert CI left no daemon processes or sockets
+        if: always()
+        run: |
+          ! pgrep -f '(^|/)(dist/[d]aemon\.mjs|src/[d]aemon/index\.ts)( |$)' || (echo 'daemon process leaked' && exit 1)
+          test -z "$(find "$HOME/.browser-pilot" -type s -name 'daemon.sock' -print -quit 2>/dev/null || true)"
+          test -z "$(find "$HOME/.browser-pilot/daemons" -type f \( -name '*.json' -o -name '*.lock' -o -name '*.heartbeat' \) -print -quit 2>/dev/null || true)"
+          test -z "$(find "$HOME/.browser-pilot/sessions" -type f -name '*.heartbeat' -print -quit 2>/dev/null || true)"
       - name: Upload failure artifacts
         if: failure()
         uses: actions/upload-artifact@v4
@@ -67,7 +82,6 @@ jobs:
           name: browser-test-artifacts
           path: |
             tests/screenshots/
-            ~/.browser-pilot/sessions/*/daemon.log
             ~/.browser-pilot/sessions/*/session.json
           retention-days: 7
           if-no-files-found: ignore
@@ -81,5 +95,5 @@ jobs:
         with:
           bun-version: latest
       - run: bun install
-      - run: bun run build
+      - run: bun run test:package
       - run: bun run api:check

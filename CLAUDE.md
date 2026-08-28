@@ -48,6 +48,7 @@ Entry: `src/index.ts`. Public API report: `etc/browser-pilot.api.md`.
 | Audio I/O (input, output, encoding, transcribe) | `src/audio/` |
 | CLI entry, commands, attach/daemon-spawn | `src/cli/` |
 | Daemon (server, lifecycle, transport, types) | `src/daemon/` |
+| WebMCP page-tool bridge | `src/webmcp/`, `src/cli/commands/webmcp.ts` |
 | Recording (manifest, redaction) | `src/recording/` |
 | Runtime abstractions (env, clock, id), branded types | `src/runtime/`, `src/types/branded.ts` |
 | Workflow summaries | `src/trace/workflow-summary.ts` |
@@ -72,6 +73,7 @@ Entry: `src/index.ts`. Public API report: `etc/browser-pilot.api.md`.
 - `docs/getting-started.md`, `docs/cli.md`, `docs/providers.md`
 - `docs/api/` — browser, page, types reference
 - `docs/guides/` — batch actions, snapshots, multi-selector, recording, tracing, realtime debugging, voice-agent testing, Cloudflare Workers, release checklist
+- `docs/guides/webmcp.md` - current Chrome API contract, security gates, and CLI usage
 - `docs/automating-browsers/` — agent skill + REFERENCE.md + voice agent testing
 - `PLAN.md` — improvement plan (all 8 phases implemented)
 - `CHANGELOG.md`

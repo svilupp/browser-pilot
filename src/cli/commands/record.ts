@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import type { Step } from '../../actions/types.ts';
-import { connect } from '../../index.ts';
+import type { Browser } from '../../browser/browser.ts';
 import {
   canonicalizeRecordingArtifact,
   createRecordingManifest,
@@ -19,15 +19,15 @@ import {
 import { redactValueForRecording } from '../../recording/redaction.ts';
 import type { RawRecordedEvent } from '../../recording/types.ts';
 import { buildTraceSummaries } from '../../trace/views.ts';
+import { attachSession } from '../attach.ts';
 import { formatBrowserDiscoveryError, resolveCLIEndpoint } from '../browser-endpoint.ts';
-import { output } from '../index.ts';
+import { createLocalSession } from '../connect-service.ts';
+import { output } from '../output.ts';
 import {
-  generateSessionId,
   getDefaultSession,
   loadSession,
   type RecordSettings,
   type SessionData,
-  saveSession,
   updateSession,
 } from '../session.ts';
 
@@ -114,7 +114,7 @@ interface RecordOptions {
 }
 
 interface ResolvedConnection {
-  browser: ReturnType<typeof connect> extends Promise<infer T> ? T : never;
+  browser: Browser;
   session: SessionData;
   isNewSession: boolean;
 }
@@ -196,11 +196,7 @@ async function resolveConnection(
 ): Promise<ResolvedConnection> {
   if (sessionId) {
     const session = await loadSession(sessionId);
-    const browser = await connect({
-      provider: session.provider,
-      wsUrl: session.wsUrl,
-      debug,
-    });
+    const { browser } = await attachSession(session, { trace: debug });
     return { browser, session, isNewSession: false };
   }
 
@@ -209,17 +205,13 @@ async function resolveConnection(
     if (!session) {
       throw new Error('No sessions found. Run "bp connect" first or omit -s to auto-connect.');
     }
-    const browser = await connect({
-      provider: session.provider,
-      wsUrl: session.wsUrl,
-      debug,
-    });
+    const { browser } = await attachSession(session, { trace: debug });
     return { browser, session, isNewSession: false };
   }
 
-  let wsUrl: string;
+  let endpoint: Awaited<ReturnType<typeof resolveCLIEndpoint>>;
   try {
-    wsUrl = (await resolveCLIEndpoint()).wsUrl;
+    endpoint = await resolveCLIEndpoint();
   } catch (error) {
     throw new Error(
       formatBrowserDiscoveryError(error, {
@@ -230,22 +222,13 @@ async function resolveConnection(
     );
   }
 
-  const browser = await connect({
-    provider: 'generic',
-    wsUrl,
-    debug,
+  const { browser, session } = await createLocalSession({
+    wsUrl: endpoint.wsUrl,
+    trace: debug,
+    connectionSource: endpoint.source,
+    resolvedChannel: endpoint.channel,
+    resolvedUserDataDir: endpoint.userDataDir,
   });
-  const page = await browser.page();
-  const currentUrl = await page.url();
-  const session: SessionData = {
-    id: generateSessionId(),
-    provider: 'generic',
-    wsUrl: browser.wsUrl,
-    createdAt: new Date().toISOString(),
-    lastActivity: new Date().toISOString(),
-    currentUrl,
-  };
-  await saveSession(session);
   return { browser, session, isNewSession: true };
 }
 

@@ -5,13 +5,24 @@
  * for faster subsequent commands. Use --no-daemon to disable.
  */
 
-import { type BrowserOptions, connect, mintCfAccessJwt } from '../../index.ts';
-import { getEnv } from '../../runtime/env.ts';
-import { getBuildProvenance } from '../../runtime/provenance.ts';
-import { formatBrowserDiscoveryError, resolveCLIEndpoint } from '../browser-endpoint.ts';
-import { spawnDaemon, waitForDaemonReady } from '../daemon-spawn.ts';
-import { output } from '../index.ts';
+import { stopDaemon } from '../../daemon/lifecycle.ts';
 import {
+  connectionKeyForBrowser,
+  daemonIdForConnection,
+  endpointFingerprint,
+  writeDaemonDescriptor,
+} from '../../daemon/registry.ts';
+import { type BrowserOptions, connect, mintCfAccessJwt, type Page } from '../../index.ts';
+import { getEnv, isDaemonDisabledByEnv } from '../../runtime/env.ts';
+import { getBuildProvenance } from '../../runtime/provenance.ts';
+import { attachSession } from '../attach.ts';
+import { formatBrowserDiscoveryError, resolveCLIEndpoint } from '../browser-endpoint.ts';
+import { createLocalSession } from '../connect-service.ts';
+import { spawnDaemon, waitForDaemonReady } from '../daemon-spawn.ts';
+import { output } from '../output.ts';
+import {
+  createSession,
+  deleteSession,
   type EnvSettings,
   generateSessionId,
   getSessionFilePath,
@@ -20,6 +31,7 @@ import {
   type RecordSettings,
   type SessionData,
   saveSession,
+  sessionExists,
   updateSession,
 } from '../session.ts';
 
@@ -64,7 +76,9 @@ Local options:
   --record-quality <n>    Quality 0-100 (default: 40)
   --no-highlights         Disable visual highlights on screenshots
   --no-daemon             Skip daemon creation (direct WebSocket only)
-  --daemon-idle <mins>    Daemon idle timeout in minutes (default: 60)
+  BROWSER_PILOT_NO_DAEMON=1
+                          Environment equivalent for CI and hermetic runs
+  --daemon-idle <mins>    Opt-in daemon idle timeout in minutes (0 disables)
   --cf-access             Authenticate against Cloudflare Access using
                           CF_ACCESS_CLIENT_ID / CF_ACCESS_CLIENT_SECRET from the
                           environment. In cookie mode (default), mints the JWT
@@ -220,7 +234,11 @@ function parseConnectArgs(args: string[]): ConnectOptions {
     } else if (arg === '--no-daemon') {
       options.noDaemon = true;
     } else if (arg === '--daemon-idle') {
-      options.daemonIdleMins = parseInt(args[++i] ?? '60', 10);
+      const idleMins = parseInt(args[++i] ?? '0', 10);
+      if (Number.isNaN(idleMins) || idleMins < 0) {
+        throw new Error('--daemon-idle must be 0 or a positive number of minutes');
+      }
+      options.daemonIdleMins = idleMins;
     } else if (arg === '--proxy-country') {
       const val = args[++i];
       options.proxyCountry = val === 'null' ? null : val;
@@ -262,6 +280,16 @@ export async function connectCommand(
     const sessionId = options.resume || globalOptions.session!;
     let session = await loadSession(sessionId);
 
+    if (session.transport?.mode === 'daemon') {
+      // Resume through the same attachment path as every other stored-session
+      // command. It validates the daemon control plane and performs one
+      // bounded recovery (including endpoint re-resolution after Chrome
+      // restarts) instead of merely checking the old PID.
+      const attached = await attachSession(session, { trace: globalOptions.trace });
+      await attached.browser.disconnect();
+      session = await loadSession(session.id);
+    }
+
     // Update recording settings on resumed session if --record is passed
     if (options.record) {
       const recordSettings: RecordSettings = {};
@@ -279,6 +307,7 @@ export async function connectCommand(
         provider: session.provider,
         currentUrl: session.currentUrl,
         recording: !!session.metadata?.record,
+        transport: session.transport?.mode ?? (session.daemon ? 'daemon' : 'direct'),
         daemon: session.daemon
           ? { pid: session.daemon.pid, socketPath: session.daemon.socketPath }
           : undefined,
@@ -331,6 +360,14 @@ export async function connectCommand(
     connectionSource = 'explicit-ws';
   }
 
+  // Allocate the session ID before opening the browser. In daemon mode the
+  // provisional session record is the daemon's bootstrap contract, allowing
+  // it to own the first CDP WebSocket rather than reconnecting after CLI use.
+  const sessionId = options.name ?? generateSessionId();
+  if (await sessionExists(sessionId)) {
+    throw new Error(`Session already exists: ${sessionId}. Use --resume or close it first.`);
+  }
+
   // Build connection options
   const connectOptions: BrowserOptions = {
     provider,
@@ -345,14 +382,56 @@ export async function connectCommand(
     cloudTimeout: options.cloudTimeout,
   };
 
-  // Connect to browser
-  const browser = await connect(connectOptions);
-  const page = options.newTab
-    ? await browser.newPage(pageUrl ?? 'about:blank', { background: options.foreground !== true })
-    : await browser.page(
-        undefined,
-        options.targetUrl !== undefined ? { targetUrl: options.targetUrl } : undefined
+  // Generic/local sessions can be daemon-first because discovery already gave
+  // us a browser-level WebSocket URL. Cloud providers still need their normal
+  // provider handshake before a daemon can be started.
+  const daemonDisabledByEnv = isDaemonDisabledByEnv();
+  const useDaemon = !options.noDaemon && !daemonDisabledByEnv && provider === 'generic' && !!wsUrl;
+  let daemonSession: SessionData | undefined;
+  let sessionDaemonId: string | undefined;
+  let browser!: Awaited<ReturnType<typeof connect>>;
+  let page: Page;
+
+  if (useDaemon) {
+    try {
+      const created = await createLocalSession({
+        wsUrl: wsUrl!,
+        trace: globalOptions.trace,
+        name: sessionId,
+        newTab: options.newTab,
+        pageUrl,
+        targetUrl: options.targetUrl,
+        foreground: options.foreground,
+        daemonIdleMins: options.daemonIdleMins,
+        connectionSource,
+        resolvedChannel,
+        resolvedUserDataDir,
+        metadata: { provenance: getBuildProvenance() },
+      });
+      browser = created.browser;
+      page = created.page;
+      daemonSession = created.session;
+      sessionDaemonId =
+        created.session.transport?.mode === 'daemon'
+          ? created.session.transport.daemonId
+          : undefined;
+    } catch (error) {
+      if (browser?.isConnected) {
+        await browser.disconnect().catch(() => {});
+      }
+      throw new Error(
+        `Could not start the session daemon: ${error instanceof Error ? error.message : String(error)}`
       );
+    }
+  } else {
+    browser = await connect(connectOptions);
+    page = options.newTab
+      ? await browser.newPage(pageUrl ?? 'about:blank', { background: options.foreground !== true })
+      : await browser.page(
+          undefined,
+          options.targetUrl !== undefined ? { targetUrl: options.targetUrl } : undefined
+        );
+  }
   let currentUrl = await resolveInitialPageUrl(page, pageUrl);
 
   if (browser.metadata?.['liveUrl']) {
@@ -418,9 +497,6 @@ export async function connectCommand(
     }
   }
 
-  // Generate session ID
-  const sessionId = options.name ?? generateSessionId();
-
   // Build session-level recording settings if --record flag is set
   let recordSettings: RecordSettings | undefined;
   if (options.record) {
@@ -441,6 +517,13 @@ export async function connectCommand(
     createdAt: new Date().toISOString(),
     lastActivity: new Date().toISOString(),
     currentUrl,
+    daemon: daemonSession?.daemon,
+    transport: useDaemon
+      ? { mode: 'daemon', daemonId: sessionDaemonId }
+      : {
+          mode: 'direct',
+          reason: options.noDaemon ? 'flag' : daemonDisabledByEnv ? 'environment' : 'legacy',
+        },
     metadata: {
       ...browser.metadata,
       ...(connectionSource ? { connectionSource } : {}),
@@ -453,7 +536,16 @@ export async function connectCommand(
   };
   const outputMetadata = session.metadata;
 
-  await saveSession(session);
+  if (daemonSession) {
+    await saveSession(session);
+  } else {
+    try {
+      await createSession(session);
+    } catch (error) {
+      await browser.disconnect().catch(() => {});
+      throw error;
+    }
+  }
 
   // Disconnect (session can be resumed via daemon or direct WebSocket)
   await browser.disconnect();
@@ -461,7 +553,7 @@ export async function connectCommand(
   // Spawn daemon unless --no-daemon
   let daemonResult: { pid: number; socketPath: string } | undefined;
 
-  if (!options.noDaemon) {
+  if (!options.noDaemon && !daemonDisabledByEnv && !useDaemon) {
     try {
       const idleTimeoutMs = options.daemonIdleMins ? options.daemonIdleMins * 60 * 1000 : undefined;
 
@@ -469,21 +561,55 @@ export async function connectCommand(
 
       // Wait for daemon to become ready (writes daemon info to session file)
       const ready = await waitForDaemonReady(getSessionFilePath(sessionId), spawned.pid);
-
-      if (ready) {
-        // Re-read session to get daemon info
-        const updated = await loadSession(sessionId);
-        if (updated.daemon) {
-          daemonResult = {
-            pid: updated.daemon.pid,
-            socketPath: updated.daemon.socketPath,
-          };
-        }
+      if (!ready) {
+        await stopDaemon(spawned.pid).catch(() => false);
+        throw new Error(`Daemon did not become ready within ${3000}ms (pid ${spawned.pid})`);
       }
-    } catch {
-      // Daemon spawn failed — session still works via direct WebSocket
-      // This is a non-fatal condition
+      // Re-read session to get daemon info
+      const updated = await loadSession(sessionId);
+      if (updated.daemon) {
+        const connectionKey = connectionKeyForBrowser({
+          provider,
+          wsUrl: updated.wsUrl,
+          userDataDir: updated.metadata?.resolvedUserDataDir,
+          ...(updated.metadata?.connectionSource === 'json-version'
+            ? { legacyHost: new URL(updated.wsUrl).host }
+            : {}),
+          providerSessionId: updated.providerSessionId,
+        });
+        const daemonId = daemonIdForConnection(connectionKey);
+        await updateSession(sessionId, { transport: { mode: 'daemon', daemonId } });
+        await writeDaemonDescriptor({
+          schemaVersion: 1,
+          id: daemonId,
+          connectionKey,
+          endpointFingerprint: endpointFingerprint(updated.wsUrl),
+          pid: updated.daemon.pid,
+          socketPath: updated.daemon.socketPath,
+          startedAt: updated.daemon.startedAt,
+          ...(updated.daemon.heartbeatPath ? { heartbeatPath: updated.daemon.heartbeatPath } : {}),
+        });
+        daemonResult = {
+          pid: updated.daemon.pid,
+          socketPath: updated.daemon.socketPath,
+        };
+      }
+    } catch (error) {
+      // Do not silently downgrade a requested daemon session to a second
+      // direct WebSocket connection; that is what caused repeated permission
+      // prompts and makes lifecycle failures invisible.
+      await deleteSession(sessionId).catch(() => {});
+      throw new Error(
+        `Could not start the session daemon: ${error instanceof Error ? error.message : String(error)}`
+      );
     }
+  }
+
+  if (useDaemon && daemonSession?.daemon) {
+    daemonResult = {
+      pid: daemonSession.daemon.pid,
+      socketPath: daemonSession.daemon.socketPath,
+    };
   }
 
   output(
@@ -493,6 +619,7 @@ export async function connectCommand(
       provider,
       currentUrl,
       recording: !!recordSettings,
+      transport: useDaemon ? 'daemon' : 'direct',
       connectionSource,
       resolvedChannel,
       resolvedUserDataDir,

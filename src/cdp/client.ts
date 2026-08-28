@@ -472,10 +472,15 @@ function buildCDPClient(
     },
 
     async attachToTarget(targetId: string): Promise<string> {
-      const result = await this.send<{ sessionId: string }>('Target.attachToTarget', {
-        targetId,
-        flatten: true,
-      });
+      // Target attachment is a browser-level operation. Inheriting the
+      // mutable default page session nests the new target beneath that page;
+      // detaching the parent then tears down the supposedly independent tab.
+      // A flat browser-level attach also works for OOPIF and popup target IDs.
+      const result = await this.send<{ sessionId: string }>(
+        'Target.attachToTarget',
+        { targetId, flatten: true },
+        null
+      );
       currentSessionId = result.sessionId;
       // Register deterministically; a Target.attachedToTarget event may also
       // arrive, but adding to a Set is idempotent.

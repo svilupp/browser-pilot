@@ -6,8 +6,8 @@
  * CDP commands that are proxied to Chrome via the persistent WebSocket.
  */
 
-import { unlink } from 'node:fs/promises';
-import { createServer, type Server, type Socket } from 'node:net';
+import { lstat, unlink } from 'node:fs/promises';
+import { createServer, connect as netConnect, type Server, type Socket } from 'node:net';
 import type { CDPClient } from '../cdp/client.ts';
 import { CDPError, type CDPErrorData } from '../cdp/protocol.ts';
 import { daemonLog } from './lifecycle.ts';
@@ -86,6 +86,45 @@ export interface DaemonServer {
   close(): Promise<void>;
 }
 
+export interface DaemonIdentity {
+  daemonId?: string;
+  endpointFingerprint?: string;
+}
+
+async function removeStaleSocket(socketPath: string): Promise<void> {
+  try {
+    await lstat(socketPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw error;
+  }
+
+  const active = await new Promise<boolean>((resolve) => {
+    const socket = netConnect(socketPath);
+    let settled = false;
+    const finish = (value: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      socket.destroy();
+      resolve(value);
+    };
+    const timer = setTimeout(() => {
+      finish(false);
+    }, 200);
+    socket.once('connect', () => {
+      finish(true);
+    });
+    // Keep the listener installed until destroy completes. Bun may report a
+    // second socket error while an unsuccessful Unix-socket connect unwinds.
+    socket.on('error', () => {
+      finish(false);
+    });
+  });
+  if (active) throw new Error(`Daemon socket is already active: ${socketPath}`);
+  await unlink(socketPath).catch(() => {});
+}
+
 /**
  * Start the daemon Unix socket server.
  *
@@ -96,10 +135,13 @@ export interface DaemonServer {
 export async function startDaemonServer(
   socketPath: string,
   cdp: CDPClient,
-  onActivity: () => void
+  onActivity: () => void,
+  onShutdown?: () => void,
+  identity?: DaemonIdentity
 ): Promise<DaemonServer> {
-  // Clean up stale socket file if it exists
-  await unlink(socketPath).catch(() => {});
+  // Never unlink a live server's socket. A concurrent or manually started
+  // daemon must fail closed instead of stealing the existing socket path.
+  await removeStaleSocket(socketPath);
 
   const clients = new Set<Socket>();
 
@@ -178,7 +220,26 @@ export async function startDaemonServer(
       const request = parsed;
 
       try {
-        const result = await cdp.send(request.method, request.params, request.sessionId);
+        // Control-plane methods never cross the browser connection. They let
+        // clients verify daemon ownership without opening another CDP socket.
+        let result: unknown;
+        if (request.method === 'daemon.ping') {
+          result = { ok: true, ...identity };
+        } else if (request.method === 'daemon.status') {
+          result = { ok: true, pid: process.pid, clientCount: clients.size, ...identity };
+        } else if (request.method === 'daemon.shutdown') {
+          result = { ok: true };
+          onShutdown?.();
+        } else if (request.method === 'daemon.detach' && request.params?.['sessionId']) {
+          await cdp.send(
+            'Target.detachFromTarget',
+            { sessionId: String(request.params['sessionId']) },
+            null
+          );
+          result = { ok: true };
+        } else {
+          result = await cdp.send(request.method, request.params, request.sessionId);
+        }
         writeMessage(socket, { id: request.id, result });
       } catch (err) {
         writeMessage(socket, { id: request.id, error: serializeError(err) });

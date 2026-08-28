@@ -1,6 +1,6 @@
 # browser-pilot
 
-Automation-first browser control over Chrome DevTools Protocol for AI agents. Version 0.1.0
+Automation-first browser control over Chrome DevTools Protocol for AI agents. Version 0.3.1
 supports Node.js, Bun, and Cloudflare Workers with zero production dependencies.
 
 > Companion package: [Flightplan](https://github.com/svilupp/flightplan) provides simple,
@@ -38,11 +38,25 @@ Use `bp --help` to route a task by job and `bp --version` to check the CLI build
 | Inject protocol traffic | `emit` |
 | Exercise voice and media | `audio` |
 | Change browser conditions | `env` |
+| Discover or invoke page tools | `webmcp status`, `webmcp list`, `webmcp call` |
 | Authenticate behind Cloudflare Access | `connect --cf-access`, `env auth` |
 
 For multiple local Chrome profiles, use `--channel` or `--user-data-dir`. Use
 `bp connect --new-tab --page-url <url>` to start from a fresh tab. New tabs stay in the background
 unless `--foreground` is passed.
+
+The CLI keeps a browser-scoped daemon alive so subsequent commands reuse one
+remote-debugging connection (and one Chrome permission prompt). Use
+`bp connect --no-daemon` for an explicit direct connection; CI should set
+`BROWSER_PILOT_NO_DAEMON=1` because detached daemons are not available there.
+Closing the final logical session keeps a local daemon available for reuse.
+Use `bp daemon list` and `bp daemon stop --daemon-id <id>` to inspect or stop it.
+
+WebMCP is page-scoped and experimental. Use `bp webmcp status` to check the
+secure-context, origin-isolation, and `tools` Permissions Policy prerequisites,
+then `bp webmcp list` or `bp webmcp call` against the active session. Chrome's
+origin trial starts at version 149; local testing requires
+`chrome://flags/#enable-webmcp-testing`.
 
 ## Known issue
 

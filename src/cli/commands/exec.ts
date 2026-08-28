@@ -6,7 +6,7 @@ import * as nodeFs from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { type RecordOptions, type Step, validateSteps } from '../../index.ts';
 import { attachSession, resolveSession } from '../attach.ts';
-import { output, renderOutput } from '../index.ts';
+import { output, renderOutput } from '../output.ts';
 import { updateSession } from '../session.ts';
 import { getSessionLogger } from '../session-logger.ts';
 

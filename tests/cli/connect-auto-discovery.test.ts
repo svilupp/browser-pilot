@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdir, mkdtemp } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createAutoConnectHarness, createTestHarness, destroyHarness } from '../utils/harness.ts';
@@ -80,6 +80,29 @@ describe('CLI connect auto-discovery', () => {
       });
     } finally {
       await runCLI(['close', '-s', sessionName], { env: harness.discoveryEnv }).catch(() => {});
+      await destroyHarness(harness);
+    }
+  }, 60000);
+
+  test('BROWSER_PILOT_NO_DAEMON persists an explicit direct transport policy', async () => {
+    const harness = await createAutoConnectHarness('beta');
+    const sessionName = generateSessionName();
+    const env = { ...harness.discoveryEnv, BROWSER_PILOT_NO_DAEMON: '1' };
+
+    try {
+      const result = await runCLI(['connect', '--name', sessionName, '--json'], { env });
+
+      expect(result.exitCode).toBe(0);
+      expect(result.json).toMatchObject({ success: true, transport: 'direct' });
+      const session = JSON.parse(
+        await readFile(
+          join(harness.homeDir!, '.browser-pilot', 'sessions', `${sessionName}.json`),
+          'utf8'
+        )
+      ) as { transport?: { mode?: string; reason?: string } };
+      expect(session.transport).toEqual({ mode: 'direct', reason: 'environment' });
+    } finally {
+      await runCLI(['close', '-s', sessionName], { env }).catch(() => {});
       await destroyHarness(harness);
     }
   }, 60000);

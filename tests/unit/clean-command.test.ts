@@ -20,8 +20,9 @@ const actualDaemonLifecycle = await import(
 
 let sessions: Array<{
   id: string;
+  wsUrl: string;
   lastActivity: string;
-  daemon?: { pid: number };
+  daemon?: { pid: number; socketPath: string };
 }> = [];
 
 mock.module('../../src/cli/session.ts', () => ({
@@ -39,6 +40,10 @@ mock.module('../../src/daemon/lifecycle.ts', () => ({
     stopCalls.push(pid);
     return Promise.resolve(true);
   },
+}));
+
+void mock.module('../../src/daemon/control.ts', () => ({
+  daemonControlMatches: () => Promise.resolve(true),
 }));
 
 const { cleanCommand } = await import('../../src/cli/commands/clean.ts');
@@ -80,12 +85,14 @@ describe('bp clean --max-size', () => {
     sessions = [
       {
         id: NEWEST_SESSION_ID,
+        wsUrl: 'ws://localhost/devtools/browser/newest',
         lastActivity: '2026-03-09T10:00:00.000Z',
       },
       {
         id: OLDEST_SESSION_ID,
+        wsUrl: 'ws://localhost/devtools/browser/oldest',
         lastActivity: '2026-03-09T09:00:00.000Z',
-        daemon: { pid: process.pid },
+        daemon: { pid: process.pid, socketPath: '/tmp/browser-pilot-clean-test.sock' },
       },
     ];
     await createSessionArtifacts(NEWEST_SESSION_ID, 400);
@@ -132,8 +139,9 @@ describe('bp clean --max-size', () => {
     sessions = [
       {
         id: NEWEST_SESSION_ID,
+        wsUrl: 'ws://localhost/devtools/browser/newest',
         lastActivity: '2026-03-09T10:00:00.000Z',
-        daemon: { pid: process.pid },
+        daemon: { pid: process.pid, socketPath: '/tmp/browser-pilot-clean-test.sock' },
       },
     ];
     await createSessionArtifacts(NEWEST_SESSION_ID, 700);

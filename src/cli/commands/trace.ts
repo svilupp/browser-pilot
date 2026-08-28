@@ -6,7 +6,7 @@ import type { CanonicalTraceEvent, TraceView } from '../../trace/model.ts';
 import { getSessionTracePath, readTraceEvents } from '../../trace/store.ts';
 import { buildTraceSummaries, buildTraceSummary } from '../../trace/views.ts';
 import { attachSession, resolveSession } from '../attach.ts';
-import { output } from '../index.ts';
+import { output } from '../output.ts';
 import { getDefaultSession, loadSession } from '../session.ts';
 
 const TRACE_HELP = `

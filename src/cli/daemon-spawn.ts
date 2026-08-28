@@ -21,9 +21,17 @@ import { isRecord } from '../utils/json.ts';
  * @returns The child process PID
  */
 export function spawnDaemon(sessionId: string, idleTimeoutMs?: number): { pid: number } {
-  // Resolve the daemon entry point relative to this file
+  // Resolve the packaged daemon next to cli.mjs first. In source/dev mode the
+  // TypeScript entry remains the fallback. The previous implementation always
+  // looked for `daemon/index.ts`, which does not exist in npm/global installs.
   const thisDir = dirname(fileURLToPath(import.meta.url));
-  const daemonScript = resolve(join(thisDir, '..', 'daemon', 'index.ts'));
+  const packagedDaemon = resolve(join(thisDir, 'daemon.mjs'));
+  const sourceDaemon = resolve(join(thisDir, '..', 'daemon', 'index.ts'));
+  const daemonScript = fs.existsSync(packagedDaemon) ? packagedDaemon : sourceDaemon;
+
+  if (!fs.existsSync(daemonScript)) {
+    throw new Error(`Daemon entry point not found: ${daemonScript}`);
+  }
 
   const args = [daemonScript, sessionId];
   if (idleTimeoutMs) {

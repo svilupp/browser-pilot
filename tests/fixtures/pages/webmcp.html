@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+  <head><meta charset="utf-8"><title>WebMCP fixture</title></head>
+  <body>
+    <main id="status">ready</main>
+    <script>
+      window.__webmcpNative = !!document.modelContext;
+      const toolDefinitions = [
+        {
+          name: 'lookupStatus',
+          description: 'Read the fixture status',
+          inputSchema: { type: 'object' },
+          annotations: { readOnlyHint: true, untrustedContentHint: false },
+          async execute() {
+            return document.querySelector('#status').textContent;
+          },
+        },
+        {
+          name: 'setStatus',
+          description: 'Set the fixture status',
+          inputSchema: {
+            type: 'object',
+            properties: { value: { type: 'string' } },
+          },
+          annotations: { readOnlyHint: false, untrustedContentHint: false },
+          async execute(value) {
+            document.querySelector('#status').textContent = String(value.value || '');
+            return 'updated';
+          },
+        },
+      ];
+      // A deterministic fallback fixture for browsers where the native
+      // WebMCP testing flag is unavailable. The CLI still exercises the same
+      // getTools/executeTool contract and serialization boundary.
+      if (document.modelContext) {
+        window.__webmcpReady = Promise.all(
+          toolDefinitions.map((tool) => document.modelContext.registerTool(tool))
+        );
+      } else {
+        const tools = toolDefinitions.map(({ execute, inputSchema, ...tool }) => ({
+          ...tool,
+          inputSchema: JSON.stringify(inputSchema),
+          origin: location.origin,
+          execute,
+        }));
+        document.modelContext = {
+          async getTools() { return tools; },
+          async executeTool(tool, ...args) {
+            const [input, options = {}] = args;
+            if (options.signal?.aborted) throw options.signal.reason;
+            const value = input || {};
+            if (tool.name === 'setStatus') {
+              document.querySelector('#status').textContent = String(value.value || '');
+              return JSON.stringify('updated');
+            }
+            return JSON.stringify(document.querySelector('#status').textContent);
+          },
+        };
+      }
+    </script>
+  </body>
+</html>

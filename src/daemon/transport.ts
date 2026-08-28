@@ -24,13 +24,19 @@ export function createDaemonTransport(
   const { timeout = DAEMON_CONNECT_TIMEOUT_MS } = options ?? {};
 
   return new Promise<Transport>((resolve, reject) => {
+    const handleInitialError = (err: Error) => {
+      clearTimeout(timer);
+      reject(err);
+    };
     const timer = setTimeout(() => {
+      socket.off('error', handleInitialError);
       socket.destroy();
       reject(new Error(`Daemon connection timeout after ${timeout}ms`));
     }, timeout);
 
     const socket: Socket = netConnect(socketPath, () => {
       clearTimeout(timer);
+      socket.off('error', handleInitialError);
 
       let buffer = '';
       const messageHandlers: Array<(message: string) => void> = [];
@@ -101,9 +107,6 @@ export function createDaemonTransport(
       resolve(transport);
     });
 
-    socket.on('error', (err: Error) => {
-      clearTimeout(timer);
-      reject(err);
-    });
+    socket.once('error', handleInitialError);
   });
 }

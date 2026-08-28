@@ -6,15 +6,10 @@
  */
 
 import type { CDPClient } from '../../cdp/client.ts';
-import { connect } from '../../index.ts';
+import { attachSession } from '../attach.ts';
 import { formatBrowserDiscoveryError, resolveCLIEndpoint } from '../browser-endpoint.ts';
-import {
-  generateSessionId,
-  getDefaultSession,
-  loadSession,
-  type SessionData,
-  saveSession,
-} from '../session.ts';
+import { createLocalSession } from '../connect-service.ts';
+import { getDefaultSession, loadSession } from '../session.ts';
 
 const LISTEN_HELP = `
 bp listen - Monitor network traffic (WebSocket/HTTP)
@@ -309,11 +304,7 @@ async function resolveConnection(
 ) {
   if (sessionId) {
     const session = await loadSession(sessionId);
-    const browser = await connect({
-      provider: session.provider,
-      wsUrl: session.wsUrl,
-      debug: trace,
-    });
+    const { browser } = await attachSession(session, { trace });
     return { browser, session };
   }
 
@@ -322,18 +313,14 @@ async function resolveConnection(
     if (!session) {
       throw new Error('No sessions found. Run "bp connect" first or omit -s to auto-connect.');
     }
-    const browser = await connect({
-      provider: session.provider,
-      wsUrl: session.wsUrl,
-      debug: trace,
-    });
+    const { browser } = await attachSession(session, { trace });
     return { browser, session };
   }
 
   // Auto-connect to local browser
-  let wsUrl: string;
+  let endpoint: Awaited<ReturnType<typeof resolveCLIEndpoint>>;
   try {
-    wsUrl = (await resolveCLIEndpoint()).wsUrl;
+    endpoint = await resolveCLIEndpoint();
   } catch (error) {
     throw new Error(
       formatBrowserDiscoveryError(error, {
@@ -344,21 +331,13 @@ async function resolveConnection(
     );
   }
 
-  const browser = await connect({ provider: 'generic', wsUrl, debug: trace });
-  const page = await browser.page();
-  const currentUrl = await page.url();
-  const newSessionId = generateSessionId();
-
-  const session: SessionData = {
-    id: newSessionId,
-    provider: 'generic',
-    wsUrl: browser.wsUrl,
-    createdAt: new Date().toISOString(),
-    lastActivity: new Date().toISOString(),
-    currentUrl,
-  };
-
-  await saveSession(session);
+  const { browser, session } = await createLocalSession({
+    wsUrl: endpoint.wsUrl,
+    trace,
+    connectionSource: endpoint.source,
+    resolvedChannel: endpoint.channel,
+    resolvedUserDataDir: endpoint.userDataDir,
+  });
   return { browser, session };
 }
 

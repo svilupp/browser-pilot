@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import { afterAll, test as baseTest, beforeAll, describe, expect } from 'bun:test';
 import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { homedir, networkInterfaces } from 'node:os';
 import { join } from 'node:path';
@@ -6,6 +6,11 @@ import { withRetry } from '../utils/retry.ts';
 import { generateSessionName, getWebSocketUrl, runCLI, setup, teardown } from './setup.ts';
 
 const SESSION_DIR = join(homedir(), '.browser-pilot', 'sessions');
+const daemonDisabled = ['1', 'true'].includes(
+  String(process.env['BROWSER_PILOT_NO_DAEMON'] ?? '').toLowerCase()
+);
+const test = baseTest;
+const daemonTest = baseTest.skipIf(daemonDisabled);
 
 let realtimeServer: ReturnType<typeof Bun.serve> | null = null;
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
@@ -160,56 +165,60 @@ describe('CLI env and trace regression coverage', () => {
     await teardown();
   });
 
-  test('uses the default daemon path for hot-socket waits and trace-backed assertions', async () => {
-    await withRetry(async () => {
-      const sessionName = generateSessionName();
+  daemonTest(
+    'uses the default daemon path for hot-socket waits and trace-backed assertions',
+    async () => {
+      await withRetry(async () => {
+        const sessionName = generateSessionName();
 
-      try {
-        await connectDaemonSession(sessionName);
+        try {
+          await connectDaemonSession(sessionName);
 
-        const openResult = await runCLI([
-          'exec',
-          '-s',
-          sessionName,
-          '--json',
-          JSON.stringify([
-            { action: 'goto', url: loopbackBaseUrl },
-            {
-              action: 'assertTextChanged',
-              selector: '#status',
-              from: 'Connecting',
-              to: 'Live',
-              timeout: 5000,
-            },
-          ]),
-        ]);
-        const openJson = expectExecSuccess(openResult);
-        expect(openJson.steps[1]?.text).toBe('Live');
+          const openResult = await runCLI([
+            'exec',
+            '-s',
+            sessionName,
+            '--json',
+            JSON.stringify([
+              { action: 'goto', url: loopbackBaseUrl },
+              {
+                action: 'assertTextChanged',
+                selector: '#status',
+                from: 'Connecting',
+                to: 'Live',
+                timeout: 5000,
+              },
+            ]),
+          ]);
+          const openJson = expectExecSuccess(openResult);
+          expect(openJson.steps[1]?.text).toBe('Live');
 
-        const waitResult = await runCLI([
-          'exec',
-          '-s',
-          sessionName,
-          '--json',
-          JSON.stringify([
-            {
-              action: 'waitForWsMessage',
-              match: '*',
-              where: { type: 'heartbeat' },
-              timeout: 5000,
-            },
-            { action: 'assertNoConsoleErrors', windowMs: 300 },
-          ]),
-        ]);
-        const waitJson = expectExecSuccess(waitResult);
-        expect(waitJson.steps[0]?.result?.payload).toContain('"type":"heartbeat"');
-      } finally {
-        await cleanupSession(sessionName);
-      }
-    });
-  }, 90000);
+          const waitResult = await runCLI([
+            'exec',
+            '-s',
+            sessionName,
+            '--json',
+            JSON.stringify([
+              {
+                action: 'waitForWsMessage',
+                match: '*',
+                where: { type: 'heartbeat' },
+                timeout: 5000,
+              },
+              { action: 'assertNoConsoleErrors', windowMs: 300 },
+            ]),
+          ]);
+          const waitJson = expectExecSuccess(waitResult);
+          expect(waitJson.steps[0]?.result?.payload).toContain('"type":"heartbeat"');
+        } finally {
+          await cleanupSession(sessionName);
+        }
+      });
+    },
+    90000
+  );
 
-  test('persists granted permissions, geolocation, and visibility across daemon-backed commands', async () => {
+  test('persists granted permissions, geolocation, and visibility across stored commands', async () => {
     await withRetry(async () => {
       const sessionName = generateSessionName();
 
@@ -518,11 +527,18 @@ async function connectDaemonSession(sessionName: string): Promise<void> {
 
   expect(connectResult.exitCode).toBe(0);
   const payload = connectResult.json as {
+    transport?: string;
     daemon?: { pid?: number; socketPath?: string };
   };
-  expect(payload?.daemon).toBeDefined();
-  expect(typeof payload.daemon?.pid).toBe('number');
-  expect(typeof payload.daemon?.socketPath).toBe('string');
+  if (daemonDisabled) {
+    expect(payload.transport).toBe('direct');
+    expect(payload.daemon).toBeUndefined();
+  } else {
+    expect(payload.transport).toBe('daemon');
+    expect(payload.daemon).toBeDefined();
+    expect(typeof payload.daemon?.pid).toBe('number');
+    expect(typeof payload.daemon?.socketPath).toBe('string');
+  }
 }
 
 async function cleanupSession(sessionName: string): Promise<void> {
@@ -553,7 +569,8 @@ function expectEvalResult(result: Awaited<ReturnType<typeof runCLI>>): unknown {
 }
 
 function spawnCLI(args: string[]) {
-  return Bun.spawn(['bun', './src/cli/index.ts', ...args], {
+  const cliEntry = process.env['BROWSER_PILOT_TEST_CLI_ENTRY'] ?? './src/cli/index.ts';
+  return Bun.spawn(['bun', cliEntry, ...args], {
     stdout: 'pipe',
     stderr: 'pipe',
     stdin: 'ignore',

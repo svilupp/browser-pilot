@@ -116,17 +116,17 @@ describe('attachSession', () => {
     expect(result.session).toEqual(session);
   });
 
-  it('session cleanup propagates error mentioning bp connect', async () => {
+  it('preserved-session error points to explicit cleanup', async () => {
     const session = makeSession({ id: 'dead-session' });
     mockAttachImpl = () =>
       Promise.reject(
         new Error(
           'Session "dead-session" is no longer valid (browser may have closed).\n' +
-            'Session file has been cleaned up. Run "bp connect" to create a new session.'
+            'Session file was preserved. Restart the browser or run "bp clean" to remove it.'
         )
       );
 
-    await expect(attachSession(session)).rejects.toThrow('bp connect');
+    await expect(attachSession(session)).rejects.toThrow('bp clean');
   });
 
   it('hydration can be verified via page url match', async () => {

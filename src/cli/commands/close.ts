@@ -1,13 +1,20 @@
 /**
  * Close command - Close a browser session
  *
- * Stops the daemon (if running) before closing the browser connection
- * and deleting the session.
+ * Detaches the logical target and deletes the session. Browser-scoped local
+ * daemons remain alive for reuse; provider-owned daemons are stopped when the
+ * session owns the last reference.
  */
 
+import { daemonControlMatches } from '../../daemon/control.ts';
 import { isDaemonAlive, stopDaemon } from '../../daemon/lifecycle.ts';
-import { connect } from '../../index.ts';
-import { output } from '../index.ts';
+import {
+  countSessionReferences,
+  endpointFingerprint,
+  readDaemonDescriptor,
+  removeDaemonDescriptor,
+} from '../../daemon/registry.ts';
+import { output } from '../output.ts';
 import { deleteSession, getDefaultSession, loadSession, type SessionData } from '../session.ts';
 
 const CLOSE_HELP = `
@@ -28,6 +35,25 @@ Examples:
   bp close dev            # Close session named "dev"
   bp close -s dev --json  # Close session, output as JSON
 `.trimEnd();
+
+async function detachDaemonTarget(session: SessionData): Promise<void> {
+  if (!session.daemon?.socketPath || !session.daemon.cdpSessionId) return;
+
+  let closeClient: (() => Promise<void>) | undefined;
+  try {
+    const { createDaemonTransport } = await import('../../daemon/transport.ts');
+    const { createCDPClientFromTransport } = await import('../../cdp/client.ts');
+    const transport = await createDaemonTransport(session.daemon.socketPath);
+    const cdp = createCDPClientFromTransport(transport);
+    closeClient = () => cdp.close();
+    await cdp.send('daemon.detach', { sessionId: session.daemon.cdpSessionId }, null);
+  } catch {
+    // Closing a stale/dead daemon is still successful; cleanup below removes
+    // the local session and any reachable daemon state.
+  } finally {
+    await closeClient?.().catch(() => {});
+  }
+}
 
 export async function closeCommand(
   args: string[],
@@ -51,41 +77,74 @@ export async function closeCommand(
     }
   }
 
-  // Stop daemon if running
+  // A browser-scoped local daemon is the connection owner, not the lifetime of
+  // one logical session. Keep it alive after the last local session closes so
+  // the next connect can reuse the same browser WebSocket and consent grant.
+  // Provider-owned daemons retain their provider-specific close semantics.
   let daemonStopped = false;
-  if (session.daemon) {
+  const sharedDaemon =
+    session.transport?.mode === 'daemon' &&
+    !!session.transport.daemonId &&
+    (await countSessionReferences(session.transport.daemonId)) > 1;
+  const keepLocalDaemon =
+    session.provider === 'generic' &&
+    session.transport?.mode === 'daemon' &&
+    !!session.transport.daemonId;
+  const daemonDescriptor =
+    session.transport?.mode === 'daemon' && session.transport.daemonId
+      ? await readDaemonDescriptor(session.transport.daemonId)
+      : null;
+  const daemonOwner = daemonDescriptor ?? session.daemon;
+  const sharedTargetAttachment =
+    session.transport?.mode === 'daemon' &&
+    !!session.transport.daemonId &&
+    !!session.daemon?.cdpSessionId &&
+    (await countSessionReferences(session.transport.daemonId, session.daemon.cdpSessionId)) > 1;
+  if (session.daemon && !sharedTargetAttachment) {
+    await detachDaemonTarget(session);
+  }
+  if (daemonOwner && !sharedDaemon && !keepLocalDaemon) {
     try {
-      if (isDaemonAlive(session.daemon.pid)) {
-        daemonStopped = await stopDaemon(session.daemon.pid);
+      if (isDaemonAlive(daemonOwner.pid)) {
+        const identityMatches = await daemonControlMatches({
+          socketPath: daemonOwner.socketPath,
+          ...(session.transport?.mode === 'daemon' && session.transport.daemonId
+            ? { daemonId: session.transport.daemonId }
+            : {}),
+          endpointFingerprint:
+            daemonDescriptor?.endpointFingerprint ?? endpointFingerprint(session.wsUrl),
+        });
+        if (!identityMatches) {
+          throw new Error(
+            `Refusing to signal PID ${daemonOwner.pid}: the daemon control socket did not prove ownership`
+          );
+        }
+        daemonStopped = await stopDaemon(daemonOwner.pid);
       }
-    } catch {
-      // Daemon may already be dead, continue with cleanup
+    } catch (error) {
+      if (isDaemonAlive(daemonOwner.pid)) throw error;
+      // Daemon exited while being checked; continue with cleanup.
     }
 
     // Clean up socket file
     try {
       const fsPromises = await import('node:fs/promises');
-      await fsPromises.unlink(session.daemon.socketPath).catch(() => {});
+      await fsPromises.unlink(daemonOwner.socketPath).catch(() => {});
     } catch {
       // Ignore
     }
   }
-
-  try {
-    // Try to connect and close the browser
-    const browser = await connect({
-      provider: session.provider,
-      wsUrl: session.wsUrl,
-      debug: globalOptions.trace,
-    });
-
-    await browser.close();
-  } catch {
-    // Browser might already be closed, that's ok
+  if (
+    !sharedDaemon &&
+    !keepLocalDaemon &&
+    session.transport?.mode === 'daemon' &&
+    session.transport.daemonId
+  ) {
+    await removeDaemonDescriptor(session.transport.daemonId, daemonDescriptor?.pid);
   }
 
   // Delete session file
-  await deleteSession(session.id);
+  await deleteSession(session.id, { preserveDaemonRuntime: keepLocalDaemon });
 
   output(
     {

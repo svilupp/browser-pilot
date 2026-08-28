@@ -42,6 +42,7 @@ export const CLI_COMMANDS: readonly CLICommandMeta[] = [
     showInRootHelp: true,
   },
   { name: 'env', description: 'Session and browser-environment controls', showInRootHelp: true },
+  { name: 'webmcp', description: 'Discover and invoke page WebMCP tools', showInRootHelp: true },
   { name: 'daemon', description: 'Manage session daemon', showInRootHelp: true },
   { name: 'list', description: 'List sessions', showInRootHelp: true },
   { name: 'close', description: 'Close session', showInRootHelp: true },
@@ -54,7 +55,7 @@ export const ROOT_HELP_COMMANDS = CLI_COMMANDS.filter((command) => command.showI
 export const CLI_ROUTE_GROUPS: readonly CLIRouteGroup[] = [
   {
     label: 'Inspect page state',
-    commands: ['snapshot', 'page', 'forms', 'review', 'text', 'targets', 'diagnose'],
+    commands: ['snapshot', 'page', 'forms', 'review', 'text', 'targets', 'diagnose', 'webmcp'],
   },
   {
     label: 'Act in the browser',

@@ -1,5 +1,5 @@
 import { attachSession, resolveSession } from '../attach.ts';
-import { output } from '../index.ts';
+import { output } from '../output.ts';
 import { updateSession } from '../session.ts';
 import { formatFormFieldsPretty } from './form-utils.ts';
 

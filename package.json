@@ -60,6 +60,9 @@
   "scripts": {
     "clean": "rm -rf dist",
     "build": "bun run clean && tsup",
+    "test:package": "bash scripts/package-smoke.sh",
+    "test:daemon:local": "bash scripts/daemon-local-smoke.sh",
+    "test:release": "bash scripts/release-check.sh",
     "test": "bun test",
     "test:unit": "bun test tests/unit",
     "test:integration": "bun test tests/integration --timeout 30000",

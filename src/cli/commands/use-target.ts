@@ -1,8 +1,7 @@
 /** Explicitly switch a named CLI session to an existing browser tab. */
 
-import { connect } from '../../index.ts';
-import { resolveSession } from '../attach.ts';
-import { output } from '../index.ts';
+import { attachSession, resolveSession } from '../attach.ts';
+import { output } from '../output.ts';
 import { updateSession } from '../session.ts';
 
 const USE_TARGET_HELP = `
@@ -42,10 +41,7 @@ export async function useTargetCommand(
   }
 
   const session = await resolveSession(globalOptions.session);
-  const browser = await connect({
-    provider: session.provider,
-    wsUrl: session.wsUrl,
-  });
+  const { browser } = await attachSession(session);
 
   try {
     const target = (await browser.listTargets()).find(

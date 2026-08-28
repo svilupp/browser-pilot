@@ -7,7 +7,7 @@
 
 import type { Step } from '../../index.ts';
 import { attachSession, resolveSession } from '../attach.ts';
-import { output } from '../index.ts';
+import { output } from '../output.ts';
 import { updateSession } from '../session.ts';
 
 const EVAL_HELP = `

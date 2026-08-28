@@ -6,7 +6,7 @@
  */
 
 import { attachSession, resolveSession } from '../attach.ts';
-import { output } from '../index.ts';
+import { output } from '../output.ts';
 
 const EMIT_HELP = `
 bp emit - Send a WebSocket frame on the page's own connection
