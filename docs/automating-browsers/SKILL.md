@@ -1,6 +1,6 @@
 ---
 name: automate-browser-actions-and-testing
-description: Browser automation skill using browser-pilot CLI. Use this when you need to control a web browser, inspect a page, capture a workflow, trace a realtime issue, or exercise voice and environment conditions.
+description: Browser automation skill using browser-pilot CLI. Use this to control or inspect a browser, invoke page-provided WebMCP tools, capture workflows, trace realtime issues, or exercise voice and environment conditions.
 compatibility: Requires browser-pilot CLI (bp). For local Chrome on Chrome 144+, enable remote debugging in chrome://inspect/#remote-debugging before running bp connect.
 ---
 
@@ -22,6 +22,7 @@ For local Chrome on Chrome 144+, try plain `bp connect` first after enabling rem
 4. Capture a human demo: `bp record`
 5. Analyze time-based behavior: `bp trace`
 6. Exercise voice/media or browser conditions: `bp audio`, `bp env`
+7. Use page-provided tools: `bp webmcp status|list|call`
 
 ## If the task is...
 
@@ -45,6 +46,16 @@ bp exec -s dev '[
 ```
 
 If multiple Chrome profiles are eligible, use `bp connect --channel beta` or `bp connect --user-data-dir <path>`.
+
+`bp connect` keeps one browser-scoped daemon connection alive across commands,
+which avoids repeated Chrome remote-debugging permission prompts. Do not add
+`--no-daemon` as a workaround for attachment failures. Use direct mode only
+when requested or in CI with `BROWSER_PILOT_NO_DAEMON=1`.
+
+Closing the final local logical session leaves its browser daemon reusable.
+Inspect it with `bp daemon list` and stop it with
+`bp daemon stop --daemon-id <id>`. The stop command refuses an unverified live
+PID; use `--force` only after checking that PID yourself.
 
 ## Outcome-aware workflow
 
@@ -104,6 +115,22 @@ bp run ./artifacts/demo.workflow.json -s demo
 Do not start by reading the raw artifact.
 `record` captures the existing named session. It does not create a named session, and `record derive`
 produces browser-pilot workflow JSON for `bp run`. Use Flightplan for simple reusable workflows.
+
+## When to use WebMCP
+
+Use WebMCP when the active page exposes structured tools:
+
+```bash
+bp webmcp status -s dev
+bp webmcp list -s dev --json
+bp webmcp call lookupStatus --input '{}' -s dev --json
+```
+
+Re-list after navigation. Pass `--origin` when the same tool name appears from
+several origins. Tools not marked `readOnlyHint: true` require
+`--confirm-mutation`. Local Chrome testing requires version 149 or newer and
+`chrome://flags/#enable-webmcp-testing`; the page must use a secure,
+origin-isolated context allowed by the `tools` Permissions Policy.
 
 ## When to use trace
 
@@ -224,3 +251,4 @@ needs to be explicit.
 - Review structured state: `bp review`
 - Active voice control: `bp audio`
 - Browser conditions: `bp env`
+- Page-provided tools: `bp webmcp`

@@ -3,8 +3,8 @@ import type { SessionData } from '../../src/cli/session.ts';
 
 /**
  * Tests for the daemon system:
- * - Daemon health checks (max age, PID, heartbeat)
- * - Attach fallback (daemon unavailable → direct WebSocket)
+ * - Daemon health checks (PID, heartbeat, socket identity)
+ * - Explicit direct-session behavior
  * - Session daemon field lifecycle
  * - CDPClient offAny support
  */
@@ -110,11 +110,6 @@ describe('CDPClient offAny', () => {
 // --- Daemon types tests ---
 
 describe('daemon types and constants', () => {
-  test('DAEMON_MAX_AGE_MS is 60 minutes', async () => {
-    const { DAEMON_MAX_AGE_MS } = await import('../../src/daemon/types.ts');
-    expect(DAEMON_MAX_AGE_MS).toBe(60 * 60 * 1000);
-  });
-
   test('DAEMON_CONNECT_TIMEOUT_MS is 500ms', async () => {
     const { DAEMON_CONNECT_TIMEOUT_MS } = await import('../../src/daemon/types.ts');
     expect(DAEMON_CONNECT_TIMEOUT_MS).toBe(500);
@@ -188,6 +183,56 @@ describe('daemon lifecycle', () => {
   });
 });
 
+describe('daemon registry', () => {
+  test('connection IDs are deterministic and do not contain endpoint secrets', async () => {
+    const { connectionKeyForBrowser, daemonIdForConnection, endpointFingerprint } = await import(
+      '../../src/daemon/registry.ts'
+    );
+    const key = `generic:${endpointFingerprint('ws://localhost:9222/devtools/browser/secret')}`;
+    expect(daemonIdForConnection(key)).toHaveLength(24);
+    expect(key).not.toContain('secret');
+    expect(
+      connectionKeyForBrowser({
+        provider: 'generic',
+        wsUrl: 'ws://localhost:9222/devtools/browser/rotating-token',
+        userDataDir: '/tmp/chrome-profile',
+      })
+    ).toBe('generic:profile:/tmp/chrome-profile');
+  });
+
+  test('owner-checked removal cannot erase a replacement descriptor', async () => {
+    const { readDaemonDescriptor, removeOwnedDaemonDescriptor, writeDaemonDescriptor } =
+      await import('../../src/daemon/registry.ts');
+    const id = `test-${crypto.randomUUID()}`;
+    await writeDaemonDescriptor({
+      schemaVersion: 1,
+      id,
+      connectionKey: `test:${id}`,
+      endpointFingerprint: 'fingerprint',
+      pid: process.pid,
+      socketPath: `/tmp/${id}.sock`,
+      startedAt: new Date().toISOString(),
+    });
+    try {
+      expect(await removeOwnedDaemonDescriptor(id, process.pid + 1)).toBe(false);
+      expect((await readDaemonDescriptor(id))?.pid).toBe(process.pid);
+    } finally {
+      await removeOwnedDaemonDescriptor(id, process.pid);
+    }
+  });
+
+  test('registry locks do not steal a lock from a live owner', async () => {
+    const { acquireDaemonLock } = await import('../../src/daemon/registry.ts');
+    const id = `test-${crypto.randomUUID()}`;
+    const release = await acquireDaemonLock(id);
+    try {
+      await expect(acquireDaemonLock(id, 50)).rejects.toThrow('Timed out');
+    } finally {
+      await release();
+    }
+  });
+});
+
 // --- Attach fallback tests ---
 
 describe('daemon attach fallback', () => {
@@ -238,43 +283,17 @@ describe('daemon attach fallback', () => {
     expect(result.viaDaemon).toBe(false);
   });
 
-  test('falls back when daemon is expired (>60 minutes)', async () => {
-    const longAgo = new Date(Date.now() - 61 * 60 * 1000).toISOString();
-    const session = makeSession({
-      daemon: {
-        socketPath: '/tmp/nonexistent.sock',
-        pid: process.pid,
-        startedAt: longAgo,
-      },
-    });
-
-    mockAttachImpl = (s) =>
-      Promise.resolve({
-        session: s,
-        browser: { close: () => Promise.resolve() },
-        page: {
-          batch: () => Promise.resolve({ success: true }),
-          url: () => Promise.resolve('https://example.com'),
-          importRefMap: () => {},
-        },
-        viaDaemon: false,
-      });
-
-    const result = await attachSession(session);
-    expect(result.viaDaemon).toBe(false);
-  });
-
-  test('throws on connection failure and cleans up session', async () => {
+  test('throws on connection failure and preserves recoverable session', async () => {
     const session = makeSession({ id: 'dead-session' });
     mockAttachImpl = () =>
       Promise.reject(
         new Error(
           'Session "dead-session" is no longer valid (browser may have closed).\n' +
-            'Session file has been cleaned up. Run "bp connect" to create a new session.'
+            'Session file was preserved. Restart the browser or run "bp clean" to remove it.'
         )
       );
 
-    await expect(attachSession(session)).rejects.toThrow('bp connect');
+    await expect(attachSession(session)).rejects.toThrow('bp clean');
   });
 });
 

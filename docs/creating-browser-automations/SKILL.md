@@ -12,6 +12,9 @@ For simple, reusable, low-cost automation on top of browser-pilot, use the compa
 
 For local Chrome on Chrome 144+, try plain `bp connect` first after enabling remote debugging in `chrome://inspect/#remote-debugging`. Only add `--channel` or `--user-data-dir` if auto-discovery is ambiguous.
 
+Keep the named session for capture and replay. Local CLI sessions use one
+browser-scoped daemon by default; CI must set `BROWSER_PILOT_NO_DAEMON=1`.
+
 ## Core rule
 
 Do not start by reading raw `recording.json`.

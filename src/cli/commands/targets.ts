@@ -1,6 +1,6 @@
 import type { TargetInfo } from '../../cdp/protocol.ts';
-import { connect } from '../../index.ts';
-import { output } from '../index.ts';
+import { attachSession } from '../attach.ts';
+import { output } from '../output.ts';
 import { getDefaultSession, loadSession } from '../session.ts';
 
 const TARGETS_HELP = `
@@ -58,11 +58,7 @@ export async function targetsCommand(
     throw new Error('No session found. Run "bp connect" first.');
   }
 
-  const browser = await connect({
-    provider: session.provider,
-    wsUrl: session.wsUrl,
-    debug: globalOptions.trace,
-  });
+  const { browser } = await attachSession(session, { trace: globalOptions.trace });
 
   try {
     const targets = await browser.listTargets();

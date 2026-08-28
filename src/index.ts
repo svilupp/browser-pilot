@@ -291,3 +291,13 @@ export {
   waitForNetworkIdle,
   waitForReady,
 } from './wait/index.ts';
+// WebMCP page-agent bridge (discovery and invocation remain in-page).
+export {
+  type WebMCPListResult,
+  type WebMCPStatus,
+  type WebMCPToolAnnotations,
+  type WebMCPToolDescriptor,
+  webmcpCall,
+  webmcpList,
+  webmcpStatus,
+} from './webmcp/client.ts';

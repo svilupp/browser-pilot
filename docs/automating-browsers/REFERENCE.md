@@ -15,6 +15,7 @@ For simple, reusable, low-cost automation on top of browser-pilot, use the compa
 - Exercise voice/media: `audio`
 - Review structured state: `review`
 - Change browser conditions: `env`
+- Discover and invoke page tools: `webmcp status|list|call`
 - Authenticate behind Cloudflare Access: `connect --cf-access` (mint+apply once) or
   `env auth set-headers`/`set-cookie` (persisted, reapplied on every attach)
 
@@ -25,6 +26,27 @@ For simple, reusable, low-cost automation on top of browser-pilot, use the compa
 - Review structured business state: `bp review`
 - Debug selector failure: `bp diagnose`
 - Drop to raw JavaScript only as an escape hatch: `bp eval`
+
+## Session transport
+
+Local CLI sessions use one browser-scoped daemon by default. Reuse the named
+session across commands. Use `BROWSER_PILOT_NO_DAEMON=1` in CI, where detached
+processes are unavailable. `bp daemon list` includes daemons whose final
+logical session has closed; stop one with `bp daemon stop --daemon-id <id>`.
+The stop command refuses an unverified live PID; use `--force` only after
+checking that the registered PID is the intended daemon.
+
+## WebMCP
+
+```bash
+bp webmcp status -s dev
+bp webmcp list -s dev --json
+bp webmcp call <name> --input '{}' -s dev --json
+```
+
+Use `--from-origin` to include delegated cross-origin tools and `--origin` to
+select an exact owner. Add `--confirm-mutation` only after reviewing a tool
+that is not marked read-only.
 
 ## Action DSL reference
 

@@ -28,7 +28,10 @@ import { targetsCommand } from './commands/targets.ts';
 import { textCommand } from './commands/text.ts';
 import { traceCommand } from './commands/trace.ts';
 import { useTargetCommand } from './commands/use-target.ts';
+import { webmcpCommand } from './commands/webmcp.ts';
 import { getCliVersion } from './version.ts';
+
+export { output, renderOutput } from './output.ts';
 
 function buildRootHelp(): string {
   const routeLabelWidth = Math.max(...CLI_ROUTE_GROUPS.map((group) => group.label.length)) + 2;
@@ -147,60 +150,6 @@ export function parseGlobalOptions(args: string[]): {
   }
 
   return { options, remaining };
-}
-
-export function output(data: unknown, format: 'json' | 'pretty' = 'pretty'): void {
-  const text = renderOutput(data, format);
-  process.stdout.write(text.endsWith('\n') ? text : `${text}\n`);
-}
-
-export function renderOutput(data: unknown, format: 'json' | 'pretty' = 'pretty'): string {
-  if (format === 'json') {
-    return JSON.stringify(data, null, 2);
-  }
-
-  if (typeof data === 'string') {
-    return data;
-  }
-
-  if (Array.isArray(data)) {
-    return JSON.stringify(data, null, 2);
-  }
-
-  if (typeof data === 'object' && data !== null) {
-    const lines: string[] = [];
-    const { truncated } = prettyPrint(data as Record<string, unknown>, lines);
-    if (truncated) {
-      lines.push('', '(Output truncated. Use --json for full data)');
-    }
-    return lines.join('\n');
-  }
-
-  return String(data);
-}
-
-function prettyPrint(
-  obj: Record<string, unknown>,
-  lines: string[],
-  indent = 0
-): { truncated: boolean } {
-  const prefix = '  '.repeat(indent);
-  let truncated = false;
-
-  for (const [key, value] of Object.entries(obj)) {
-    if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
-      lines.push(`${prefix}${key}:`);
-      const result = prettyPrint(value as Record<string, unknown>, lines, indent + 1);
-      if (result.truncated) truncated = true;
-    } else if (Array.isArray(value)) {
-      lines.push(`${prefix}${key}: [${value.length} items]`);
-      truncated = true;
-    } else {
-      lines.push(`${prefix}${key}: ${value}`);
-    }
-  }
-
-  return { truncated };
 }
 
 async function main(): Promise<void> {
@@ -340,6 +289,10 @@ async function main(): Promise<void> {
 
       case 'daemon':
         await daemonCommand(remaining, options);
+        break;
+
+      case 'webmcp':
+        await webmcpCommand(remaining, options);
         break;
 
       case 'help':

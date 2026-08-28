@@ -54,18 +54,17 @@ export interface DaemonInfo {
   cdpSessionId?: string;
   /** Timestamp when daemon was started */
   startedAt: string;
+  /** Sidecar heartbeat path (kept outside logical session JSON). */
+  heartbeatPath?: string;
 }
-
-/** Maximum daemon socket age in milliseconds (60 minutes) */
-export const DAEMON_MAX_AGE_MS = 60 * 60 * 1000;
 
 /** Timeout for CLI to connect to daemon socket (ms) */
 export const DAEMON_CONNECT_TIMEOUT_MS = 500;
 
-/** Default idle timeout before daemon self-exits (ms) — 60 minutes */
+/** Opt-in idle timeout before daemon self-exits (ms) — 60 minutes */
 export const DAEMON_IDLE_TIMEOUT_MS = 60 * 60 * 1000;
 
-/** Heartbeat interval (ms) — how often daemon updates session file */
+/** Heartbeat interval (ms) — how often the daemon refreshes its sidecar */
 export const DAEMON_HEARTBEAT_INTERVAL_MS = 30_000;
 
 /** How long bp connect waits for daemon to become ready (ms) */

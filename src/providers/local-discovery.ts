@@ -57,6 +57,12 @@ export interface DiscoverLocalBrowsersOptions extends ChromeUserDataDirOptions {
   channel?: ChromeChannel;
   userDataDir?: string;
   probeTimeoutMs?: number;
+  /**
+   * Whether discovery may open a CDP WebSocket to validate a candidate.
+   * `none` is side-effect-free and should be used by the CLI; `cdp` is kept
+   * for library callers that explicitly want protocol validation.
+   */
+  probe?: 'none' | 'cdp';
 }
 
 export interface ResolveBrowserEndpointOptions extends DiscoverLocalBrowsersOptions {
@@ -388,6 +394,18 @@ async function inspectScanTarget(
     throw error;
   }
 
+  if (options.probe === 'none') {
+    return {
+      kind: 'candidate',
+      candidate: {
+        ...target,
+        port: parsed.port,
+        browserPath: parsed.browserPath,
+        wsUrl: parsed.wsUrl,
+      },
+    };
+  }
+
   try {
     const probe = await deps.probeBrowserWebSocket(
       parsed.wsUrl,
@@ -416,9 +434,19 @@ export async function discoverLocalBrowsers(
   deps: LocalDiscoveryDependencies = defaultDependencies
 ): Promise<LocalBrowserDiscoveryResult> {
   const scanTargets = buildLocalBrowserScanTargets(options);
-  const outcomes = await Promise.all(
-    scanTargets.map((target) => inspectScanTarget(target, options, deps))
-  );
+  // CDP probes are intentionally serialized. Opening several speculative
+  // browser WebSockets at once can trigger multiple remote-debugging consent
+  // prompts before the resolver has established which profile to use.
+  const outcomes: DiscoveryOutcome[] = [];
+  if (options.probe !== 'none') {
+    for (const target of scanTargets) {
+      outcomes.push(await inspectScanTarget(target, options, deps));
+    }
+  } else {
+    outcomes.push(
+      ...(await Promise.all(scanTargets.map((target) => inspectScanTarget(target, options, deps))))
+    );
+  }
 
   const candidates: LocalBrowserCandidate[] = [];
   const failures: LocalDiscoveryFailure[] = [];
@@ -467,7 +495,41 @@ export async function resolveBrowserEndpoint(
   let localDiscovery: LocalBrowserDiscoveryResult | undefined;
 
   if (options.allowLocalDiscovery ?? true) {
-    localDiscovery = await discoverLocalBrowsers(options, deps);
+    // Read every candidate without touching CDP first. This lets the resolver
+    // return an actionable multiple-profile error before any speculative
+    // WebSocket handshake. A protocol probe, when explicitly requested, is
+    // performed only after exactly one candidate remains.
+    const probeRequested = options.probe !== 'none';
+    localDiscovery = await discoverLocalBrowsers(
+      probeRequested ? { ...options, probe: 'none' } : options,
+      deps
+    );
+
+    if (probeRequested && localDiscovery.candidates.length === 1) {
+      const candidate = localDiscovery.candidates[0]!;
+      try {
+        const probe = await deps.probeBrowserWebSocket(
+          candidate.wsUrl,
+          options.probeTimeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS
+        );
+        candidate.browserVersion = probe.browserVersion;
+      } catch (error) {
+        localDiscovery = {
+          candidates: [],
+          failures: [
+            toProbeFailure(
+              {
+                channel: candidate.channel,
+                userDataDir: candidate.userDataDir,
+                portFile: candidate.portFile,
+              },
+              candidate.wsUrl,
+              error
+            ),
+          ],
+        };
+      }
+    }
 
     if (localDiscovery.candidates.length === 1) {
       const candidate = localDiscovery.candidates[0]!;

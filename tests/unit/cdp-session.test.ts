@@ -192,6 +192,7 @@ describe('live session registry', () => {
     const attachPromise = client.attachToTarget('target-abc');
     // Reply to the Target.attachToTarget command with a session id.
     const req = transport.lastSent();
+    expect(req['sessionId']).toBeUndefined();
     transport.emitRaw(JSON.stringify({ id: req['id'], result: { sessionId: 'sess-abc' } }));
 
     const sessionId = await attachPromise;

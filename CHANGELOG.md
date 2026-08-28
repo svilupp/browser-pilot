@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased
+
+## [0.4.0] - 2026-08-28
+
+### Added
+
+- Added `bp webmcp status|list|call` with origin filtering, mutation acknowledgement,
+  timeout cancellation, and native Chrome 150+ integration coverage.
+- Added browser-scoped daemon listing and ID-based stop for daemons that outlive their final
+  logical session.
+
+### Fixed
+
+- Packaged the daemon entry and made local CLI connections daemon-first so Chrome remote-debugging
+  permission is requested once per browser connection.
+- Serialized daemon recovery, protected registry/session writes with owner-checked locks, and
+  prevented stale shutdown or cleanup from deleting replacement or shared daemon state.
+- Made target attachment browser-scoped and required control-socket identity proof before lifecycle
+  commands signal a registered daemon PID.
+- Kept direct sessions recoverable after browser outages and made CI select direct mode explicitly.
+
 ## [0.3.1] - 2026-08-23
 
 ### Fixed

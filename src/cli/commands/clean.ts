@@ -4,9 +4,18 @@
 
 import * as fs from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join, resolve, sep } from 'node:path';
+import { daemonControlMatches } from '../../daemon/control.ts';
 import { isDaemonAlive, stopDaemon } from '../../daemon/lifecycle.ts';
-import { output } from '../index.ts';
+import {
+  cleanStaleDaemonLocks,
+  countSessionReferences,
+  endpointFingerprint,
+  listDaemonDescriptors,
+  readDaemonDescriptor,
+  removeDaemonDescriptor,
+} from '../../daemon/registry.ts';
+import { output } from '../output.ts';
 import { deleteSessionFull, listSessions } from '../session.ts';
 
 const SESSION_DIR = join(homedir(), '.browser-pilot', 'sessions');
@@ -146,12 +155,87 @@ function parseCleanArgs(args: string[]): CleanOptions {
 
 async function deleteSessionWithDaemonStop(session: {
   id: string;
-  daemon?: { pid: number } | null;
+  wsUrl: string;
+  daemon?: { pid: number; socketPath: string } | null;
+  transport?: { mode: 'daemon' | 'direct'; daemonId?: string };
 }): Promise<void> {
-  if (session.daemon && isDaemonAlive(session.daemon.pid)) {
-    await stopDaemon(session.daemon.pid).catch(() => {});
+  const shared =
+    session.transport?.mode === 'daemon' &&
+    !!session.transport.daemonId &&
+    (await countSessionReferences(session.transport.daemonId)) > 1;
+  const descriptor =
+    session.transport?.mode === 'daemon' && session.transport.daemonId
+      ? await readDaemonDescriptor(session.transport.daemonId)
+      : null;
+  const ownedPid = descriptor?.pid ?? session.daemon?.pid;
+  const ownerAlive = !!ownedPid && isDaemonAlive(ownedPid);
+  const identityMatches =
+    !ownerAlive ||
+    (await daemonControlMatches({
+      socketPath: descriptor?.socketPath ?? session.daemon!.socketPath,
+      ...(session.transport?.mode === 'daemon' && session.transport.daemonId
+        ? { daemonId: session.transport.daemonId }
+        : {}),
+      endpointFingerprint: descriptor?.endpointFingerprint ?? endpointFingerprint(session.wsUrl),
+    }));
+  if (!shared && ownerAlive && identityMatches) {
+    await stopDaemon(ownedPid).catch(() => {});
   }
-  await deleteSessionFull(session.id);
+  if (!shared && session.transport?.mode === 'daemon' && session.transport.daemonId) {
+    await removeDaemonDescriptor(session.transport.daemonId, descriptor?.pid);
+  }
+  // The daemon socket/log may live under the bootstrap session directory even
+  // when another logical session still references it. Never unlink that
+  // runtime while the shared browser owner is active.
+  await deleteSessionFull(session.id, {
+    preserveDaemonRuntime: shared || (ownerAlive && !identityMatches),
+  });
+}
+
+async function cleanupRegisteredDaemons(
+  includeHealthy: boolean,
+  dryRun: boolean
+): Promise<{ daemons: string[]; locks: string[] }> {
+  const selected: string[] = [];
+  for (const descriptor of await listDaemonDescriptors()) {
+    // A missing socket plus a live PID is not enough proof to signal the PID;
+    // it may have been reused by an unrelated process. `--all` is the explicit
+    // operator override. Automatic cleanup handles only dead owners.
+    const stale = !isDaemonAlive(descriptor.pid);
+    if (!includeHealthy && !stale) continue;
+    selected.push(descriptor.id);
+    if (dryRun) continue;
+    const ownerAlive = isDaemonAlive(descriptor.pid);
+    const identityMatches =
+      !ownerAlive ||
+      (await daemonControlMatches({
+        socketPath: descriptor.socketPath,
+        daemonId: descriptor.id,
+        endpointFingerprint: descriptor.endpointFingerprint,
+      }));
+    if (ownerAlive && identityMatches) {
+      await stopDaemon(descriptor.pid).catch(() => false);
+    }
+    if (ownerAlive && !identityMatches) {
+      // Drop the stale registry pointer, but never unlink or signal runtime
+      // state that did not prove it belongs to this descriptor.
+      await removeDaemonDescriptor(descriptor.id, descriptor.pid);
+      continue;
+    }
+    const fsPromises = await import('node:fs/promises');
+    await fsPromises.unlink(descriptor.socketPath).catch(() => {});
+    if (descriptor.heartbeatPath) {
+      await fsPromises.unlink(descriptor.heartbeatPath).catch(() => {});
+    }
+    await removeDaemonDescriptor(descriptor.id, descriptor.pid);
+    const runtimeDir = resolve(dirname(descriptor.socketPath));
+    const sessionsRoot = `${resolve(SESSION_DIR)}${sep}`;
+    if (includeHealthy && runtimeDir.startsWith(sessionsRoot)) {
+      await fsPromises.rm(runtimeDir, { recursive: true, force: true });
+    }
+  }
+  const locks = dryRun ? [] : await cleanStaleDaemonLocks();
+  return { daemons: selected, locks };
 }
 
 export async function cleanCommand(
@@ -164,6 +248,17 @@ export async function cleanCommand(
     console.log(CLEAN_HELP);
     return;
   }
+
+  const registryCleanup = await cleanupRegisteredDaemons(
+    options.all === true,
+    options.dryRun === true
+  );
+  const cleanedDaemons = registryCleanup.daemons;
+  const cleanedLocks = registryCleanup.locks;
+  const registryDetails = {
+    ...(cleanedDaemons.length > 0 ? { daemons: cleanedDaemons } : {}),
+    ...(cleanedLocks.length > 0 ? { locks: cleanedLocks } : {}),
+  };
 
   // --max-size mode: remove oldest sessions until under limit
   if (options.maxSize !== undefined) {
@@ -199,7 +294,11 @@ export async function cleanCommand(
         return;
       }
       output(
-        { message: `Total size ${totalLabel} is already under limit`, cleaned: 0 },
+        {
+          message: `Total size ${totalLabel} is already under limit`,
+          cleaned: 0,
+          ...registryDetails,
+        },
         globalOptions.format
       );
       return;
@@ -211,6 +310,7 @@ export async function cleanCommand(
           message: `Would clean ${toRemove.length} session(s)`,
           sessions: toRemove.map((s) => s.id),
           dryRun: true,
+          ...registryDetails,
         },
         globalOptions.format
       );
@@ -227,6 +327,7 @@ export async function cleanCommand(
             message: `Cleaned ${toRemove.length} session(s)`,
             cleaned: toRemove.length,
             sessions: toRemove.map((s) => s.id),
+            ...registryDetails,
           }
         : {
             message: `Cleaned ${toRemove.length} session(s), but the newest session still exceeds the size limit`,
@@ -234,6 +335,7 @@ export async function cleanCommand(
             sessions: toRemove.map((s) => s.id),
             kept: sessionsWithSize[0]?.id,
             withinLimit: false,
+            ...registryDetails,
           },
       globalOptions.format
     );
@@ -252,7 +354,17 @@ export async function cleanCommand(
   });
 
   if (stale.length === 0) {
-    output({ message: 'No stale sessions found', cleaned: 0 }, globalOptions.format);
+    output(
+      {
+        message:
+          cleanedDaemons.length + cleanedLocks.length > 0
+            ? 'Cleaned stale daemon registry state; no stale sessions found'
+            : 'No stale sessions found',
+        cleaned: 0,
+        ...registryDetails,
+      },
+      globalOptions.format
+    );
     return;
   }
 
@@ -262,6 +374,7 @@ export async function cleanCommand(
         message: `Would clean ${stale.length} session(s)`,
         sessions: stale.map((s) => s.id),
         dryRun: true,
+        ...registryDetails,
       },
       globalOptions.format
     );
@@ -277,6 +390,7 @@ export async function cleanCommand(
       message: `Cleaned ${stale.length} session(s)`,
       cleaned: stale.length,
       sessions: stale.map((s) => s.id),
+      ...registryDetails,
     },
     globalOptions.format
   );

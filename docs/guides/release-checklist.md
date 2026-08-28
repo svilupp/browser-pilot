@@ -39,6 +39,14 @@ Run the repository's full quiet check. It covers TypeScript, Biome, type-aware o
 bun run check:quiet
 ```
 
+Then run the transport and package release gate. It runs the integration and
+CLI suites in explicit CI direct mode, verifies the npm package, and exercises
+the packaged CLI and daemon lifecycle locally:
+
+```bash
+bun run test:release
+```
+
 Then make a clean production build:
 
 ```bash

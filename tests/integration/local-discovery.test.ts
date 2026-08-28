@@ -75,12 +75,13 @@ describe('Local discovery integration', () => {
           '--page-url',
           `${harness.baseUrl}/basic.html`,
           '--json',
-          '--no-daemon',
         ],
         { env: harness.discoveryEnv }
       );
 
-      expect(result.exitCode).toBe(0);
+      if (result.exitCode !== 0) {
+        throw new Error(`fresh-tab connect failed:\n${result.stderr}`);
+      }
       expect(result.json).toMatchObject({
         success: true,
         connectionSource: 'devtools-active-port',

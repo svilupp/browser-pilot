@@ -34,6 +34,8 @@ jobs:
         run: bun test tests/integration --timeout 60000
         env:
           CI: true
+          BROWSER_PILOT_NO_DAEMON: '1'
+          BROWSER_PILOT_NATIVE_WEBMCP: '1'
           TEST_TIMEOUT: 60000
           CHROME_PATH: ${{ steps.setup-chrome.outputs.chrome-path }}
           BROWSER_PILOT_CHROME_PATH: ${{ steps.setup-chrome.outputs.chrome-path }}
@@ -43,6 +45,8 @@ jobs:
         run: bun test tests/quarantine --timeout 60000 || true
         env:
           CI: true
+          BROWSER_PILOT_NO_DAEMON: '1'
+          BROWSER_PILOT_NATIVE_WEBMCP: '1'
           CHROME_PATH: ${{ steps.setup-chrome.outputs.chrome-path }}
           BROWSER_PILOT_CHROME_PATH: ${{ steps.setup-chrome.outputs.chrome-path }}
 
@@ -54,6 +58,14 @@ jobs:
           path: tests/screenshots/
           retention-days: 14
           if-no-files-found: ignore
+
+      - name: Assert nightly left no daemon processes or state
+        if: always()
+        run: |
+          ! pgrep -f '(^|/)(dist/[d]aemon\.mjs|src/[d]aemon/index\.ts)( |$)' || (echo 'daemon process leaked' && exit 1)
+          test -z "$(find "$HOME/.browser-pilot" -type s -name 'daemon.sock' -print -quit 2>/dev/null || true)"
+          test -z "$(find "$HOME/.browser-pilot/daemons" -type f \( -name '*.json' -o -name '*.lock' -o -name '*.heartbeat' \) -print -quit 2>/dev/null || true)"
+          test -z "$(find "$HOME/.browser-pilot/sessions" -type f -name '*.heartbeat' -print -quit 2>/dev/null || true)"
 
   knip:
     name: Dead Code Analysis

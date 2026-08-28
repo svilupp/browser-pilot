@@ -25,3 +25,8 @@ export function requireEnv(name: string): string {
   }
   return value;
 }
+
+/** Whether CI/hermetic execution explicitly disables detached daemons. */
+export function isDaemonDisabledByEnv(): boolean {
+  return ['1', 'true'].includes((getEnv('BROWSER_PILOT_NO_DAEMON') ?? '').trim().toLowerCase());
+}

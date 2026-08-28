@@ -5,8 +5,10 @@
  * orphan detection, and session file updates.
  */
 
+import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import { dirname, join } from 'node:path';
+import { acquireFileLock } from '../runtime/file-lock.ts';
 import { isRecord } from '../utils/json.ts';
 import type { DaemonLogLevel } from './types.ts';
 import { DAEMON_HEARTBEAT_INTERVAL_MS, DAEMON_IDLE_TIMEOUT_MS } from './types.ts';
@@ -107,27 +109,27 @@ export interface Heartbeat {
 }
 
 /**
- * Start a heartbeat that periodically updates the session file
- * with a `daemon.lastHeartbeat` timestamp.
+ * Start a heartbeat in a sidecar file. Keeping liveness separate from the
+ * logical session JSON prevents heartbeat ticks from racing target/metadata
+ * updates performed by CLI commands.
  */
 export function startHeartbeat(
   sessionFilePath: string,
   intervalMs: number = DAEMON_HEARTBEAT_INTERVAL_MS
 ): Heartbeat {
-  const timer = setInterval(() => {
+  const heartbeatPath = `${sessionFilePath}.heartbeat`;
+  const writeHeartbeat = (): void => {
     try {
-      const raw = fs.readFileSync(sessionFilePath, 'utf-8');
-      const session = parseSessionRecord(raw);
-      if (!session) return;
-      const daemon = isRecord(session['daemon']) ? session['daemon'] : undefined;
-      if (daemon) {
-        daemon['lastHeartbeat'] = new Date().toISOString();
-        session['daemon'] = daemon;
-        fs.writeFileSync(sessionFilePath, JSON.stringify(session, null, 2));
-      }
+      const tempPath = `${heartbeatPath}.${process.pid}.${randomUUID()}.tmp`;
+      fs.writeFileSync(tempPath, `${new Date().toISOString()}\n`, 'utf-8');
+      fs.renameSync(tempPath, heartbeatPath);
     } catch (err) {
-      daemonLog('warn', `Heartbeat failed to update session file: ${err}`);
+      daemonLog('warn', `Heartbeat failed to update sidecar: ${err}`);
     }
+  };
+  writeHeartbeat();
+  const timer = setInterval(() => {
+    writeHeartbeat();
   }, intervalMs);
 
   return {
@@ -167,10 +169,11 @@ export function installSignalHandlers(onShutdown: () => Promise<void>): void {
  */
 export function checkSessionFileExists(
   sessionFilePath: string,
-  delayMs: number = 5000
+  delayMs: number = 5000,
+  alternatePath?: string
 ): ReturnType<typeof setTimeout> {
   return setTimeout(() => {
-    if (!fs.existsSync(sessionFilePath)) {
+    if (!fs.existsSync(sessionFilePath) && (!alternatePath || !fs.existsSync(alternatePath))) {
       daemonLog('error', 'Session file does not exist after startup — orphan daemon, exiting');
       closeDaemonLog();
       process.exit(1);
@@ -222,15 +225,41 @@ export async function stopDaemon(pid: number, timeoutMs: number = 2000): Promise
 /**
  * Remove daemon info from a session file (used on stale cleanup).
  */
-export async function clearDaemonFromSession(sessionFilePath: string): Promise<void> {
+export async function clearDaemonFromSession(
+  sessionFilePath: string,
+  expected?: { pid?: number; socketPath?: string }
+): Promise<boolean> {
+  let release: (() => Promise<void>) | undefined;
   try {
     const fsPromises = await import('node:fs/promises');
+    release = await acquireFileLock(`${sessionFilePath}.lock`);
     const raw = await fsPromises.readFile(sessionFilePath, 'utf-8');
     const session = parseSessionRecord(raw);
-    if (!session) return;
+    if (!session) return false;
+    const daemon = isRecord(session['daemon']) ? session['daemon'] : undefined;
+    if (
+      expected &&
+      (!daemon ||
+        (expected.pid !== undefined && daemon['pid'] !== expected.pid) ||
+        (expected.socketPath !== undefined && daemon['socketPath'] !== expected.socketPath))
+    ) {
+      return false;
+    }
     session['daemon'] = undefined;
-    await fsPromises.writeFile(sessionFilePath, JSON.stringify(session, null, 2));
+    const tempPath = `${sessionFilePath}.${process.pid}.${randomUUID()}.tmp`;
+    const handle = await fsPromises.open(tempPath, 'wx');
+    try {
+      await handle.writeFile(`${JSON.stringify(session, null, 2)}\n`, 'utf-8');
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    await fsPromises.rename(tempPath, sessionFilePath);
+    return true;
   } catch {
     // Session file may not exist or be corrupted — ignore
+    return false;
+  } finally {
+    await release?.();
   }
 }

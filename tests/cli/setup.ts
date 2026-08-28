@@ -28,7 +28,8 @@ let fileHarness: TestHarness | null = null;
  * in CI environments. The shell syntax can hang in GitHub Actions.
  */
 export async function runCLI(args: string[], options: RunCLIOptions = {}): Promise<CLIResult> {
-  const proc = Bun.spawn(['bun', './src/cli/index.ts', ...args], {
+  const cliEntry = process.env['BROWSER_PILOT_TEST_CLI_ENTRY'] ?? './src/cli/index.ts';
+  const proc = Bun.spawn(['bun', cliEntry, ...args], {
     env: { ...process.env, ...options.env },
     stdout: 'pipe',
     stderr: 'pipe',

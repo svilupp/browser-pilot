@@ -2,8 +2,8 @@
  * Text command - Extract text content from page
  */
 
-import { connect } from '../../index.ts';
-import { output } from '../index.ts';
+import { attachSession } from '../attach.ts';
+import { output } from '../output.ts';
 import { getDefaultSession, loadSession, type SessionData, updateSession } from '../session.ts';
 
 const TEXT_HELP = `
@@ -106,14 +106,9 @@ export async function textCommand(
   }
 
   // Connect to browser
-  const browser = await connect({
-    provider: session.provider,
-    wsUrl: session.wsUrl,
-    debug: globalOptions.trace,
-  });
+  const { browser, page } = await attachSession(session, { trace: globalOptions.trace });
 
   try {
-    const page = await browser.page(undefined, { targetId: session.targetId });
     const text = await page.text(options.selector);
     const currentUrl = await page.url();
 

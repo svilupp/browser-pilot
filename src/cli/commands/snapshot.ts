@@ -6,9 +6,9 @@ import * as fs from 'node:fs';
 import { injectRefOverlay, removeRefOverlay } from '../../browser/overlay.ts';
 import { diffSnapshots, formatDiffPretty } from '../../browser/snapshot-diff.ts';
 import type { PageSnapshot } from '../../browser/types.ts';
-import { connect } from '../../index.ts';
 import { isRecord } from '../../utils/json.ts';
-import { output, renderOutput } from '../index.ts';
+import { attachSession } from '../attach.ts';
+import { output, renderOutput } from '../output.ts';
 import { getDefaultSession, loadSession, type SessionData, updateSession } from '../session.ts';
 
 const SNAPSHOT_HELP = `
@@ -142,14 +142,9 @@ export async function snapshotCommand(
   }
 
   // Connect to browser
-  const browser = await connect({
-    provider: session.provider,
-    wsUrl: session.wsUrl,
-    debug: globalOptions.trace,
-  });
+  const { browser, page } = await attachSession(session, { trace: globalOptions.trace });
 
   try {
-    const page = await browser.page(undefined, { targetId: session.targetId });
     const snapshot = await page.snapshot(options.roles?.length ? { roles: options.roles } : {});
     const infoToStderr = globalOptions.format === 'json' || !!options.outputFile;
 

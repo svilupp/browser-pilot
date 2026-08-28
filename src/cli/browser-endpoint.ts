@@ -25,6 +25,10 @@ export async function resolveCLIEndpoint(
     explicitWsUrl: options.explicitWsUrl,
     channel: options.channel,
     userDataDir: options.userDataDir,
+    // Endpoint discovery must not open a speculative browser WebSocket. The
+    // daemon (or the explicit direct connection in --no-daemon mode) owns the
+    // first protocol connection, avoiding repeated Chrome permission prompts.
+    probe: 'none',
     allowLocalDiscovery: true,
     allowLegacyHostFallback: true,
   });

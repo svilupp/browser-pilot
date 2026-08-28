@@ -21,6 +21,7 @@ browser-pilot. Use `bunx flightplan --help` for its interface.
 - Exercise voice/media: `bp audio`
 - Change browser conditions: `bp env`
 - Review structured state: `bp review`
+- Discover or invoke page tools: `bp webmcp status|list|call`
 
 ## Canonical workflows
 
@@ -76,6 +77,10 @@ bp trace summary -s vt --view voice
 ```
 
 ## Stable expectations
+
+- Local CLI sessions use one browser-scoped daemon by default; CI sets `BROWSER_PILOT_NO_DAEMON=1`
+- Closing the final local logical session leaves the daemon reusable; inspect it with `bp daemon list`
+- WebMCP tools are page-scoped and must be listed again after navigation
 
 - `bp snapshot -i` returns actionable elements with refs like `ref:e4`
 - `bp page` is compact and caches the refs it shows, but it is not an exhaustive action inventory

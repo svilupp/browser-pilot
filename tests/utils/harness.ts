@@ -157,6 +157,9 @@ export async function createTestHarness(
       '--disable-translate',
       '--mute-audio',
       '--hide-scrollbars',
+      ...(process.env['BROWSER_PILOT_NATIVE_WEBMCP'] === '1'
+        ? ['--enable-features=WebMCPTesting']
+        : []),
     ],
     port: options.port,
     userDataDir: userDataDir ?? false,

@@ -4,9 +4,12 @@
 
 import { dirname } from 'node:path';
 import { grantAudioPermissions } from '../../audio/permissions.ts';
-import { connect, type Page } from '../../index.ts';
+import type { Browser } from '../../browser/browser.ts';
+import type { Page } from '../../index.ts';
 import { getEnv } from '../../runtime/env.ts';
+import { attachSession } from '../attach.ts';
 import { formatBrowserDiscoveryError, resolveCLIEndpoint } from '../browser-endpoint.ts';
+import { createLocalSession } from '../connect-service.ts';
 import {
   applyNetworkOverride,
   applyPermissionState,
@@ -16,14 +19,7 @@ import {
   type StoredPermissionName,
 } from '../env-state.ts';
 import type { EnvSettings, SessionData } from '../session.ts';
-import {
-  generateSessionId,
-  getDefaultSession,
-  getSessionFilePath,
-  loadSession,
-  saveSession,
-  updateSession,
-} from '../session.ts';
+import { getDefaultSession, getSessionFilePath, loadSession, updateSession } from '../session.ts';
 
 const ENV_HELP = `
 bp env - Browser/session environment controls
@@ -163,7 +159,7 @@ interface EnvOptions {
 }
 
 interface ResolvedConnection {
-  browser: ReturnType<typeof connect> extends Promise<infer T> ? T : never;
+  browser: Browser;
   session: SessionData;
 }
 
@@ -350,7 +346,7 @@ async function resolveConnection(
 ): Promise<ResolvedConnection> {
   if (sessionId) {
     const session = await loadSession(sessionId);
-    const browser = await connect({ provider: session.provider, wsUrl: session.wsUrl });
+    const { browser } = await attachSession(session);
     return { browser, session };
   }
 
@@ -359,16 +355,13 @@ async function resolveConnection(
     if (!defaultSession) {
       throw new Error('No sessions found. Run "bp connect" first or use "-s" for latest session.');
     }
-    const browser = await connect({
-      provider: defaultSession.provider,
-      wsUrl: defaultSession.wsUrl,
-    });
+    const { browser } = await attachSession(defaultSession);
     return { browser, session: defaultSession };
   }
 
-  let wsUrl: string;
+  let endpoint: Awaited<ReturnType<typeof resolveCLIEndpoint>>;
   try {
-    wsUrl = (await resolveCLIEndpoint()).wsUrl;
+    endpoint = await resolveCLIEndpoint();
   } catch (error) {
     throw new Error(
       formatBrowserDiscoveryError(error, {
@@ -379,22 +372,13 @@ async function resolveConnection(
     );
   }
 
-  const browser = await connect({ provider: 'generic', wsUrl });
-  const page = await browser.page();
-  const currentUrl = await page.url();
-  const newSessionId = generateSessionId();
-
-  const session: SessionData = {
-    id: newSessionId,
-    provider: 'generic',
-    wsUrl: browser.wsUrl,
-    createdAt: new Date().toISOString(),
-    lastActivity: new Date().toISOString(),
-    currentUrl,
-  };
-
-  await saveSession(session);
-  const sessionFile = getSessionFilePath(newSessionId);
+  const { browser, session } = await createLocalSession({
+    wsUrl: endpoint.wsUrl,
+    connectionSource: endpoint.source,
+    resolvedChannel: endpoint.channel,
+    resolvedUserDataDir: endpoint.userDataDir,
+  });
+  const sessionFile = getSessionFilePath(session.id);
   await import('node:fs/promises').then((fs) =>
     fs.mkdir(dirname(sessionFile), { recursive: true })
   );

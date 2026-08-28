@@ -2470,6 +2470,74 @@ export interface WaitResult {
 // @public
 export type WaitState = 'visible' | 'hidden' | 'attached' | 'detached';
 
+// @public (undocumented)
+export function webmcpCall(page: Page, name: string, input: unknown, options?: {
+    origin?: string;
+    fromOrigins?: string[];
+    allowMutation?: boolean;
+    timeoutMs?: number;
+    signal?: AbortSignal;
+}): Promise<{
+    result: unknown;
+    tool: WebMCPToolDescriptor;
+}>;
+
+// @public (undocumented)
+export function webmcpList(page: Page, fromOrigins?: string[]): Promise<WebMCPListResult>;
+
+// @public (undocumented)
+export interface WebMCPListResult {
+    // (undocumented)
+    status: WebMCPStatus;
+    // (undocumented)
+    tools: WebMCPToolDescriptor[];
+}
+
+// @public (undocumented)
+export interface WebMCPStatus {
+    // (undocumented)
+    available: boolean;
+    // (undocumented)
+    crossOriginIsolated: boolean;
+    // (undocumented)
+    originAgentCluster: boolean | null;
+    // (undocumented)
+    reason?: string;
+    // (undocumented)
+    secureContext: boolean;
+    // (undocumented)
+    toolsPolicy: boolean | null;
+    // (undocumented)
+    url: string;
+}
+
+// @public (undocumented)
+export function webmcpStatus(page: Page): Promise<WebMCPStatus>;
+
+// @public
+export interface WebMCPToolAnnotations {
+    // (undocumented)
+    readOnlyHint?: boolean;
+    // (undocumented)
+    untrustedContentHint?: boolean;
+}
+
+// @public (undocumented)
+export interface WebMCPToolDescriptor {
+    // (undocumented)
+    annotations?: WebMCPToolAnnotations;
+    // (undocumented)
+    description?: string;
+    // (undocumented)
+    inputSchema?: unknown;
+    // (undocumented)
+    name: string;
+    // (undocumented)
+    origin?: string;
+    // (undocumented)
+    title?: string;
+}
+
 // @public
 export interface WorkflowStepSummary {
     // (undocumented)
@@ -2512,11 +2580,11 @@ export interface WorkflowSummary {
 // Warnings were encountered during analysis:
 //
 // dist/index.d.ts:394:5 - (ae-forgotten-export) The symbol "CanonicalTraceEvent" needs to be exported by the entry point index.d.ts
-// dist/page-C0C-tu2h.d.ts:1035:9 - (ae-forgotten-export) The symbol "CoveringElement" needs to be exported by the entry point index.d.ts
-// dist/page-C0C-tu2h.d.ts:1036:9 - (ae-forgotten-export) The symbol "HitElement" needs to be exported by the entry point index.d.ts
-// dist/page-C0C-tu2h.d.ts:1037:9 - (ae-forgotten-export) The symbol "PointerEventsDiagnosis" needs to be exported by the entry point index.d.ts
-// dist/types-D2pJQpWs.d.ts:67:9 - (ae-forgotten-export) The symbol "LocalBrowserCandidate" needs to be exported by the entry point index.d.ts
-// dist/types-D2pJQpWs.d.ts:68:9 - (ae-forgotten-export) The symbol "LocalDiscoveryFailure" needs to be exported by the entry point index.d.ts
+// dist/page-DFkt_onI.d.ts:1035:9 - (ae-forgotten-export) The symbol "CoveringElement" needs to be exported by the entry point index.d.ts
+// dist/page-DFkt_onI.d.ts:1036:9 - (ae-forgotten-export) The symbol "HitElement" needs to be exported by the entry point index.d.ts
+// dist/page-DFkt_onI.d.ts:1037:9 - (ae-forgotten-export) The symbol "PointerEventsDiagnosis" needs to be exported by the entry point index.d.ts
+// dist/types-FT1tAI0H.d.ts:73:9 - (ae-forgotten-export) The symbol "LocalBrowserCandidate" needs to be exported by the entry point index.d.ts
+// dist/types-FT1tAI0H.d.ts:74:9 - (ae-forgotten-export) The symbol "LocalDiscoveryFailure" needs to be exported by the entry point index.d.ts
 
 // (No @packageDocumentation comment for this package)
 

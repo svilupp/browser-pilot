@@ -64,6 +64,10 @@ export default defineConfig([
   {
     entry: {
       cli: 'src/cli/index.ts',
+      // The daemon is a separately executable entry point. Keeping it as a
+      // first-class build artifact is important for packaged/global installs:
+      // the CLI must never resolve a source-only `src/daemon/index.ts` path.
+      daemon: 'src/daemon/index.ts',
     },
     format: ['esm'],
     dts: true,

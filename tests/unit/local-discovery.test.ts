@@ -122,6 +122,35 @@ describe('parseDevToolsActivePortFile', () => {
 });
 
 describe('discoverLocalBrowsers', () => {
+  test('probe none returns candidates without opening a CDP connection', async () => {
+    let probeCalls = 0;
+    const result = await discoverLocalBrowsers(
+      {
+        platform: 'darwin',
+        homeDir: '/Users/tester',
+        channel: 'beta',
+        probe: 'none',
+      },
+      {
+        async readTextFile() {
+          return '9222\n/devtools/browser/beta-browser';
+        },
+        async probeBrowserWebSocket() {
+          probeCalls++;
+          return { browserVersion: 'should-not-be-called' };
+        },
+        async getLegacyBrowserWebSocketUrl() {
+          throw new Error('legacy should not be called');
+        },
+      }
+    );
+
+    expect(probeCalls).toBe(0);
+    expect(result.candidates).toEqual([
+      expect.objectContaining({ wsUrl: 'ws://127.0.0.1:9222/devtools/browser/beta-browser' }),
+    ]);
+  });
+
   test('returns a single live candidate when exactly one profile is reachable', async () => {
     const readCalls: string[] = [];
     const result = await discoverLocalBrowsers(
@@ -324,6 +353,7 @@ describe('resolveBrowserEndpoint', () => {
   });
 
   test('throws a deterministic ambiguity error for multiple live candidates', async () => {
+    let probeCalls = 0;
     await expect(
       resolveBrowserEndpoint(
         {
@@ -341,6 +371,7 @@ describe('resolveBrowserEndpoint', () => {
             throw missingFile(path);
           },
           async probeBrowserWebSocket() {
+            probeCalls++;
             return { browserVersion: 'Chrome/147.0' };
           },
           async getLegacyBrowserWebSocketUrl() {
@@ -363,5 +394,6 @@ describe('resolveBrowserEndpoint', () => {
         ],
       },
     });
+    expect(probeCalls).toBe(0);
   });
 });
