@@ -273,6 +273,34 @@ export async function updateSessionDaemon(
   }
 }
 
+/** Atomically move a logical session and its daemon transport to one exact page target. */
+export async function updateSessionTargetBinding(
+  id: string,
+  binding: { targetId: string; currentUrl: string; cdpSessionId?: string }
+): Promise<SessionData> {
+  const release = await acquireFileLock(`${getSessionFilePath(id)}.lock`);
+  try {
+    const session = await loadSession(id);
+    const daemon = session.daemon
+      ? {
+          ...session.daemon,
+          ...(binding.cdpSessionId ? { cdpSessionId: binding.cdpSessionId } : {}),
+        }
+      : undefined;
+    const updated: SessionData = {
+      ...session,
+      targetId: binding.targetId,
+      currentUrl: binding.currentUrl,
+      lastActivity: new Date().toISOString(),
+      ...(daemon ? { daemon } : {}),
+    };
+    await saveSessionUnlocked(updated);
+    return updated;
+  } finally {
+    await release();
+  }
+}
+
 /**
  * Delete a session
  */

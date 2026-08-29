@@ -36,6 +36,15 @@ logical session has closed; stop one with `bp daemon stop --daemon-id <id>`.
 The stop command refuses an unverified live PID; use `--force` only after
 checking that the registered PID is the intended daemon.
 
+## Exact tab selection
+
+```bash
+bp targets -s dev --json
+bp use-target <target-id> -s dev
+```
+
+`current: true` marks the tab used by the session. `attached: true` does not identify it.
+
 ## WebMCP
 
 ```bash
@@ -82,7 +91,7 @@ that is not marked read-only.
 
 `waitFor: "networkIdle"` only means transport quiet. On hydrated apps, follow navigation with `bp snapshot -i`, `bp text`, `bp review`, or explicit assertions before trusting the page state.
 
-Prefer `bp eval 'document.title'` only as an escape hatch for ad hoc inspection instead of wrapping raw JS in action JSON.
+Prefer `bp eval 'document.title'` only as an escape hatch for ad hoc inspection instead of wrapping raw JS in action JSON. Save longer probes to a file and use `bp eval -f /tmp/bp-probe.js`; add `--script` for an async multi-statement body containing top-level `await` or `return`.
 
 ### Assertions
 
@@ -240,10 +249,18 @@ bp exec -s dev '[
 ### Start trace analysis wide, then narrow
 
 ```bash
-bp trace start -s dev --timeout 20000
+bp trace start -s dev --background --timeout 20000
+# reproduce the issue, then stop early
+bp trace stop -s dev
 bp trace summary -s dev --view session
+bp trace summary -s dev --view http
 bp trace summary -s dev --view console
 ```
+
+Without `--background`, `trace start` blocks until Ctrl+C or the timeout. Background capture
+returns immediately and defaults to a 10-minute/100-MB safety cap; inspect it with `trace status`.
+The `http` view reports request URL, method, status, duration, and failures; it does not capture
+response bodies.
 
 ### Voice validation
 

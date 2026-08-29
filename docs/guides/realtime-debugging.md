@@ -8,9 +8,11 @@ For local Chrome on Chrome 144+, try plain `bp connect` first after enabling rem
 
 ```bash
 bp connect --name realtime
-bp trace start -s realtime --timeout 30000
+bp trace start -s realtime --background --timeout 30000
 # reproduce the issue
+bp trace stop -s realtime
 bp trace summary -s realtime --view session
+bp trace summary -s realtime --view http
 bp trace summary -s realtime --view ws
 bp trace summary -s realtime --view console
 ```

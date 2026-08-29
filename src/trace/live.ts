@@ -24,7 +24,16 @@ export class LiveTraceCollector {
   private readonly options: LiveTraceCollectorOptions;
   private readonly handlers: Array<{ event: string; handler: EventHandler }> = [];
   private readonly wsUrls = new Map<string, string>();
-  private readonly httpUrls = new Map<string, string>();
+  private readonly httpRequests = new Map<
+    string,
+    {
+      url: string;
+      method: string;
+      startedAt?: number;
+      status?: number;
+      mimeType?: string;
+    }
+  >();
   private readonly events: CanonicalTraceEvent[] = [];
   private readonly startTime = Date.now();
   private readonly matchRegex: RegExp | null;
@@ -141,7 +150,9 @@ export class LiveTraceCollector {
           return;
         }
 
-        this.httpUrls.set(requestId, url);
+        const method = request?.method ?? 'GET';
+        const startedAt = typeof params['timestamp'] === 'number' ? params['timestamp'] : undefined;
+        this.httpRequests.set(requestId, { url, method, startedAt });
         void this.emit({
           channel: 'http',
           event: 'http.request.sent',
@@ -149,7 +160,7 @@ export class LiveTraceCollector {
           requestId,
           url,
           data: {
-            method: request?.method ?? 'GET',
+            method,
             headers: (request?.headers as Record<string, unknown> | undefined) ?? {},
             body: request?.postData ?? null,
           },
@@ -158,38 +169,78 @@ export class LiveTraceCollector {
 
       this.subscribe('Network.responseReceived', (params) => {
         const requestId = readStringOr(params['requestId']);
-        if (!this.httpUrls.has(requestId)) {
+        const request = this.httpRequests.get(requestId);
+        if (!request) {
           return;
         }
 
         const response = params['response'] as
           | { status?: number; headers?: unknown; mimeType?: string; url?: string }
           | undefined;
+        const timestamp = typeof params['timestamp'] === 'number' ? params['timestamp'] : undefined;
+        const durationMs = this.durationMs(request.startedAt, timestamp);
+        request.status = response?.status ?? 0;
+        request.mimeType = response?.mimeType;
+        request.url = response?.url ?? request.url;
         void this.emit({
           channel: 'http',
           event: 'http.response.received',
-          summary: `${response?.status ?? 0} ${response?.url ?? this.httpUrls.get(requestId) ?? ''}`,
+          summary: `${response?.status ?? 0} ${request.url}`,
           requestId,
-          url: response?.url ?? this.httpUrls.get(requestId),
+          url: request.url,
           data: {
+            method: request.method,
             status: response?.status ?? 0,
             headers: (response?.headers as Record<string, unknown> | undefined) ?? {},
             mimeType: response?.mimeType ?? null,
+            durationMs,
+          },
+        });
+      });
+
+      this.subscribe('Network.loadingFinished', (params) => {
+        const requestId = readStringOr(params['requestId']);
+        const request = this.httpRequests.get(requestId);
+        if (!request) return;
+
+        const timestamp = typeof params['timestamp'] === 'number' ? params['timestamp'] : undefined;
+        const durationMs = this.durationMs(request.startedAt, timestamp);
+        this.httpRequests.delete(requestId);
+        void this.emit({
+          channel: 'http',
+          event: 'http.response.finished',
+          summary: `${request.status ?? 0} ${request.method} ${request.url}${durationMs === null ? '' : ` (${durationMs}ms)`}`,
+          requestId,
+          url: request.url,
+          data: {
+            method: request.method,
+            status: request.status ?? 0,
+            mimeType: request.mimeType ?? null,
+            durationMs,
+            encodedDataLength:
+              typeof params['encodedDataLength'] === 'number' ? params['encodedDataLength'] : null,
           },
         });
       });
 
       this.subscribe('Network.loadingFailed', (params) => {
         const requestId = readStringOr(params['requestId']);
-        const url = readString(params['blockedReason']) ?? this.httpUrls.get(requestId) ?? '';
+        const request = this.httpRequests.get(requestId);
+        if (!request) return;
+        const timestamp = typeof params['timestamp'] === 'number' ? params['timestamp'] : undefined;
+        const durationMs = this.durationMs(request.startedAt, timestamp);
+        this.httpRequests.delete(requestId);
         void this.emit({
           channel: 'http',
           event: 'http.response.failed',
           summary: `HTTP request failed ${requestId}`,
           severity: 'error',
           requestId,
-          url,
+          url: request.url,
           data: {
+            method: request.method,
+            status: request.status ?? null,
+            durationMs,
             errorText: params['errorText'] ?? null,
             blockedReason: params['blockedReason'] ?? null,
             canceled: params['canceled'] ?? false,
@@ -299,6 +350,11 @@ export class LiveTraceCollector {
     }
 
     return data;
+  }
+
+  private durationMs(startedAt: number | undefined, finishedAt: number | undefined): number | null {
+    if (startedAt === undefined || finishedAt === undefined) return null;
+    return Math.max(0, Math.round((finishedAt - startedAt) * 1000 * 100) / 100);
   }
 
   private channelForTraceEvent(eventName: string) {

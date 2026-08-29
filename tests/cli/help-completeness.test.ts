@@ -280,8 +280,24 @@ describe('Command Help', () => {
 
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('-f, --file <path>');
+    expect(result.stdout).toContain('--script');
+    expect(result.stdout).toContain('/tmp/bp-probe.js');
     expect(countOccurrences(result.stdout, '-f, --format')).toBe(0);
     expect(result.stdout).toContain('--debug');
+  });
+
+  test('bp trace --help distinguishes blocking and bounded background capture', async () => {
+    const result = await runCLI(['trace', '--help']);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Foreground/blocking');
+    expect(result.stdout).toContain('Background/non-blocking');
+    expect(result.stdout).toContain('--background');
+    expect(result.stdout).toContain('10 minutes');
+    expect(result.stdout).toContain('100 MB');
+    expect(result.stdout).toContain('http | ws');
+    expect(result.stdout).toContain('status');
+    expect(result.stdout).toContain('stop');
   });
 
   test('bp screenshot --help documents image format without global -f collision', async () => {
