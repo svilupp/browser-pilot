@@ -12,6 +12,8 @@ function takeRecent(events: CanonicalTraceEvent[], limit = 5) {
 
 export function buildTraceSummary(events: CanonicalTraceEvent[], view: TraceView) {
   switch (view) {
+    case 'http':
+      return summarizeHttp(events);
     case 'ws':
       return summarizeWs(events);
     case 'voice':
@@ -33,6 +35,7 @@ export function buildTraceSummary(events: CanonicalTraceEvent[], view: TraceView
 
 export function buildTraceSummaries(events: CanonicalTraceEvent[]) {
   return {
+    http: summarizeHttp(events),
     ws: summarizeWs(events),
     voice: summarizeVoice(events),
     console: summarizeConsole(events),
@@ -40,6 +43,37 @@ export function buildTraceSummaries(events: CanonicalTraceEvent[]) {
     media: summarizeMedia(events),
     ui: summarizeUi(events),
     session: summarizeSession(events),
+  };
+}
+
+function summarizeHttp(events: CanonicalTraceEvent[]) {
+  const relevant = events.filter(
+    (event) => event.channel === 'http' || event.event.startsWith('http.')
+  );
+  const terminal = relevant.filter(
+    (event) => event.event === 'http.response.finished' || event.event === 'http.response.failed'
+  );
+  const timingEvents = terminal.length
+    ? terminal
+    : relevant.filter((event) => event.event === 'http.response.received');
+  const requests = timingEvents
+    .map((event) => ({
+      method: typeof event.data['method'] === 'string' ? event.data['method'] : null,
+      status: typeof event.data['status'] === 'number' ? event.data['status'] : null,
+      durationMs: typeof event.data['durationMs'] === 'number' ? event.data['durationMs'] : null,
+      url: event.url ?? null,
+      outcome: event.event === 'http.response.failed' ? 'failed' : 'completed',
+    }))
+    .sort((a, b) => (b.durationMs ?? -1) - (a.durationMs ?? -1));
+
+  return {
+    view: 'http',
+    sent: relevant.filter((event) => event.event === 'http.request.sent').length,
+    completed: relevant.filter((event) => event.event === 'http.response.finished').length,
+    failed: relevant.filter((event) => event.event === 'http.response.failed').length,
+    requests,
+    slowest: requests.slice(0, 10),
+    recent: takeRecent(relevant),
   };
 }
 

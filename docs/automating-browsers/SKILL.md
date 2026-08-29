@@ -1,7 +1,8 @@
 ---
 name: automate-browser-actions-and-testing
 description: Browser automation skill using browser-pilot CLI. Use this to control or inspect a browser, invoke page-provided WebMCP tools, capture workflows, trace realtime issues, or exercise voice and environment conditions.
-compatibility: Requires browser-pilot CLI (bp). For local Chrome on Chrome 144+, enable remote debugging in chrome://inspect/#remote-debugging before running bp connect.
+metadata:
+  compatibility: Requires browser-pilot CLI (bp). For local Chrome on Chrome 144+, enable remote debugging in chrome://inspect/#remote-debugging before running bp connect.
 ---
 
 # Browser Automation with browser-pilot
@@ -97,6 +98,18 @@ Rules:
 - If a selector fails, use `bp diagnose` before dropping to raw JS
 - `waitFor: "networkIdle"` only means transport quiet; on hydrated apps follow it with `bp snapshot -i`, `bp text`, `bp review`, or an explicit assertion
 
+For longer JavaScript probes, use `bp eval -f /tmp/bp-probe.js`. Add `--script` for an async
+multi-statement body containing top-level `await` or `return`.
+
+When several tabs match the same URL, select by target ID:
+
+```bash
+bp targets -s dev --json
+bp use-target <target-id> -s dev
+```
+
+`current: true` marks the session tab. `attached: true` only means a CDP client is attached.
+
 ## When to use record
 
 Use `record` when the workflow is being demonstrated manually.
@@ -130,20 +143,30 @@ Re-list after navigation. Pass `--origin` when the same tool name appears from
 several origins. Tools not marked `readOnlyHint: true` require
 `--confirm-mutation`. Local Chrome testing requires version 149 or newer and
 `chrome://flags/#enable-webmcp-testing`; the page must use a secure,
-origin-isolated context allowed by the `tools` Permissions Policy.
+origin-isolated context. Top-level and same-origin documents are allowed by
+default; cross-origin iframes require `allow="tools"`.
 
 ## When to use trace
 
 Use `trace` when the question spans time, websocket traffic, console failures, permission state, media, or voice.
 
 ```bash
-bp trace start -s dev --timeout 20000
+bp trace start -s dev --background --timeout 20000
+# reproduce the issue, then stop early
+bp trace stop -s dev
 bp trace summary -s dev --view session
+bp trace summary -s dev --view http
 bp trace summary -s dev --view ws
 bp trace watch -s dev --view console --assert no-console-errors --timeout 5000
 ```
 
 `bp listen ...` is compatibility only. Prefer `bp trace tail ...`.
+
+`bp trace start` blocks unless `--background` is supplied. Background captures return
+immediately and auto-stop after 10 minutes or 100 MB by default. Use `bp trace status` and
+`bp trace stop` to manage them.
+
+Use `--view http` for request URLs, status, failures, and duration. Response bodies are not captured.
 
 ## When to use emit
 

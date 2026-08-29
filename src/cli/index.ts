@@ -83,7 +83,9 @@ Golden paths:
      Translate the derived steps into Flightplan manually.
 
   4. Debug a realtime or voice session
-     bp trace start -s dev
+     bp trace start -s dev --background
+     # reproduce the issue; capture auto-stops after 10m/100MB
+     bp trace stop -s dev
      bp trace summary -s dev --view ws
      bp emit ws '{"type":"ping"}' --await 'type=pong' -s dev
      bp audio check -s dev

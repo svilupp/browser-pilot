@@ -76,6 +76,8 @@ bp exec -s dev '{"action":"goto","url":"https://example.com"}'
 bp snapshot -i -s dev
 bp page -s dev
 bp text -s dev --selector main
+bp targets -s dev --json
+bp use-target <target-id> -s dev
 bp diagnose -s dev "submit"
 bp review -s dev --json
 ```
@@ -90,7 +92,11 @@ Rules:
 - On noisy pages, scope `bp text` with `--selector main` or another container.
 - Use `bp review` after form submits, checkouts, or other business-state transitions.
 - Do not expect `bp review` to be a great first read on dense catalog, search, or marketing pages with lots of nav chrome.
+- `bp targets` marks the session tab with `current: true`; `attached: true` does not mean current.
+- Use `bp use-target <target-id>` to bind the session to an exact tab.
 - Use `bp eval` only as an escape hatch after higher-level commands are insufficient.
+- For longer probes, save JavaScript to a temporary file and run `bp eval -f /tmp/bp-probe.js`.
+  Add `--script` when the file is an async function body containing top-level `await` or `return`.
 
 Likely next steps:
 
@@ -253,6 +259,8 @@ Choose this when the question spans time, failures, causality, network, console,
 Primary commands:
 
 - `bp trace start`
+- `bp trace status`
+- `bp trace stop`
 - `bp trace tail`
 - `bp trace summary`
 - `bp trace watch`
@@ -261,6 +269,7 @@ Primary commands:
 
 Views:
 
+- `http` (URL, status, duration, and failure; response bodies are not captured)
 - `ws`
 - `voice`
 - `console`
@@ -269,14 +278,29 @@ Views:
 - `ui`
 - `session`
 
-Live workflow:
+Capture modes:
+
+- `bp trace start` is foreground and **blocks** until Ctrl+C or `--timeout`.
+- `bp trace start --background` (`--detach`) returns immediately. It auto-stops after 10 minutes or 100 MB
+  by default, whichever comes first. Inspect it with `trace status` and stop it early with
+  `trace stop`.
+
+Non-blocking workflow:
+
+```bash
+bp trace start -s realtime --background
+# reproduce the issue with bp exec, another tool, or manual browser actions
+bp trace stop -s realtime
+bp trace summary -s realtime --view session
+bp trace summary -s realtime --view http
+bp trace summary -s realtime --view ws
+bp trace summary -s realtime --view console
+```
+
+Foreground workflow (this shell waits for the capture):
 
 ```bash
 bp trace start -s realtime --timeout 20000
-# reproduce the issue
-bp trace summary -s realtime --view session
-bp trace summary -s realtime --view ws
-bp trace summary -s realtime --view console
 ```
 
 Saved artifact workflow:

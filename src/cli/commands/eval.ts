@@ -19,12 +19,14 @@ Use this as an escape hatch after higher-level commands like snapshot, text, rev
 
 Usage:
   bp eval '<expression>'        Evaluate inline JavaScript
-  bp eval -f <file>             Evaluate JavaScript from a file
+  bp eval -f <file>             Evaluate a saved JavaScript file
+  bp eval -f <file> --script    Evaluate an async multi-statement script body
   echo '<expr>' | bp eval       Evaluate from stdin
 
 Local options:
   -f, --file <path>     Read JavaScript from a file
-  --wrap                Wrap the expression in an async IIFE
+  --wrap                Wrap one expression in an async IIFE
+  --script              Wrap input as an async function body (supports const/await/return)
 
 Global options:
   -s, --session <id>    Session to use (default: most recent)
@@ -37,12 +39,19 @@ Examples:
   bp eval 'document.title'
   bp eval 'document.querySelectorAll("a").length'
   bp eval -f scrape.js
+  bp eval -f /tmp/bp-probe.js --script
   bp eval --wrap 'await fetch("/health").then((r) => r.status)'
+
+File workflow:
+  Save longer probes to a temporary .js file to avoid shell quoting and JSON escaping.
+  Use plain -f for normal JavaScript programs. Add --script when the file uses
+  top-level await or return; the returned value becomes the command result.
 `.trimEnd();
 
 interface EvalOptions {
   file?: string;
   wrap?: boolean;
+  script?: boolean;
 }
 
 function parseEvalArgs(args: string[]): { expression: string | undefined; options: EvalOptions } {
@@ -55,6 +64,8 @@ function parseEvalArgs(args: string[]): { expression: string | undefined; option
       options.file = args[++i];
     } else if (arg === '--wrap') {
       options.wrap = true;
+    } else if (arg === '--script') {
+      options.script = true;
     } else if (!expression && !arg.startsWith('-')) {
       expression = arg;
     }
@@ -63,14 +74,21 @@ function parseEvalArgs(args: string[]): { expression: string | undefined; option
   return { expression, options };
 }
 
-function normalizeEvalExpression(expression: string, wrap = false): string {
+export function normalizeEvalExpression(expression: string, options: EvalOptions = {}): string {
   const trimmed = expression.trim();
-  const needsWrap = wrap || trimmed.includes('=>') || /\bawait\b/.test(trimmed);
+  if (options.wrap && options.script) {
+    throw new Error('--wrap and --script are mutually exclusive');
+  }
+  if (options.script) {
+    return `(async () => {\n${trimmed}\n})()`;
+  }
+
+  const needsWrap = options.wrap || trimmed.includes('=>') || /\bawait\b/.test(trimmed);
   if (!needsWrap) {
     return trimmed;
   }
 
-  if (wrap || /\bawait\b/.test(trimmed)) {
+  if (options.wrap || /\bawait\b/.test(trimmed)) {
     return `(async () => (${trimmed}))()`;
   }
 
@@ -124,7 +142,7 @@ export async function evalCommand(
   try {
     const step: Step = {
       action: 'evaluate',
-      value: normalizeEvalExpression(expression, evalOptions.wrap),
+      value: normalizeEvalExpression(expression, evalOptions),
     };
     const result = await page.batch([step]);
     const stepResult = result.steps[0]!;

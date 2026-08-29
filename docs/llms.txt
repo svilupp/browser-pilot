@@ -61,7 +61,10 @@ bp run ./artifacts/demo.workflow.json -s demo
 Trace live behavior:
 
 ```bash
-bp trace start -s dev --timeout 20000
+bp trace start -s dev --background --timeout 20000
+# reproduce the issue, then stop early (background capture is also bounded by timeout/size)
+bp trace stop -s dev
+bp trace summary -s dev --view http
 bp trace summary -s dev --view ws
 bp trace summary -s dev --view console
 ```
@@ -148,4 +151,5 @@ bp exec -s dev '[
 - `waitFor: "networkIdle"` only means transport quiet; follow it with `bp snapshot -i`, `bp text`, `bp review`, or explicit assertions on hydrated apps
 - On noisy commerce pages, scope reading with `bp text --selector main` or another container
 - `bp review` is strongest on confirmations, detail pages, tables, alerts, and key-values; it is often weak on catalog grids
-- After `bp trace start`, begin with `bp trace summary --view session` before you narrow to `console`, `ws`, or `voice`
+- `bp trace start` blocks unless `--background` is supplied. Background capture defaults to a 10-minute/100-MB cap; use `trace status` and `trace stop`.
+- After capture stops, begin with `bp trace summary --view session` before you narrow to `http`, `console`, `ws`, or `voice`; the HTTP view includes URL/status/duration but not response bodies

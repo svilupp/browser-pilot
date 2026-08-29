@@ -19,9 +19,14 @@ Global options:
 Examples:
   bp targets
   bp targets --json
+
+The current session target is marked with "current: true". "attached" only
+means some CDP client is attached; it does not identify the tab this session uses.
 `.trimEnd();
 
-function formatTargetsPretty(targets: TargetInfo[]): string {
+type ListedTarget = TargetInfo & { current: boolean };
+
+function formatTargetsPretty(targets: ListedTarget[]): string {
   if (targets.length === 0) {
     return 'No page targets found.';
   }
@@ -29,10 +34,13 @@ function formatTargetsPretty(targets: TargetInfo[]): string {
   return targets
     .map((target) => {
       const lines = [
-        `${target.title || '(untitled)'}`,
+        `${target.current ? '* ' : '  '}${target.title || '(untitled)'}`,
         `  targetId: ${target.targetId}`,
         `  url: ${target.url}`,
       ];
+      if (target.current) {
+        lines.push('  current: true');
+      }
       if (target.attached) {
         lines.push('  attached: true');
       }
@@ -61,7 +69,10 @@ export async function targetsCommand(
   const { browser } = await attachSession(session, { trace: globalOptions.trace });
 
   try {
-    const targets = await browser.listTargets();
+    const targets = (await browser.listTargets()).map((target) => ({
+      ...target,
+      current: target.targetId === session.targetId,
+    }));
     output(
       globalOptions.format === 'json' ? targets : formatTargetsPretty(targets),
       globalOptions.format

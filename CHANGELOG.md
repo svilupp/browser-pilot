@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+## [0.4.1] - 2026-08-29
+
+### Added
+
+- Run traces in the background with `bp trace start --background`, then inspect or stop them with
+  `bp trace status` and `bp trace stop`. Background traces stop after 10 minutes or 100 MB by
+  default.
+- Inspect request URLs, status, failures, and duration with `bp trace summary --view http`.
+- Run async multi-statement JavaScript files with `bp eval -f <file> --script`.
+
+### Fixed
+
+- `bp use-target` now keeps daemon commands on the selected tab. `bp targets` marks that tab as
+  current.
+- WebMCP discovery no longer treats unsupported Permissions Policy introspection as an explicit
+  policy block.
+
 ## [0.4.0] - 2026-08-28
 
 ### Added

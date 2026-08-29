@@ -1,8 +1,9 @@
 /** Explicitly switch a named CLI session to an existing browser tab. */
 
+import { countSessionReferences } from '../../daemon/registry.ts';
 import { attachSession, resolveSession } from '../attach.ts';
 import { output } from '../output.ts';
-import { updateSession } from '../session.ts';
+import { updateSessionTargetBinding } from '../session.ts';
 
 const USE_TARGET_HELP = `
 bp use-target - Explicitly switch a session to a browser tab
@@ -40,8 +41,8 @@ export async function useTargetCommand(
     throw new Error('use-target requires a target ID. Run "bp targets --json" to list tabs.');
   }
 
-  const session = await resolveSession(globalOptions.session);
-  const { browser } = await attachSession(session);
+  const requestedSession = await resolveSession(globalOptions.session);
+  const { browser, session } = await attachSession(requestedSession);
 
   try {
     const target = (await browser.listTargets()).find(
@@ -55,7 +56,26 @@ export async function useTargetCommand(
 
     const page = await browser.page(undefined, { targetId });
     const currentUrl = await page.url();
-    await updateSession(session.id, { targetId, currentUrl });
+    const previousCdpSessionId = session.daemon?.cdpSessionId;
+    const nextCdpSessionId = page.cdpClient.sessionId;
+    const updated = await updateSessionTargetBinding(session.id, {
+      targetId,
+      currentUrl,
+      ...(nextCdpSessionId ? { cdpSessionId: nextCdpSessionId } : {}),
+    });
+
+    if (
+      previousCdpSessionId &&
+      nextCdpSessionId &&
+      previousCdpSessionId !== nextCdpSessionId &&
+      updated.transport?.mode === 'daemon' &&
+      updated.transport.daemonId &&
+      (await countSessionReferences(updated.transport.daemonId, previousCdpSessionId)) === 0
+    ) {
+      await page.cdpClient
+        .send('daemon.detach', { sessionId: previousCdpSessionId }, null)
+        .catch(() => {});
+    }
     output(
       {
         success: true,
@@ -63,7 +83,7 @@ export async function useTargetCommand(
         targetId,
         currentUrl,
         title: target.title,
-        switchedFrom: session.targetId,
+        switchedFrom: requestedSession.targetId,
         targetProvenance: page.getTargetProvenance(),
       },
       globalOptions.format

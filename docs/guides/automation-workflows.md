@@ -97,14 +97,16 @@ This accumulates a canonical artifact and screenshots across multiple `bp exec` 
 Use when reconnects, degraded modes, or permission state matter.
 
 ```bash
-bp trace start -s dev --timeout 20000
+bp trace start -s dev --background --timeout 20000
 bp env network offline -s dev --duration 5000
+bp trace stop -s dev
 bp trace watch -s dev --view ws --assert profile:reconnect --timeout 15000
 ```
 
 ## Routing rules
 
-- Need page targets: `snapshot`
+- Need DOM refs: `snapshot`
+- Need an exact browser tab: `targets`, then `use-target <target-id>`
 - Need direct control: `exec`
 - Need reusable file execution: `run`
 - Need capture from human behavior: `record`

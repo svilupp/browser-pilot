@@ -9,6 +9,8 @@ For local Chrome on Chrome 144+, try plain `bp connect` first after enabling rem
 ## Commands
 
 - `bp trace start`
+- `bp trace status`
+- `bp trace stop`
 - `bp trace tail`
 - `bp trace summary`
 - `bp trace watch`
@@ -17,6 +19,7 @@ For local Chrome on Chrome 144+, try plain `bp connect` first after enabling rem
 
 ## Views
 
+- `http`
 - `ws`
 - `voice`
 - `console`
@@ -25,15 +28,32 @@ For local Chrome on Chrome 144+, try plain `bp connect` first after enabling rem
 - `ui`
 - `session`
 
-## Live capture workflow
+## Background capture workflow
 
 ```bash
 bp connect --name realtime
-bp trace start -s realtime --timeout 20000
-# reproduce the issue in the browser
+bp trace start -s realtime --background
+# reproduce the issue in the browser or with other bp commands
+bp trace stop -s realtime
+bp trace summary -s realtime --view http
 bp trace summary -s realtime --view ws
 bp trace summary -s realtime --view console
 ```
+
+Background capture returns immediately and auto-stops after 10 minutes or 100 MB by default,
+whichever comes first. Use `--timeout <ms>` and `--max-mb <n>` to set smaller bounds. `bp trace
+status -s realtime` shows the deadline, storage cap, output path, and worker log.
+
+## Foreground capture workflow
+
+`start` without `--background` is intentionally blocking. It owns the terminal until Ctrl+C or
+the timeout expires:
+
+```bash
+bp trace start -s realtime --timeout 20000
+```
+
+Use this form when another terminal or a human will reproduce the behavior while capture runs.
 
 Use `tail` when you want raw live JSONL:
 
@@ -69,6 +89,14 @@ bp trace merge trace-a.jsonl trace-b.jsonl -o merged-trace.json
 ```
 
 ## Typical questions by view
+
+`http`:
+
+- which URLs were requested?
+- which requests failed or were slow?
+- how long did each request take from dispatch to completion?
+
+The HTTP view records request metadata and timing, not response bodies.
 
 `ws`:
 
