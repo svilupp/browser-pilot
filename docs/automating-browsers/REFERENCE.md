@@ -55,7 +55,8 @@ bp webmcp call <name> --input '{}' -s dev --json
 
 Use `--from-origin` to include delegated cross-origin tools and `--origin` to
 select an exact owner. Add `--confirm-mutation` only after reviewing a tool
-that is not marked read-only.
+that is not marked read-only. Top-level and same-origin documents are allowed
+by default; a cross-origin iframe must delegate access with `allow="tools"`.
 
 ## Action DSL reference
 

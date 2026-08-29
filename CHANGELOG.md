@@ -16,6 +16,8 @@
 
 - `bp use-target` now keeps daemon commands on the selected tab. `bp targets` marks that tab as
   current.
+- WebMCP discovery no longer treats unsupported Permissions Policy introspection as an explicit
+  policy block.
 
 ## [0.4.0] - 2026-08-28
 

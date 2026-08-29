@@ -143,7 +143,8 @@ Re-list after navigation. Pass `--origin` when the same tool name appears from
 several origins. Tools not marked `readOnlyHint: true` require
 `--confirm-mutation`. Local Chrome testing requires version 149 or newer and
 `chrome://flags/#enable-webmcp-testing`; the page must use a secure,
-origin-isolated context allowed by the `tools` Permissions Policy.
+origin-isolated context. Top-level and same-origin documents are allowed by
+default; cross-origin iframes require `allow="tools"`.
 
 ## When to use trace
 

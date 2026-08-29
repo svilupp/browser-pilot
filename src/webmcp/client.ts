@@ -16,10 +16,10 @@ function statusFromPage(page: Page): Promise<WebMCPPageProbe> {
     const crossOriginIsolated = window.crossOriginIsolated === true;
     let toolsPolicy = null;
     try {
-      if (document.permissionsPolicy?.allowsFeature) {
-        toolsPolicy = document.permissionsPolicy.allowsFeature('tools');
-      } else if (document.featurePolicy?.allowsFeature) {
-        toolsPolicy = document.featurePolicy.allowsFeature('tools');
+      const policy = document.permissionsPolicy ?? document.featurePolicy;
+      const features = typeof policy?.features === 'function' ? policy.features() : null;
+      if (policy?.allowsFeature && (!Array.isArray(features) || features.includes('tools'))) {
+        toolsPolicy = policy.allowsFeature('tools');
       }
     } catch (_) {}
 
@@ -48,7 +48,12 @@ function statusFromPage(page: Page): Promise<WebMCPPageProbe> {
     try {
       rawTools = await context.getTools();
     } catch (error) {
-      status.reason = 'WebMCP tool discovery failed: ' + String(error);
+      if (error?.name === 'NotAllowedError') {
+        status.toolsPolicy = false;
+        status.reason = 'WebMCP is blocked by the page\\'s "tools" Permissions Policy.';
+      } else {
+        status.reason = 'WebMCP tool discovery failed: ' + String(error);
+      }
       return { status, tools: [] };
     }
     const tools = rawTools.map((tool) => ({
@@ -90,9 +95,11 @@ export async function webmcpList(
     const crossOriginIsolated = window.crossOriginIsolated === true;
     let toolsPolicy = null;
     try {
-      toolsPolicy = document.permissionsPolicy?.allowsFeature
-        ? document.permissionsPolicy.allowsFeature('tools')
-        : null;
+      const policy = document.permissionsPolicy ?? document.featurePolicy;
+      const features = typeof policy?.features === 'function' ? policy.features() : null;
+      if (policy?.allowsFeature && (!Array.isArray(features) || features.includes('tools'))) {
+        toolsPolicy = policy.allowsFeature('tools');
+      }
     } catch (_) {}
     const status = {
       available: !!context,
@@ -118,7 +125,12 @@ export async function webmcpList(
     try {
       rawTools = await context.getTools({ fromOrigins: ${JSON.stringify(fromOrigins)} });
     } catch (error) {
-      status.reason = 'WebMCP tool discovery failed: ' + String(error);
+      if (error?.name === 'NotAllowedError') {
+        status.toolsPolicy = false;
+        status.reason = 'WebMCP is blocked by the page\\'s "tools" Permissions Policy.';
+      } else {
+        status.reason = 'WebMCP tool discovery failed: ' + String(error);
+      }
       return { status, tools: [] };
     }
     return {

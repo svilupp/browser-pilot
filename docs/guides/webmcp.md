@@ -16,12 +16,16 @@ expose `navigator.modelContext`, which browser-pilot keeps as a compatibility
 fallback. For local testing, enable
 `chrome://flags/#enable-webmcp-testing` and relaunch Chrome.
 
-A secure context, an origin-keyed agent cluster, and the `tools` Permissions
-Policy are required. Do not opt out with `document.domain` or
-`Origin-Agent-Cluster: ?0`. `status` reports these conditions. Cross-origin
-tools must be explicitly requested with
-`--from-origin`, exposed by the page, and delegated with `allow="tools"` on the
-iframe.
+A secure context and an origin-keyed agent cluster are required. Do not opt out
+with `document.domain` or `Origin-Agent-Cluster: ?0`. Top-level documents and
+same-origin iframes are allowed by the `tools` Permissions Policy by default.
+Cross-origin tools must be requested with `--from-origin`, exposed by the page,
+and delegated with `allow="tools"` on the iframe. A
+`Permissions-Policy: tools=()` response header disables WebMCP.
+
+Some preview Chrome builds omit `tools` from the Permissions Policy
+introspection API even when WebMCP works. Browser-pilot attempts discovery and
+reports a policy block only when Chrome returns `NotAllowedError`.
 
 Tools are re-listed immediately before each call and matched by both name and,
 when supplied, origin. Tools without `annotations.readOnlyHint: true` require

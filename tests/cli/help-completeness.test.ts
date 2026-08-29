@@ -300,6 +300,15 @@ describe('Command Help', () => {
     expect(result.stdout).toContain('stop');
   });
 
+  test('bp webmcp --help explains local policy requirements', async () => {
+    const result = await runCLI(['webmcp', '--help']);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('#enable-webmcp-testing');
+    expect(result.stdout).toContain('same-origin documents are allowed by default');
+    expect(result.stdout).toContain('allow="tools"');
+  });
+
   test('bp screenshot --help documents image format without global -f collision', async () => {
     const result = await runCLI(['screenshot', '--help']);
 

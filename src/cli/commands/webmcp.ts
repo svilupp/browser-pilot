@@ -21,6 +21,11 @@ Options:
   -s, --session <id>     Session to use (default: most recent)
   --json                 Output JSON
   --pretty               Output readable text (default)
+
+Local testing:
+  Enable chrome://flags/#enable-webmcp-testing and relaunch Chrome.
+  Top-level and same-origin documents are allowed by default. A cross-origin
+  iframe must delegate access with allow="tools".
 `.trimEnd();
 
 interface WebMCPOptions {

@@ -542,6 +542,10 @@ async function connectDaemonSession(sessionName: string): Promise<void> {
 }
 
 async function cleanupSession(sessionName: string): Promise<void> {
+  // CDP network emulation belongs to the shared browser target rather than the
+  // logical browser-pilot session. Always restore it before a retry or the next
+  // test, even when an assertion fails midway through the offline/throttle flow.
+  await runCLI(['env', 'network', 'online', '-s', sessionName]).catch(() => {});
   await runCLI(['close', '-s', sessionName]).catch(() => {});
   rmSync(join(SESSION_DIR, sessionName), { recursive: true, force: true });
   rmSync(join(SESSION_DIR, `${sessionName}.json`), { force: true });
