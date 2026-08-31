@@ -1,0 +1,48 @@
+#!/bin/sh
+# Run one check, keeping its output in a temporary log.
+set -u
+
+usage() {
+  printf 'Usage: %s <label> [--] <command> [args...]\n' "$(basename "$0")" >&2
+}
+
+if [ "$#" -lt 2 ]; then
+  usage
+  exit 2
+fi
+
+label=$1
+shift
+if [ "${1:-}" = "--" ]; then
+  shift
+fi
+if [ "$#" -eq 0 ]; then
+  usage
+  exit 2
+fi
+
+tmp_root=${TMPDIR:-/tmp}
+tmp_root=${tmp_root%/}
+safe_label=$(printf '%s' "$label" | tr -c '[:alnum:]_.-' '_')
+log_path=$(mktemp "$tmp_root/browser-pilot-${safe_label}.XXXXXX") || {
+  printf '%s: could not create a temporary log\n' "$label" >&2
+  exit 1
+}
+
+printf '%s\n' '---' "$label started (see details in $log_path)"
+
+"$@" >"$log_path" 2>&1
+status=$?
+
+if [ "$status" -eq 0 ]; then
+  printf '%s\n' "$label: OK" '---'
+else
+  printf '%s\n' "$label: FAIL"
+  if [ -s "$log_path" ]; then
+    cat "$log_path"
+    printf '\n'
+  fi
+  printf '%s\n' '---'
+fi
+
+exit "$status"
