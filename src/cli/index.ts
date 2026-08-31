@@ -3,6 +3,8 @@
  * browser-pilot CLI - automation-first browser workflows for agents
  */
 
+import { realpathSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { CLI_ROUTE_GROUPS, ROOT_HELP_COMMANDS } from './command-registry.ts';
 import { actionsCommand } from './commands/actions.ts';
 import { audioCommand } from './commands/audio.ts';
@@ -316,7 +318,24 @@ async function main(): Promise<void> {
   }
 }
 
-// Only run when executed directly (not when imported for testing)
-if (import.meta.main) {
+function isDirectExecution(): boolean {
+  if (import.meta.main) {
+    return true;
+  }
+
+  const entryPath = process.argv[1];
+  if (!entryPath) {
+    return false;
+  }
+
+  try {
+    return realpathSync(entryPath) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+}
+
+// Bun provides import.meta.main; Node requires comparing the executed entry path.
+if (isDirectExecution()) {
   void main();
 }

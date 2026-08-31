@@ -8,6 +8,11 @@
 - Check commands now use `scripts/run-quiet`: successful legs retain a temporary log and print only
   a bounded status block, while failures print their captured diagnostics.
 
+### Fixed
+
+- `bp --version` now prints the package version when the built CLI is executed with Node as well as
+  Bun.
+
 ## [0.4.1] - 2026-08-29
 
 ### Added
