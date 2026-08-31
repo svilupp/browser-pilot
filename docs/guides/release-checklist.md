@@ -36,7 +36,7 @@ Version changes belong to release preparation after the release gate is approved
 Run the repository's full quiet check. It covers TypeScript, Biome, type-aware oxlint, unit tests, fitness tests, and API Extractor.
 
 ```bash
-bun run check:quiet
+bun run check
 ```
 
 Then run the transport and package release gate. It runs the integration and

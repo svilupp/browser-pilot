@@ -7,11 +7,11 @@ Lightweight CDP-based browser automation for AI agents. Zero production dependen
 ## Commands
 
 ```bash
-bun run check:quiet         # All checks (tsc + biome + oxlint + unit + fitness + api) — run before PR
+bun run check               # All checks (quiet on success; failures print captured diagnostics)
 bun run lint:fix            # Auto-fix formatting
-bun test tests/unit         # Unit tests (fast, mocked CDP)
-bun test tests/integration  # Integration tests (real browser)
-bun test tests/fitness      # Architectural fitness functions
+bun run test:unit            # Unit tests (fast, mocked CDP; quiet on success)
+bun run test:integration     # Integration tests (real browser; quiet on success)
+bun test tests/fitness       # Architectural fitness functions
 bun run dev:bp              # Run CLI from source (avoid stale binaries)
 bun run harden              # Full hardening (prek hooks + knip + ast-grep)
 bun run api:check           # API Extractor: public API surface

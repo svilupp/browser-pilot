@@ -1,32 +1,30 @@
 #!/usr/bin/env bash
-# Tip: this will show errors only if there are any.
+# Each leg keeps its complete output in a temporary log and prints a bounded
+# status block. Failed legs print their captured diagnostics.
 set -euo pipefail
 
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 failed=0
 
 run_check() {
   local name="$1"
   shift
-  printf "  running: %s" "$name"
-  if output=$("$@" 2>&1); then
-    printf "\r\033[K"
+  if "$SCRIPT_DIR/run-quiet" "$name" -- "$@"; then
+    :
   else
-    printf "\r\033[K\033[31m  FAIL: %s\033[0m\n" "$name"
-    echo "$output"
-    echo
     failed=1
   fi
 }
 
-run_check "typecheck (tsc)" bun run typecheck
-run_check "lint (biome)" bun run lint
-run_check "lint:type (oxlint)" bun run lint:type
-run_check "test (unit)" bun test tests/unit
-run_check "test (fitness)" bun test tests/fitness
-run_check "api:check" bun run api:check
+run_check "Typecheck" tsc --noEmit
+run_check "Lint" biome check .
+run_check "Type lint" oxlint --type-aware --tsconfig ./tsconfig.json src/ tests/ scripts/
+run_check "Unit tests" bun test tests/unit
+run_check "Fitness tests" bun test tests/fitness
+run_check "API check" bun run api:check
 
 if [ "$failed" -eq 0 ]; then
-  printf "\033[32m  all checks passed\033[0m\n"
+  exit 0
 else
   exit 1
 fi

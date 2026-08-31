@@ -28,6 +28,9 @@ bp exec -s dev '[{"action":"click","selector":"ref:e4"}]'
 
 Use `bp --help` to route a task by job and `bp --version` to check the CLI build.
 
+For repository validation, run `bun run check`. It is quiet on success: each leg prints a short
+status block and a temporary log path; failures print the captured diagnostics.
+
 | Job | Commands |
 | --- | --- |
 | Inspect page state | `snapshot`, `page`, `forms`, `text`, `targets`, `diagnose` |

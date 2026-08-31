@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## [0.4.2] - 2026-08-31
+
+### Updated
+- Check commands now use `scripts/run-quiet`: successful legs retain a temporary log and print only
+  a bounded status block, while failures print their captured diagnostics.
+
 ## [0.4.1] - 2026-08-29
 
 ### Added
