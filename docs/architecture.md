@@ -31,12 +31,15 @@ connection; `close()` also releases the owned provider session. A
 | Browser/Page library | CDP connection, page operations, action receipts, provider lifecycle |
 | Flightplan | Workflow parsing, orchestration, assertions, retries, and workflow evidence |
 | Native CLI | Arguments, daemon/session registry, local discovery, filesystem output |
-| just-bash adapter | Arguments, host session resolution, capability checks, output formatting |
+| Shell core (`browser-pilot/shell`) | Arguments, host session resolution, capability checks, output formatting |
+| just-bash adapter (`browser-pilot/just-bash`) | Thin `just-bash` command binding over the shell core |
 | Embedding application | Credentials, session scope, storage, and any additional commands |
 
-The just-bash adapter covers common interactive operations. Consumers can register
-additional commands backed by the public Browser/Page APIs. There is no separate
-shell browser engine or requirement to reproduce every native CLI command.
+The shell core covers common interactive operations and has no `just-bash`
+dependency; the just-bash adapter is a thin binding over it for hosts using
+`just-bash`. Consumers can register additional commands backed by the public
+Browser/Page APIs. There is no separate shell browser engine or requirement to
+reproduce every native CLI command.
 
 ## Optional host contracts
 

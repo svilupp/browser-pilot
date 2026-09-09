@@ -20,6 +20,13 @@ export {
   type PageOptions,
 } from '../browser/browser.ts';
 export { Page, type PageInitOptions } from '../browser/page.ts';
+export {
+  ActionDispatchUncertainError,
+  ElementNotFoundError,
+  NavigationError,
+  TargetNotFoundError,
+  TimeoutError,
+} from '../browser/types.ts';
 // Portable provider factory + providers (explicit credentials or SecretsPort only)
 export { type BrowserUseOptions, BrowserUseProvider } from '../providers/browser-use.ts';
 export {

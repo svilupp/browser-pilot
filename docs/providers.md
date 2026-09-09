@@ -219,7 +219,7 @@ Direct library connections use the session options you provide.
     This is an absent-session response, not an observed terminal status.
 
   Prefer `close()` over `disconnect()` whenever you are done with a session
-  and want BrowserBase to stop billing for it.
+  and want Browserbase to stop billing for it.
 
 To release an owned session after disconnecting, use
 `new BrowserBaseProvider({ apiKey, projectId }).releaseSession(sessionId)`.

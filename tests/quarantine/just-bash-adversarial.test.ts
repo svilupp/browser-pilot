@@ -27,7 +27,7 @@ import {
 } from '../../src/adapters/memory/index.ts';
 import type { SessionOwner } from '../../src/just-bash/index.ts';
 import { registerBrowserPilotCommands } from '../../src/just-bash/index.ts';
-import type { BpBrowser, BpPage, BrowserPilotJustBashPorts } from '../../src/just-bash/types.ts';
+import type { BpBrowser, BpPage, BrowserPilotShellPorts } from '../../src/shell/types.ts';
 
 // ---------------------------------------------------------------------------
 // constants
@@ -159,8 +159,8 @@ interface Harness {
 
 function makeHarness(
   options: {
-    capabilities?: Partial<BrowserPilotJustBashPorts['capabilities']>;
-    limits?: BrowserPilotJustBashPorts['limits'];
+    capabilities?: Partial<BrowserPilotShellPorts['capabilities']>;
+    limits?: BrowserPilotShellPorts['limits'];
     deadline?: number;
     preAborted?: boolean;
     files?: Record<string, string>;
@@ -202,7 +202,7 @@ function makeHarness(
     },
   };
 
-  const ports: BrowserPilotJustBashPorts = {
+  const ports: BrowserPilotShellPorts = {
     sessionOwner: options.ownerOverride ?? owner,
     artifacts: sink,
     clock,

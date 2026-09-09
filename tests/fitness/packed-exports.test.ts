@@ -128,6 +128,13 @@ describe('packed exports', () => {
       expect(typeof memoryAdapter['FakeClock']).toBe('function');
       expect(typeof memoryAdapter['MemorySessionOwner']).toBe('function');
 
+      const shell = (await import(join(PACKED_OUT_DIR, 'shell/index.mjs'))) as Record<
+        string,
+        unknown
+      >;
+      expect(typeof shell['runBp']).toBe('function');
+      expect(shell['CapabilityError']).toBe(core['CapabilityError']);
+
       const justBash = (await import(join(PACKED_OUT_DIR, 'just-bash/index.mjs'))) as Record<
         string,
         unknown

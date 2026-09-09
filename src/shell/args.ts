@@ -1,5 +1,5 @@
 /**
- * Minimal flag parser for the `bp` just-bash command.
+ * Minimal flag parser for the `bp` shell command.
  *
  * The native CLI parser (src/cli) pulls in Node-only modules, so the bridge
  * keeps its own dependency-free parser with the same conventions:

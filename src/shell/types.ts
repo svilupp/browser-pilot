@@ -1,5 +1,5 @@
 /**
- * Types for the browser-pilot just-bash command bridge.
+ * Types for the browser-pilot shell command bridge.
  */
 
 import type { ActionOptions, ActionReceipt, TypeOptions } from '../browser/types.ts';
@@ -77,7 +77,7 @@ export interface BpBrowser {
 
 export type ConnectFn = (wsUrl: string, ctx: ExecutionContext) => Promise<BpBrowser>;
 
-export interface BrowserPilotJustBashPorts {
+export interface BrowserPilotShellPorts {
   /** Required — trusted host owns credentials. */
   sessionOwner: SessionOwner;
   /** Required for screenshot/download; otherwise those commands fail with a capability error. */
@@ -94,7 +94,7 @@ export interface BrowserPilotJustBashPorts {
   connect?: ConnectFn;
 }
 
-/** Result contract shared with the just-bash `ExecResult` (subset). */
+/** Result contract shared with a shell's `ExecResult` (subset). */
 export interface BpRunResult {
   stdout: string;
   stderr: string;

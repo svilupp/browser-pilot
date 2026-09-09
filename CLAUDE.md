@@ -48,7 +48,8 @@ Entry: `src/index.ts`. Public API report: `etc/browser-pilot.api.md`.
 | Portable library entry + optional host contracts (`browser-pilot/core`) | `src/core/ports.ts`, `src/core/index.ts` |
 | Optional host adapters (Node + in-memory test doubles) | `src/adapters/node/`, `src/adapters/memory/` |
 | Artifact sink port + Node/memory sinks | `src/artifacts/` |
-| just-bash shell bridge (`browser-pilot/just-bash`) | `src/just-bash/` |
+| Shell-agnostic core (`browser-pilot/shell`) | `src/shell/` |
+| just-bash shell bridge (`browser-pilot/just-bash`, thin adapter over `src/shell/`) | `src/just-bash/` |
 | Audio I/O (input, output, encoding, transcribe) | `src/audio/` |
 | CLI entry, commands, attach/daemon-spawn | `src/cli/` |
 | Daemon (server, lifecycle, transport, types) | `src/daemon/` |

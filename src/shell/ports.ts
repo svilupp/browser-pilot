@@ -1,9 +1,9 @@
 /**
- * Port contracts used by the just-bash bridge.
+ * Port contracts used by the shell bridge.
  *
  * These are the hexagonal core contracts from `src/core/ports.ts` (and the
  * artifact port from `src/artifacts/types.ts`), re-exported so every module
- * under `src/just-bash/` has a single local import site.
+ * under `src/shell/` has a single local import site.
  */
 
 export type { ArtifactPutResult, ArtifactSink } from '../artifacts/types.ts';

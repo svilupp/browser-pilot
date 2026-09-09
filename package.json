@@ -58,6 +58,10 @@
       "import": "./dist/adapters/memory/index.mjs",
       "require": "./dist/adapters/memory/index.cjs"
     },
+    "./shell": {
+      "types": "./dist/shell/index.d.ts",
+      "import": "./dist/shell/index.mjs"
+    },
     "./just-bash": {
       "types": "./dist/just-bash/index.d.ts",
       "import": "./dist/just-bash/index.mjs"

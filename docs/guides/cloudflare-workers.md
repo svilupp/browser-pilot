@@ -1,13 +1,7 @@
 # Cloudflare Workers Guide
 
-browser-pilot is designed to work in Cloudflare Workers. This guide covers deployment and best practices.
-
-## Why Workers?
-
-- **Edge computing** - Run close to users globally
-- **Serverless** - No server management
-- **Cost effective** - Pay per request
-- **Fast cold starts** - Sub-millisecond startup
+Workers cannot run Chrome. Connect to a hosted browser provider instead, and
+import from `browser-pilot/core`, the Node-free entry point.
 
 ## Requirements
 
@@ -259,6 +253,8 @@ await page.goto(url, { timeout: 20000 });
 ### 3. Handle Errors
 
 ```typescript
+import { ElementNotFoundError, TimeoutError } from 'browser-pilot/core';
+
 try {
   const browser = await connectCore({ ... });
   // ...
@@ -279,17 +275,17 @@ For multi-step workflows, reuse sessions:
 
 ```typescript
 // Store session in KV
-await env.SESSIONS.put(userId, browser.wsUrl, {
+await env.SESSIONS.put(userId, browser.sessionId!, {
   expirationTtl: 1800, // 30 minutes
 });
 
 // Later: resume
-const wsUrl = await env.SESSIONS.get(userId);
-if (wsUrl) {
+const sessionId = await env.SESSIONS.get(userId);
+if (sessionId) {
   const browser = await connectCore({
     provider: 'browser-use',
-    wsUrl,
     apiKey: env.BROWSER_USE_API_KEY,
+    session: { sessionId },
   });
 }
 ```

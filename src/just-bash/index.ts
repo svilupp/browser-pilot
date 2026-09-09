@@ -2,46 +2,17 @@
  * just-bash adapter: registers browser-pilot as a `bp` shell command.
  *
  * `just-bash` is an optional peer dependency — only its *types* are imported
- * here, so hosts that never touch this module pay nothing. The trusted host
- * constructs the ports (SessionOwner holding credentials, ArtifactSink,
+ * here, so hosts that never touch this module pay nothing. This module is a
+ * thin adapter over the shell-agnostic core in `src/shell/`; the trusted
+ * host constructs the ports (SessionOwner holding credentials, ArtifactSink,
  * capability policy) and hands the returned commands to `new Bash({
  * customCommands })` or `bash.registerCommand(...)`.
  */
 
 import type { Command, ResolvedCommandContext } from 'just-bash';
-import { type BpIo, runBp } from './app.ts';
-import { defaultConnect } from './default-connect.ts';
-import type { BrowserPilotJustBashPorts } from './types.ts';
+import { type BpIo, type BrowserPilotShellPorts, defaultConnect, runBp } from '../shell/index.ts';
 
-export type { BpIo } from './app.ts';
-export { runBp } from './app.ts';
-export { parseArgs } from './args.ts';
-export { helpText } from './help.ts';
-export {
-  type ActionReceipt,
-  type ArtifactPutResult,
-  type ArtifactSink,
-  CapabilityError,
-  type Clock,
-  type CreateSessionOptions,
-  type DispatchState,
-  type ExecutionContext,
-  type ProviderReleaseResult,
-  type SessionHandle,
-  type SessionOpenOptions,
-  type SessionOwner,
-} from './ports.ts';
-export type {
-  BpBrowser,
-  BpPage,
-  BpPageOptions,
-  BpRunResult,
-  BpTargetInfo,
-  BrowserPilotCapabilities,
-  BrowserPilotJustBashPorts,
-  BrowserPilotLimits,
-  ConnectFn,
-} from './types.ts';
+export * from '../shell/index.ts';
 
 /**
  * just-bash `ByteString` packs UTF-8 bytes into a latin1-shaped JS string.
@@ -65,7 +36,7 @@ function makeIo(ctx: ResolvedCommandContext): BpIo {
  * @example
  * const bash = new Bash({ customCommands: registerBrowserPilotCommands(ports) });
  */
-export function registerBrowserPilotCommands(ports: BrowserPilotJustBashPorts): Command[] {
+export function registerBrowserPilotCommands(ports: BrowserPilotShellPorts): Command[] {
   const connect = ports.connect ?? defaultConnect;
   return [
     {
@@ -74,7 +45,7 @@ export function registerBrowserPilotCommands(ports: BrowserPilotJustBashPorts): 
       async execute(args: string[], ctx: ResolvedCommandContext) {
         // Cooperative cancellation: combine the shell's signal with the host
         // context signal produced per invocation by ports.createContext().
-        const hostPorts: BrowserPilotJustBashPorts = ctx.signal
+        const hostPorts: BrowserPilotShellPorts = ctx.signal
           ? {
               ...ports,
               createContext: () => {
@@ -96,7 +67,7 @@ export function registerBrowserPilotCommands(ports: BrowserPilotJustBashPorts): 
 /** Register the `bp` command on an existing just-bash instance. */
 export function addBrowserPilotCommands(
   bash: { registerCommand(command: Command): void },
-  ports: BrowserPilotJustBashPorts
+  ports: BrowserPilotShellPorts
 ): void {
   for (const command of registerBrowserPilotCommands(ports)) bash.registerCommand(command);
 }

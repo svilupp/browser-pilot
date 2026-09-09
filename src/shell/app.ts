@@ -1,5 +1,5 @@
 /**
- * Portable core of the `bp` just-bash command.
+ * Portable core of the `bp` shell command.
  *
  * Pure Web-standard APIs only: no node:*, no console, no timers, no
  * process.env. Credentials never enter this module — the trusted host's
@@ -18,7 +18,7 @@ import {
   type BpPage,
   type BpRunResult,
   type BrowserPilotCapabilities,
-  type BrowserPilotJustBashPorts,
+  type BrowserPilotShellPorts,
   EXIT,
   type JsonValue,
   usageError,
@@ -235,7 +235,7 @@ function checkContext(
 }
 
 async function withBrowser<T>(
-  ports: BrowserPilotJustBashPorts,
+  ports: BrowserPilotShellPorts,
   connect: (wsUrl: string, ctx: ExecutionContext) => Promise<BpBrowser>,
   handle: SessionHandle,
   ctx: ExecutionContext,
@@ -483,7 +483,7 @@ function base64ToBytes(base64: string): Uint8Array {
 export async function runBp(
   argv: string[],
   io: BpIo,
-  ports: BrowserPilotJustBashPorts,
+  ports: BrowserPilotShellPorts,
   connect: (wsUrl: string, ctx: ExecutionContext) => Promise<BpBrowser>
 ): Promise<BpRunResult> {
   const maxOutput = ports.limits?.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
@@ -508,7 +508,7 @@ export async function runBp(
 async function dispatch(
   argv: string[],
   io: BpIo,
-  ports: BrowserPilotJustBashPorts,
+  ports: BrowserPilotShellPorts,
   connect: (wsUrl: string, ctx: ExecutionContext) => Promise<BpBrowser>
 ): Promise<BpRunResult> {
   if (argv.length === 0 || argv[0] === '--help' || argv[0] === '-h' || argv[0] === 'help') {

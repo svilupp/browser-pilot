@@ -32,9 +32,9 @@ import {
 } from '../../src/adapters/memory/index.ts';
 import { InProcessSessionOwner } from '../../src/adapters/node/index.ts';
 import { registerBrowserPilotCommands } from '../../src/just-bash/index.ts';
-import type { BpBrowser, BrowserPilotJustBashPorts } from '../../src/just-bash/types.ts';
 import { BrowserBaseProvider } from '../../src/providers/browserbase.ts';
 import type { ProviderSession } from '../../src/providers/types.ts';
+import type { BpBrowser, BrowserPilotShellPorts } from '../../src/shell/types.ts';
 
 const GENERATION = 'e2e-gen-1';
 const FAKE_WS_URL = 'ws://127.0.0.1:1/x';
@@ -84,7 +84,7 @@ async function withScriptedProvider<T>(fn: (closeCalls: () => number) => Promise
   }
 }
 
-function makeConnect(): { connect: BrowserPilotJustBashPorts['connect']; disconnects: number[] } {
+function makeConnect(): { connect: BrowserPilotShellPorts['connect']; disconnects: number[] } {
   const disconnects = [0];
   const browser: BpBrowser = {
     async page() {
@@ -248,7 +248,7 @@ describe('just-bash + adapters e2e (in-process, no browser)', () => {
       const { connect, disconnects } = makeConnect();
 
       const controller = new AbortController();
-      const ports: BrowserPilotJustBashPorts = {
+      const ports: BrowserPilotShellPorts = {
         sessionOwner: owner,
         artifacts,
         clock,
@@ -314,7 +314,7 @@ describe('just-bash + adapters e2e (in-process, no browser)', () => {
     const clock = new FakeClock(1_000_000);
     const owner = new InProcessSessionOwner({ clock });
     const controller = new AbortController();
-    const ports: BrowserPilotJustBashPorts = {
+    const ports: BrowserPilotShellPorts = {
       sessionOwner: owner,
       clock,
       createContext: () =>
@@ -343,7 +343,7 @@ describe('just-bash + adapters e2e (in-process, no browser)', () => {
     const clock = new FakeClock(1_000_000);
     const owner = new InProcessSessionOwner({ clock });
     const controller = new AbortController();
-    const ports: BrowserPilotJustBashPorts = {
+    const ports: BrowserPilotShellPorts = {
       sessionOwner: owner,
       clock,
       createContext: () =>

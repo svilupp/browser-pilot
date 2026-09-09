@@ -52,8 +52,10 @@ export default defineConfig([
       'core/index': 'src/core/index.ts',
       'adapters/node/index': 'src/adapters/node/index.ts',
       'adapters/memory/index': 'src/adapters/memory/index.ts',
-      // Keep the just-bash bridge in the same split graph as core so its
-      // CapabilityError value is shared with the root/core entries.
+      // Keep the shell core and just-bash bridge in the same split graph as
+      // core so their CapabilityError value is shared with the root/core
+      // entries.
+      'shell/index': 'src/shell/index.ts',
       'just-bash/index': 'src/just-bash/index.ts',
     },
     format: ['esm', 'cjs'],

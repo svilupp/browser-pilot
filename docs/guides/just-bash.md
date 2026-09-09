@@ -1,9 +1,13 @@
 # browser-pilot in just-bash
 
 Register common browser operations as `bp` commands in a just-bash shell. The
-adapter parses arguments, resolves host-owned sessions, calls the shared browser
-APIs, and formats results. Applications can register additional commands using
-Browser/Page; the adapter does not aim to reproduce the full native CLI.
+underlying `bp` command logic lives in the shell-agnostic `browser-pilot/shell`
+core, which parses arguments, resolves host-owned sessions, calls the shared
+browser APIs, and formats results; `browser-pilot/just-bash` is a thin adapter
+that binds that core to a `just-bash` `Command`. Applications can register
+additional commands using Browser/Page; the adapter does not aim to reproduce
+the full native CLI. Hosts embedding a different shell can depend on
+`browser-pilot/shell` directly and skip the `just-bash` binding.
 
 ## Quick start: Node host
 
@@ -143,7 +147,8 @@ Flightplan. Keep application-specific workflows in the application.
 `ports.connect` optionally supplies the connection factory, for embedding or
 tests. Its result provides the browser/page operations used by this adapter.
 `SessionOwner` controls lifecycle; the connection factory only detaches its socket.
-The just-bash dependency is an optional peer and only its types are imported.
+The just-bash dependency is an optional peer and only its types are imported;
+`browser-pilot/shell` has no dependency on `just-bash` at all.
 
 Daemon/local discovery, filesystem recording, audio, and native environment
 persistence remain native CLI features. Batch execution and advanced Page APIs

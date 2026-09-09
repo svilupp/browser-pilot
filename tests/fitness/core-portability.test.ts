@@ -128,7 +128,13 @@ test('adapters/memory import graph is portable too', () => {
   expect(violations).toEqual([]);
 });
 
-test('just-bash import graph is portable (type-only `just-bash` import allowed)', () => {
+test('shell import graph is portable (no just-bash dependency at all)', () => {
+  const { files, violations } = walkGraph('src/shell/index.ts');
+  expect(files.length).toBeGreaterThan(3);
+  expect(violations).toEqual([]);
+});
+
+test('just-bash adapter import graph is portable (type-only `just-bash` import allowed)', () => {
   const { files, violations } = walkGraph('src/just-bash/index.ts', {
     allowTypeOnlySpecifiers: ['just-bash'],
   });

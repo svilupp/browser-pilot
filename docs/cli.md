@@ -42,10 +42,12 @@ one project. Explicit `--api-key` and `--project-id` take precedence. CLI sessio
 request `keepAlive: true` so commands and daemon handoffs can reconnect. This
 requires a [Browserbase paid plan](https://docs.browserbase.com/platform/browser/long-sessions/overview).
 
-`bp close` releases Browserbase sessions through the API using `BROWSERBASE_API_KEY`,
-including sessions created with an explicit `--api-key`. JSON output includes
-`providerRelease`; pending cleanup exits nonzero and retains the local record for
-another `bp close` attempt. Failed setup also retains a record if release is pending.
+`bp close` and `bp clean` release Browserbase sessions through the API using `BROWSERBASE_API_KEY`,
+including sessions created with an explicit `--api-key`. `close` JSON output includes
+`providerRelease`. Pending cleanup exits nonzero and retains the local record for
+another cleanup attempt. `clean` reports retained entries and counts only completed
+deletions; `--dry-run` makes no release requests. Failed setup also retains a record
+if release is pending. These cleanup rules apply to native CLI session records.
 
 The CLI rejects `--provider browserless`: its launch URLs create a new browser per
 connection. Use the direct library, or a generic endpoint whose reconnection and

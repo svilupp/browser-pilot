@@ -574,6 +574,20 @@ export async function connectCommand(
           ? options.daemonIdleMins * 60 * 1000
           : undefined;
 
+        // The CLI daemon reads its identity once at startup. Persist the
+        // cloud session's bootstrap contract before spawning, just as the
+        // local CLI connection service does for local sessions.
+        const connectionKey = connectionKeyForBrowser({
+          provider,
+          wsUrl: session.wsUrl,
+          userDataDir: session.metadata?.resolvedUserDataDir,
+          ...(session.metadata?.connectionSource === 'json-version'
+            ? { legacyHost: new URL(session.wsUrl).host }
+            : {}),
+          providerSessionId: session.providerSessionId,
+        });
+        const daemonId = daemonIdForConnection(connectionKey);
+        await updateSession(sessionId, { transport: { mode: 'daemon', daemonId } });
         const spawned = spawnDaemon(sessionId, idleTimeoutMs);
 
         // Wait for daemon to become ready (writes daemon info to session file)
@@ -585,17 +599,6 @@ export async function connectCommand(
         // Re-read session to get daemon info
         const updated = await loadSession(sessionId);
         if (updated.daemon) {
-          const connectionKey = connectionKeyForBrowser({
-            provider,
-            wsUrl: updated.wsUrl,
-            userDataDir: updated.metadata?.resolvedUserDataDir,
-            ...(updated.metadata?.connectionSource === 'json-version'
-              ? { legacyHost: new URL(updated.wsUrl).host }
-              : {}),
-            providerSessionId: updated.providerSessionId,
-          });
-          const daemonId = daemonIdForConnection(connectionKey);
-          await updateSession(sessionId, { transport: { mode: 'daemon', daemonId } });
           await writeDaemonDescriptor({
             schemaVersion: 1,
             id: daemonId,
@@ -642,7 +645,7 @@ export async function connectCommand(
         provider,
         currentUrl,
         recording: !!recordSettings,
-        transport: useDaemon ? 'daemon' : 'direct',
+        transport: daemonResult ? 'daemon' : 'direct',
         connectionSource,
         resolvedChannel,
         resolvedUserDataDir,

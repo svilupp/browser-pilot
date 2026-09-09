@@ -9,8 +9,10 @@
 - New portable entry points: `browser-pilot/core` (host-agnostic `connectCore`/`createProvider`
   with `Clock`, `ExecutionContext`, `SecretsPort`, `SessionOwner`, and `ArtifactSink` ports and a
   `CapabilityError` for unsupported capabilities), `browser-pilot/adapters/node`,
-  `browser-pilot/adapters/memory`, and `browser-pilot/just-bash` (`registerBrowserPilotCommands`,
-  capability-gated command policy, session handles, and dedicated exit codes).
+  `browser-pilot/adapters/memory`, shell-agnostic `bp` command core at `browser-pilot/shell`
+  (`runBp`, `BrowserPilotShellPorts`, capability/limits contracts, `SessionOwner`/`ArtifactSink`/`Clock`),
+  and thin `browser-pilot/just-bash` adapter (`registerBrowserPilotCommands`, `addBrowserPilotCommands`)
+  binding to just-bash `Command` (optional peer dependency).
 - `ConnectOptions.providerSession` lets trusted in-process callers inject a pre-created
   `ProviderSession`, skipping provider/session creation; `connect()` takes ownership and attempts
   release if setup fails.
@@ -35,7 +37,7 @@
   issues `POST` to `REQUEST_RELEASE` and polls for terminal status; viewport dimensions are nested
   correctly under `browserSettings.viewport` instead of top-level `width`/`height`; provider errors
   redact raw response bodies. CLI and in-process owned sessions enable keep-alive;
-  CLI commands reuse the saved endpoint, and `bp close` retains pending cleanup for retry.
+  CLI commands reuse the saved endpoint; `bp close` and `bp clean` retain pending cleanup for retry.
   Browserless launch URLs are rejected by reconnecting CLI and in-process owners.
 - `Browser.close()` now returns `Promise<ProviderReleaseResult | undefined>` instead of
   `Promise<void>`, surfacing provider release status to callers.

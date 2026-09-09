@@ -1,5 +1,5 @@
 /**
- * Default browser connection for the just-bash bridge.
+ * Default browser connection for the shell bridge.
  *
  * Connects to an already-resolved WebSocket URL with the generic provider —
  * the trusted host's SessionOwner has already exchanged the opaque handle for

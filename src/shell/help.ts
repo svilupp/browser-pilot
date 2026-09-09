@@ -1,5 +1,5 @@
 /**
- * Help text for the `bp` just-bash command.
+ * Help text for the `bp` shell command.
  */
 
 interface HelpEntry {
@@ -121,7 +121,7 @@ export function helpText(topic?: string): string {
   }
 
   const lines = [
-    'bp — browser-pilot commands for just-bash (JSON output by default)',
+    'bp — browser-pilot shell commands (JSON output by default)',
     '',
     'Commands (capability required in brackets):',
     ...Object.entries(HELP_ENTRIES).map(
