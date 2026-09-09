@@ -34,7 +34,9 @@
   (`released` / `already_released` / `cleanup_pending`) instead of `void`; session release now
   issues `POST` to `REQUEST_RELEASE` and polls for terminal status; viewport dimensions are nested
   correctly under `browserSettings.viewport` instead of top-level `width`/`height`; provider errors
-  redact raw response bodies.
+  redact raw response bodies. CLI and in-process owned sessions enable keep-alive;
+  CLI commands reuse the saved endpoint, and `bp close` retains pending cleanup for retry.
+  Browserless launch URLs are rejected by reconnecting CLI and in-process owners.
 - `Browser.close()` now returns `Promise<ProviderReleaseResult | undefined>` instead of
   `Promise<void>`, surfacing provider release status to callers.
 - `resumeSession` is wired through `connect()`: when a `sessionId` is supplied and the resolved
