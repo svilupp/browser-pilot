@@ -20,4 +20,11 @@ test "$(node "$smoke_dir/package/dist/daemon.mjs" --help | head -1)" = 'Usage: d
 test "$(node "$smoke_dir/package/dist/daemon.mjs" --version)" = "$(node -p "require('./package.json').version")"
 test "$(node "$smoke_dir/package/dist/cli.mjs" --version)" = "$(node -p "require('./package.json').version")"
 
+cp scripts/package-library-smoke.mjs "$smoke_dir/package/.package-library-smoke.mjs"
+node "$smoke_dir/package/.package-library-smoke.mjs"
+
+cp scripts/package-command-smoke.mjs "$smoke_dir/package/.package-command-smoke.mjs"
+just_bash_module=$(node --input-type=module -e "console.log(import.meta.resolve('just-bash'))")
+node "$smoke_dir/package/.package-command-smoke.mjs" "$just_bash_module"
+
 echo 'package smoke passed: workspace and npm tarball daemon entries are side-effect-free'

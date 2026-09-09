@@ -2,8 +2,6 @@
  * Batch action executor
  */
 
-import * as fs from 'node:fs';
-import { join } from 'node:path';
 import {
   getHighlightLabel,
   injectActionHighlight,
@@ -18,6 +16,7 @@ import { classifyStaleError } from '../browser/stale-errors.ts';
 import type { ActionReceipt } from '../browser/types.ts';
 import { ElementNotFoundError, NavigationError, TimeoutError } from '../browser/types.ts';
 import { CDPError } from '../cdp/protocol.ts';
+import { CapabilityError } from '../core/ports.ts';
 import {
   canonicalizeRecordingArtifact,
   createRecordingManifest,
@@ -64,7 +63,65 @@ const DEFAULT_RECORDING_SKIP_ACTIONS: ActionType[] = [
   'screenshot',
 ];
 
+/** Minimal filesystem/path surface needed for recording evidence writes. */
+interface RecordingIo {
+  readFileSync(path: string, encoding: 'utf-8'): string;
+  mkdirSync(path: string, options: { recursive: true }): unknown;
+  writeFileSync(path: string, data: string | Uint8Array): void;
+  renameSync(from: string, to: string): void;
+  existsSync(path: string): boolean;
+  statSync(path: string): { size: number };
+  join(...parts: string[]): string;
+  cwd(): string;
+}
+
+let recordingIoPromise: Promise<RecordingIo> | null = null;
+
+/**
+ * Recording evidence is written with Node's filesystem. To keep this module
+ * inside the portable core import graph (no static `node:*` imports), the
+ * built-ins are loaded lazily — and only when a batch actually requests
+ * `record`. The specifiers are computed so bundlers targeting non-Node
+ * runtimes never try to resolve them; in such runtimes recording fails with
+ * a `CapabilityError('recording')` instead.
+ */
+function loadRecordingIo(): Promise<RecordingIo> {
+  recordingIoPromise ??= (async () => {
+    try {
+      const fsSpecifier = ['node', 'fs'].join(':');
+      const pathSpecifier = ['node', 'path'].join(':');
+      const [fsModule, pathModule] = (await Promise.all([
+        import(fsSpecifier),
+        import(pathSpecifier),
+      ])) as [Omit<RecordingIo, 'join' | 'cwd'>, { join: (...parts: string[]) => string }];
+      return {
+        readFileSync: fsModule.readFileSync.bind(fsModule),
+        mkdirSync: fsModule.mkdirSync.bind(fsModule),
+        writeFileSync: fsModule.writeFileSync.bind(fsModule),
+        renameSync: fsModule.renameSync.bind(fsModule),
+        existsSync: fsModule.existsSync.bind(fsModule),
+        statSync: fsModule.statSync.bind(fsModule),
+        join: pathModule.join,
+        cwd: () => {
+          const processLike = (globalThis as { process?: { cwd?: () => string } }).process;
+          return processLike?.cwd?.() ?? '.';
+        },
+      };
+    } catch (error) {
+      recordingIoPromise = null;
+      throw new CapabilityError(
+        'recording',
+        `Recording requires Node filesystem access (node:fs), which this runtime does not provide: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+    }
+  })();
+  return recordingIoPromise;
+}
+
 interface RecordingContext {
+  io: RecordingIo;
   baseDir: string;
   screenshotDir: string;
   sessionId: string;
@@ -78,7 +135,10 @@ interface RecordingContext {
   executions: RecordingExecution[];
 }
 
-function loadExistingRecording(manifestPath: string): {
+function loadExistingRecording(
+  io: RecordingIo,
+  manifestPath: string
+): {
   frames: RecordingFrame[];
   traceEvents: CanonicalTraceEvent[];
   recordedAt?: string;
@@ -86,7 +146,7 @@ function loadExistingRecording(manifestPath: string): {
   executions?: RecordingExecution[];
 } {
   try {
-    const raw = JSON.parse(fs.readFileSync(manifestPath, 'utf-8')) as unknown;
+    const raw = JSON.parse(io.readFileSync(manifestPath, 'utf-8')) as unknown;
 
     if ((raw as { version?: number }).version === 1) {
       const legacy = raw as { frames?: RecordingFrame[]; recordedAt?: string; startUrl?: string };
@@ -358,7 +418,7 @@ export class BatchExecutor {
     const startTime = Date.now();
     const executionId = createExecutionId();
     const recording = options.record
-      ? this.createRecordingContext(options.record, executionId)
+      ? await this.createRecordingContext(options.record, executionId)
       : null;
     if (steps.some((step) => step.action === 'waitForWsMessage')) {
       await this.ensureTraceHooks();
@@ -864,16 +924,21 @@ export class BatchExecutor {
     };
   }
 
-  private createRecordingContext(record: RecordOptions, executionId: string): RecordingContext {
-    const baseDir = record.outputDir ?? join(process.cwd(), '.browser-pilot');
-    const screenshotDir = join(baseDir, 'screenshots');
-    const manifestPath = join(baseDir, 'recording.json');
+  private async createRecordingContext(
+    record: RecordOptions,
+    executionId: string
+  ): Promise<RecordingContext> {
+    const io = await loadRecordingIo();
+    const baseDir = record.outputDir ?? io.join(io.cwd(), '.browser-pilot');
+    const screenshotDir = io.join(baseDir, 'screenshots');
+    const manifestPath = io.join(baseDir, 'recording.json');
 
-    const existing = loadExistingRecording(manifestPath);
+    const existing = loadExistingRecording(io, manifestPath);
 
-    fs.mkdirSync(screenshotDir, { recursive: true });
+    io.mkdirSync(screenshotDir, { recursive: true });
 
     return {
+      io,
       baseDir,
       screenshotDir,
       sessionId: record.sessionId ?? this.page.targetId,
@@ -911,7 +976,7 @@ export class BatchExecutor {
       const ts = Date.now();
       const seq = String(recording.frames.length + 1).padStart(4, '0');
       const filename = `${seq}-${ts}-${stepResult.action}.${recording.format}`;
-      const filepath = join(recording.screenshotDir, filename);
+      const filepath = recording.io.join(recording.screenshotDir, filename);
 
       if (recording.highlights) {
         const kind = stepToHighlightKind(stepResult);
@@ -931,7 +996,7 @@ export class BatchExecutor {
         quality: recording.quality,
       });
       const buffer = Buffer.from(base64, 'base64');
-      fs.writeFileSync(filepath, buffer);
+      recording.io.writeFileSync(filepath, buffer);
       stepResult.screenshotPath = filepath;
 
       let pageUrl: string | undefined;
@@ -1002,10 +1067,10 @@ export class BatchExecutor {
     }
 
     // Preserve original recordedAt from existing manifest when accumulating
-    const manifestPath = join(recording.baseDir, 'recording.json');
+    const manifestPath = recording.io.join(recording.baseDir, 'recording.json');
     let recordedAt = new Date(startTime).toISOString();
     let originalStartUrl = startUrl;
-    const existing = loadExistingRecording(manifestPath);
+    const existing = loadExistingRecording(recording.io, manifestPath);
     if (existing.recordedAt) recordedAt = existing.recordedAt;
     if (existing.startUrl) originalStartUrl = existing.startUrl;
 
@@ -1030,16 +1095,19 @@ export class BatchExecutor {
       throw new Error(`Recording manifest integrity failure: ${integrity.errors.join('; ')}`);
     }
     for (const screenshot of manifest.screenshots) {
-      const screenshotPath = join(recording.screenshotDir, screenshot.file);
-      if (!fs.existsSync(screenshotPath) || fs.statSync(screenshotPath).size === 0) {
+      const screenshotPath = recording.io.join(recording.screenshotDir, screenshot.file);
+      if (
+        !recording.io.existsSync(screenshotPath) ||
+        recording.io.statSync(screenshotPath).size === 0
+      ) {
         throw new Error(`Recording screenshot evidence is missing: ${screenshot.file}`);
       }
     }
     // Rename within the same directory so readers never observe a partial
     // manifest while another execution is appending evidence.
     const temporaryPath = `${manifestPath}.tmp-${recording.executionId}`;
-    fs.writeFileSync(temporaryPath, JSON.stringify(manifest, null, 2));
-    fs.renameSync(temporaryPath, manifestPath);
+    recording.io.writeFileSync(temporaryPath, JSON.stringify(manifest, null, 2));
+    recording.io.renameSync(temporaryPath, manifestPath);
     return manifestPath;
   }
 

@@ -1,7 +1,10 @@
 import { createCDPClient } from '../cdp/index.ts';
 import { getBrowserWebSocketUrl } from './generic.ts';
+import type { ChromeChannel } from './types.ts';
 
-export type ChromeChannel = 'stable' | 'beta' | 'dev' | 'canary';
+// Re-exported for backward compatibility; the definition lives in `./types.ts`
+// so portable code never needs to import this Node-only module.
+export type { ChromeChannel };
 export type ResolvedBrowserSource = 'explicit-ws' | 'devtools-active-port' | 'json-version';
 
 export interface LocalBrowserScanTarget {

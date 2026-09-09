@@ -551,7 +551,9 @@ export async function attachSession(
   let browser: Browser;
   try {
     browser = await connect({
-      provider: session.provider,
+      // The stored URL already identifies the session. Running a cloud
+      // provider handshake here would allocate another browser per command.
+      provider: 'generic',
       wsUrl: session.wsUrl,
       debug: options.trace,
     });

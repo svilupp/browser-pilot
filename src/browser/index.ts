@@ -2,14 +2,15 @@
  * Browser module exports
  */
 
-export {
-  Browser,
-  type BrowserOptions,
-  connect,
-  type NewPageOptions,
-  type PageOptions,
+export type {
+  BrowserOptions,
+  LocalEndpointRequest,
+  LocalEndpointResolver,
+  NewPageOptions,
+  PageOptions,
 } from './browser.ts';
 export { type ComboboxConfig, type ComboboxResult, chooseOption } from './combobox.ts';
+export { Browser, connect } from './connect.ts';
 export {
   computeDelta,
   type DeltaChange,

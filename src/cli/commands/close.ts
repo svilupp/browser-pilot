@@ -14,6 +14,9 @@ import {
   readDaemonDescriptor,
   removeDaemonDescriptor,
 } from '../../daemon/registry.ts';
+import { BrowserBaseProvider } from '../../providers/browserbase.ts';
+import type { ProviderReleaseResult } from '../../providers/types.ts';
+import { getEnv } from '../../runtime/env.ts';
 import { output } from '../output.ts';
 import { deleteSession, getDefaultSession, loadSession, type SessionData } from '../session.ts';
 
@@ -29,6 +32,9 @@ Global options:
   --pretty             Output readable text (default)
   --debug              Enable CDP transport debugging
   -h, --help           Show this help
+
+Browserbase sessions are released through the API using BROWSERBASE_API_KEY.
+Pending cleanup exits nonzero and keeps the local session for retry.
 
 Examples:
   bp close                # Close the most recent session
@@ -86,6 +92,34 @@ export async function closeCommand(
     session.transport?.mode === 'daemon' &&
     !!session.transport.daemonId &&
     (await countSessionReferences(session.transport.daemonId)) > 1;
+  let providerRelease: ProviderReleaseResult | undefined;
+  if (session.provider === 'browserbase' && !sharedDaemon) {
+    const apiKey = getEnv('BROWSERBASE_API_KEY');
+    if (!apiKey || !session.providerSessionId) {
+      throw new Error(
+        'Browserbase cleanup requires BROWSERBASE_API_KEY and the stored provider session ID. The local session was retained for retry.'
+      );
+    }
+    const projectId = session.metadata?.['projectId'];
+    const provider = new BrowserBaseProvider({
+      apiKey,
+      projectId: typeof projectId === 'string' ? projectId : getEnv('BROWSERBASE_PROJECT_ID'),
+    });
+    providerRelease = await provider.releaseSession(session.providerSessionId);
+    if (providerRelease.status === 'cleanup_pending') {
+      output(
+        {
+          success: false,
+          sessionId: session.id,
+          providerRelease,
+          message: 'Cleanup pending; retry bp close.',
+        },
+        globalOptions.format
+      );
+      process.exitCode = 1;
+      return;
+    }
+  }
   const keepLocalDaemon =
     session.provider === 'generic' &&
     session.transport?.mode === 'daemon' &&
@@ -152,6 +186,7 @@ export async function closeCommand(
       sessionId: session.id,
       message: 'Session closed',
       daemonStopped: daemonStopped || undefined,
+      ...(providerRelease ? { providerRelease } : {}),
     },
     globalOptions.format
   );

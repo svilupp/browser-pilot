@@ -53,6 +53,34 @@ function buildDiscoveryEnv(homeDir: string): Record<string, string> {
   };
 }
 
+/**
+ * Chrome's `/json/version` endpoint can 404 for a short window right after
+ * launch, before the DevTools HTTP server is fully up. `getBrowserWebSocketUrl`
+ * already retries internally, but that window has occasionally outlasted its
+ * budget in CI. Wrap it in a small bounded retry here (test harness only —
+ * this does not change library retry behavior).
+ */
+async function getBrowserWebSocketUrlWithRetry(
+  host: string,
+  timeoutMs = 2000,
+  intervalMs = 100
+): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+  let lastError: unknown;
+
+  for (;;) {
+    try {
+      return await getBrowserWebSocketUrl(host);
+    } catch (error) {
+      lastError = error;
+      if (Date.now() >= deadline) {
+        throw lastError;
+      }
+      await Bun.sleep(intervalMs);
+    }
+  }
+}
+
 async function waitForFile(path: string, timeoutMs = 5000): Promise<void> {
   const started = Date.now();
 
@@ -73,7 +101,7 @@ async function ensureDevToolsActivePortFile(filePath: string, browserHost: strin
     await waitForFile(filePath, 1000);
     return;
   } catch {
-    const wsUrl = await getBrowserWebSocketUrl(browserHost);
+    const wsUrl = await getBrowserWebSocketUrlWithRetry(browserHost);
     const parsed = new URL(wsUrl);
     const port = parsed.port;
     const path = parsed.pathname;
@@ -173,7 +201,7 @@ export async function createTestHarness(
   }
 
   // 3. Connect browser-pilot
-  const wsUrl = await getBrowserWebSocketUrl(`localhost:${chrome.port}`);
+  const wsUrl = await getBrowserWebSocketUrlWithRetry(`localhost:${chrome.port}`);
   const browser = await connect({
     provider: 'generic',
     wsUrl,

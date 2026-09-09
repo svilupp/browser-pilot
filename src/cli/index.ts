@@ -31,6 +31,7 @@ import { textCommand } from './commands/text.ts';
 import { traceCommand } from './commands/trace.ts';
 import { useTargetCommand } from './commands/use-target.ts';
 import { webmcpCommand } from './commands/webmcp.ts';
+import { loadDotenv } from './dotenv.ts';
 import { getCliVersion } from './version.ts';
 
 export { output, renderOutput } from './output.ts';
@@ -100,8 +101,13 @@ Options:
   --pretty              Alias for -f pretty
   --debug               Enable debug logs for CDP transport
   --trace               Legacy alias for --debug
+  --env-file <path>     Load env vars from a dotenv file (default: .env)
   -h, --help            Show help
   --version             Print CLI version
+
+  BROWSER_PILOT_NO_DOTENV=1
+                        Skip automatic .env loading (Bun already auto-loads .env;
+                        this affects the built dist/cli.mjs running under Node)
 
 Notes:
   Start with "record summary" or "trace summary" before opening raw artifacts.
@@ -156,8 +162,39 @@ export function parseGlobalOptions(args: string[]): {
   return { options, remaining };
 }
 
+/**
+ * Extract a global `--env-file <path>` flag from raw argv without disturbing
+ * command-specific parsing. Returns the resolved path (default `.env`) and
+ * the remaining args with the flag removed.
+ */
+function extractEnvFileFlag(args: string[]): { envFile: string; remaining: string[] } {
+  let envFile = '.env';
+  const remaining: string[] = [];
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]!;
+    if (arg === '--env-file') {
+      envFile = args[++i] ?? envFile;
+    } else {
+      remaining.push(arg);
+    }
+  }
+
+  return { envFile, remaining };
+}
+
 async function main(): Promise<void> {
-  const args = process.argv.slice(2);
+  const rawArgs = process.argv.slice(2);
+  const { envFile, remaining: argsAfterEnvFile } = extractEnvFileFlag(rawArgs);
+
+  const dotenvDisabled = ['1', 'true'].includes(
+    (process.env['BROWSER_PILOT_NO_DOTENV'] ?? '').trim().toLowerCase()
+  );
+  if (!dotenvDisabled) {
+    loadDotenv(envFile);
+  }
+
+  const args = argsAfterEnvFile;
 
   if (
     args.length === 0 ||

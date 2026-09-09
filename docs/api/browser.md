@@ -27,7 +27,8 @@ interface ConnectOptions {
   // Provider-specific
   apiKey?: string;        // For browser-use, browserbase, browserless
   projectId?: string;     // For browserbase
-  wsUrl?: string;         // For generic, or override others
+  providerSession?: ProviderSession; // Trusted in-process injection; URL may contain credentials.
+  wsUrl?: string;         // Direct endpoint for generic provider
   channel?: 'stable' | 'beta' | 'dev' | 'canary'; // Local Chrome channel
   userDataDir?: string;   // Local Chrome profile directory
 
@@ -118,32 +119,40 @@ await browser.closePage('checkout');
 
 ### disconnect()
 
-Disconnect from the browser but keep the provider session alive for later reconnection.
+Detach the browser connection. Browserbase sessions require `keepAlive: true` at creation to remain available for reconnection until expiry.
 
 ```typescript
+// browser was created with session: { keepAlive: true }.
+const sessionId = browser.sessionId;
 await browser.disconnect();
 
 // Later: reconnect using the same session
 const browser2 = await connect({
   provider: 'browserbase',
   apiKey,
-  wsUrl: savedWsUrl,
+  session: { sessionId },
 });
 ```
 
 ### close()
 
-Close the browser session completely.
+Close the CDP connection and release the provider session.
 
 ```typescript
-await browser.close();
+const cleanup = await browser.close();
+// Promise<ProviderReleaseResult | undefined>
+// Browserbase and Browser Use: released | cleanup_pending | already_released.
+// Providers without a release result return undefined.
 ```
+
+`cleanup_pending` requires reconciliation or a later `close()` retry. It can mean
+request failure or expiry of the cleanup budget. See [provider lifecycle](../providers.md#disconnect-vs-close).
 
 ## Properties
 
 ### wsUrl
 
-Get the WebSocket URL for this connection.
+Get the WebSocket URL for this connection. It may contain credentials and should remain in trusted code.
 
 ```typescript
 console.log(browser.wsUrl);
@@ -200,37 +209,27 @@ documented and stable across versions.
 ### Saving Sessions
 
 ```typescript
-const browser = await connect({ provider: 'browserbase', apiKey });
+const browser = await connect({
+  provider: 'browserbase', apiKey, session: { keepAlive: true, timeout: 300 },
+});
 
-// Save connection info for later
-const sessionInfo = {
-  wsUrl: browser.wsUrl,
-  sessionId: browser.sessionId,
-  provider: 'browserbase',
-};
-
-await browser.disconnect(); // Keep session alive
-
-// Save to file, database, etc.
-await saveSession(sessionInfo);
+// Persist the provider session ID in trusted storage, not the connection URL.
+await saveSession({ sessionId: browser.sessionId });
+await browser.disconnect();
 ```
 
 ### Resuming Sessions
 
 ```typescript
-// Load saved session
-const sessionInfo = await loadSession();
-
-// Reconnect
+const saved = await loadSession();
 const browser = await connect({
-  provider: sessionInfo.provider,
-  wsUrl: sessionInfo.wsUrl,
-  apiKey,
+  provider: 'browserbase', apiKey, session: { sessionId: saved.sessionId },
 });
-
-// Continue where you left off
 const page = await browser.page();
 ```
+
+Resumption can fail if the session expired. Reconcile the existing session before
+allocating a replacement after a connection failure.
 
 ## Examples
 
@@ -268,49 +267,6 @@ await page1.fill('#query', 'laptops');
 await page2.click('#proceed');
 
 await browser.close();
-```
-
-### With Session Persistence
-
-```typescript
-import { connect } from 'browser-pilot';
-import { readFile, writeFile } from 'fs/promises';
-
-const SESSION_FILE = '/tmp/browser-session.json';
-
-async function getOrCreateBrowser() {
-  try {
-    // Try to resume existing session
-    const data = await readFile(SESSION_FILE, 'utf-8');
-    const session = JSON.parse(data);
-
-    return await connect({
-      provider: session.provider,
-      wsUrl: session.wsUrl,
-      apiKey: process.env.BROWSERBASE_API_KEY,
-    });
-  } catch {
-    // Create new session
-    const browser = await connect({
-      provider: 'browserbase',
-      apiKey: process.env.BROWSERBASE_API_KEY,
-    });
-
-    // Save for later
-    await writeFile(SESSION_FILE, JSON.stringify({
-      provider: 'browserbase',
-      wsUrl: browser.wsUrl,
-      sessionId: browser.sessionId,
-    }));
-
-    return browser;
-  }
-}
-
-const browser = await getOrCreateBrowser();
-const page = await browser.page();
-// ...
-await browser.disconnect(); // Keep session for next time
 ```
 
 ### Direct CDP Access

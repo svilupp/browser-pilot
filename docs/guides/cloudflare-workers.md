@@ -55,7 +55,7 @@ wrangler secret put BROWSER_USE_API_KEY
 
 ```typescript
 // src/index.ts
-import { connect } from 'browser-pilot';
+import { connectCore } from 'browser-pilot/core';
 
 interface Env {
   BROWSER_USE_API_KEY: string;
@@ -76,7 +76,7 @@ export default {
 async function handleScrape(request: Request, env: Env): Promise<Response> {
   const { targetUrl } = await request.json();
 
-  const browser = await connect({
+  const browser = await connectCore({
     provider: 'browser-use',
     apiKey: env.BROWSER_USE_API_KEY,
   });
@@ -110,7 +110,7 @@ wrangler deploy
 
 ```typescript
 async function submitForm(env: Env, formData: Record<string, string>): Promise<Response> {
-  const browser = await connect({
+  const browser = await connectCore({
     provider: 'browser-use',
     apiKey: env.BROWSER_USE_API_KEY,
   });
@@ -158,7 +158,7 @@ export default {
 };
 
 async function scrapeAndStore(env: Env): Promise<void> {
-  const browser = await connect({
+  const browser = await connectCore({
     provider: 'browser-use',
     apiKey: env.BROWSER_USE_API_KEY,
   });
@@ -198,12 +198,12 @@ export default {
     const { sessionId, actions } = await request.json() as AgentRequest;
 
     // Get or create session
-    let wsUrl = sessionId ? await env.SESSIONS.get(sessionId) : null;
+    const providerSessionId = sessionId ? await env.SESSIONS.get(sessionId) : null;
 
-    const browser = await connect({
+    const browser = await connectCore({
       provider: 'browser-use',
       apiKey: env.BROWSER_USE_API_KEY,
-      wsUrl: wsUrl ?? undefined,
+      session: providerSessionId ? { sessionId: providerSessionId } : undefined,
     });
 
     try {
@@ -212,7 +212,7 @@ export default {
 
       // Save session for reuse
       const newSessionId = sessionId ?? crypto.randomUUID();
-      await env.SESSIONS.put(newSessionId, browser.wsUrl, {
+      await env.SESSIONS.put(newSessionId, browser.sessionId!, {
         expirationTtl: 3600, // 1 hour
       });
 
@@ -234,7 +234,7 @@ export default {
 Use try/finally to ensure cleanup:
 
 ```typescript
-const browser = await connect({ ... });
+const browser = await connectCore({ ... });
 try {
   // Your code
 } finally {
@@ -247,7 +247,7 @@ try {
 Workers have a 30-second limit (or longer on paid plans):
 
 ```typescript
-const browser = await connect({
+const browser = await connectCore({
   provider: 'browser-use',
   apiKey: env.BROWSER_USE_API_KEY,
   timeout: 25000, // Leave buffer for cleanup
@@ -260,7 +260,7 @@ await page.goto(url, { timeout: 20000 });
 
 ```typescript
 try {
-  const browser = await connect({ ... });
+  const browser = await connectCore({ ... });
   // ...
 } catch (error) {
   if (error instanceof TimeoutError) {
@@ -286,7 +286,7 @@ await env.SESSIONS.put(userId, browser.wsUrl, {
 // Later: resume
 const wsUrl = await env.SESSIONS.get(userId);
 if (wsUrl) {
-  const browser = await connect({
+  const browser = await connectCore({
     provider: 'browser-use',
     wsUrl,
     apiKey: env.BROWSER_USE_API_KEY,
@@ -299,7 +299,7 @@ if (wsUrl) {
 Do heavy processing after closing the browser:
 
 ```typescript
-const browser = await connect({ ... });
+const browser = await connectCore({ ... });
 let snapshot;
 
 try {
@@ -337,20 +337,96 @@ return Response.json(processed);
 wrangler dev
 ```
 
-### Enable Tracing
+### Connection Diagnostics
 
-```typescript
-import { enableTracing } from 'browser-pilot';
-
-enableTracing({
-  output: 'callback',
-  callback: (event) => console.log(JSON.stringify(event)),
-});
-```
+Set `debug: true` on `connectCore()` for connection diagnostics. Native trace-file
+helpers require Node/Bun and are not part of the portable entry.
 
 ### View Live Viewer URL
 
 ```typescript
-const browser = await connect({ provider: 'browser-use', apiKey });
+const browser = await connectCore({ provider: 'browser-use', apiKey });
 console.log('Live viewer:', browser.metadata?.['liveUrl']);
 ```
+
+## Using BrowserBase
+
+BrowserBase works the same way as the other providers. Store the API key as a
+Worker secret, never in `wrangler.toml`:
+
+```bash
+wrangler secret put BROWSERBASE_API_KEY
+# Optional for accounts with exactly one project.
+wrangler secret put BROWSERBASE_PROJECT_ID
+```
+
+Pass the key directly to `connectCore()`:
+
+```typescript
+import { connectCore } from 'browser-pilot/core';
+
+interface Env {
+  BROWSERBASE_API_KEY: string;
+  BROWSERBASE_PROJECT_ID?: string;
+}
+
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const browser = await connectCore({
+      provider: 'browserbase',
+      apiKey: env.BROWSERBASE_API_KEY,
+      projectId: env.BROWSERBASE_PROJECT_ID,
+    });
+
+    try {
+      const page = await browser.page();
+      // ...
+      return new Response('ok');
+    } finally {
+      const result = await browser.close();
+      if (result?.status === 'cleanup_pending') {
+        // Session may still be billing; consider a follow-up reconciliation
+        // job (e.g. via a queue or cron trigger) that re-checks release status.
+      }
+    }
+  },
+};
+```
+
+Pass credentials per connection, or inject a pre-created provider session below.
+The portable entry does not read environment overrides. Avoid module-global
+credentials in hosts that serve multiple tenants.
+
+### Embedding boundaries
+
+`providerSession` is a trusted in-process injection API. Its `wsUrl` may contain
+credentials and grants direct browser access; its `close()` callback is not
+serializable. Keep both in the trusted host. Passing this object into an untrusted
+shell does not establish credential isolation or restrict browser operations.
+
+```typescript
+// All of this code runs in the trusted host.
+import { BrowserBaseProvider, connectCore } from 'browser-pilot/core';
+
+const provider = new BrowserBaseProvider({ apiKey: env.BROWSERBASE_API_KEY });
+const providerSession = await provider.createSession({ timeout: 300 });
+const browser = await connectCore({ provider: 'browserbase', providerSession });
+try {
+  const page = await browser.page();
+  await page.goto('https://example.com');
+} finally {
+  const cleanup = await browser.close();
+  // Retain cleanup.sessionId and reconcile if cleanup.status is cleanup_pending.
+}
+```
+
+An untrusted shell needs an owner-mediated operation protocol with authorization,
+bounded payloads, session handles, cancellation, and host-side cleanup. Keep raw
+connection URLs and provider credentials out of shell arguments, environment,
+files, and responses. `Browser.fromCDP()` and injected provider sessions alone do
+not enforce that boundary; use a host adapter with explicit authorization and
+lifecycle contracts.
+
+The native CLI uses Node filesystem and process adapters. Validate portable
+entrypoints from packed artifacts in the target Worker runtime; a native CLI
+build or an in-process injection test does not establish Worker compatibility.

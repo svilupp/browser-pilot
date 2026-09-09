@@ -49,11 +49,20 @@ export default defineConfig([
       providers: 'src/providers/index.ts',
       browser: 'src/browser/index.ts',
       actions: 'src/actions/index.ts',
+      'core/index': 'src/core/index.ts',
+      'adapters/node/index': 'src/adapters/node/index.ts',
+      'adapters/memory/index': 'src/adapters/memory/index.ts',
+      // Keep the just-bash bridge in the same split graph as core so its
+      // CapabilityError value is shared with the root/core entries.
+      'just-bash/index': 'src/just-bash/index.ts',
     },
     format: ['esm', 'cjs'],
+    // Keep module state shared across library subpaths in both module formats.
+    splitting: true,
     dts: true,
     target: 'node18',
     define: provenanceDefine,
+    external: ['just-bash'],
     outExtension({ format }) {
       return {
         js: format === 'esm' ? '.mjs' : '.cjs',

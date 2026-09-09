@@ -4,13 +4,15 @@
 
 import { type CDPClient, createCDPClient, createSessionScopedCDP } from '../cdp/index.ts';
 import type { TargetInfo } from '../cdp/protocol.ts';
-import {
-  type ConnectOptions,
-  createProvider,
-  type Provider,
-  type ProviderSession,
-  resolveBrowserEndpoint,
-} from '../providers/index.ts';
+import { CapabilityError, type SecretsPort } from '../core/ports.ts';
+import { createProvider } from '../providers/factory.ts';
+import type {
+  ChromeChannel,
+  ConnectOptions,
+  Provider,
+  ProviderReleaseResult,
+  ProviderSession,
+} from '../providers/types.ts';
 import { type BuildProvenance, getBuildProvenance } from '../runtime/provenance.ts';
 import { Page } from './page.ts';
 import {
@@ -20,9 +22,30 @@ import {
   type TargetSummary,
 } from './types.ts';
 
+/** Request passed to a {@link LocalEndpointResolver}. */
+export interface LocalEndpointRequest {
+  channel?: ChromeChannel;
+  userDataDir?: string;
+}
+
+/**
+ * Resolves a local browser's CDP WebSocket URL (Node-only capability backed by
+ * `src/providers/local-discovery.ts`). The portable core never provides one;
+ * the root `connect()` entry wires the Node implementation.
+ */
+export type LocalEndpointResolver = (request: LocalEndpointRequest) => Promise<{ wsUrl: string }>;
+
 export interface BrowserOptions extends ConnectOptions {
   /** Enable debug logging */
   debug?: boolean;
+  /**
+   * Secret source used to resolve provider API keys when `apiKey` is not
+   * passed explicitly. The root `connect()` defaults this to an env-backed
+   * port; the portable core requires it (or an explicit `apiKey`).
+   */
+  secrets?: SecretsPort;
+  /** Local browser discovery hook for the generic provider without `wsUrl`. */
+  localEndpointResolver?: LocalEndpointResolver;
 }
 
 export interface NewPageOptions {
@@ -61,6 +84,10 @@ export interface PageOptions {
    * print preview (which stalls every subsequent CDP call). Off by default.
    */
   blockNativePrint?: boolean;
+}
+
+function errMsg(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function targetConstraintMatches(
@@ -125,7 +152,12 @@ export class Browser {
   private pageCounter = 0;
   private targetDiscoveryReady: Promise<void>;
 
-  private constructor(
+  /**
+   * Protected so the Node-flavored entry can provide a subclass with its own
+   * per-entry connection defaults while retaining the same Browser API and
+   * `instanceof Browser` behavior.
+   */
+  protected constructor(
     cdp: CDPClient,
     _provider: Provider,
     providerSession: ProviderSession,
@@ -146,6 +178,7 @@ export class Browser {
    * The caller is responsible for the CDP connection lifecycle.
    */
   static fromCDP(
+    this: typeof Browser,
     cdp: CDPClient,
     sessionInfo: { wsUrl: string; provider?: string; sessionId?: string }
   ): Browser {
@@ -164,21 +197,33 @@ export class Browser {
         return providerSession;
       },
     };
-    return new Browser(cdp, provider, providerSession, { provider: 'generic' });
+    // Polymorphic static construction keeps Root Browser instances compatible
+    // with the root entry's Browser constructor. `this` is already typed as
+    // `typeof Browser` (see the method signature), so the protected
+    // constructor can be invoked directly without a double cast.
+    // biome-ignore lint/complexity/noThisInStatic: required for polymorphic static construction
+    return new this(cdp, provider, providerSession, { provider: 'generic' });
   }
 
   /**
    * Connect to a browser instance
    */
-  static async connect(options: BrowserOptions): Promise<Browser> {
+  static async connect(this: typeof Browser, options: BrowserOptions): Promise<Browser> {
     let connectOptions = options;
 
-    if (options.provider === 'generic' && !options.wsUrl) {
-      const endpoint = await resolveBrowserEndpoint({
+    if (options.provider === 'generic' && !options.wsUrl && !options.providerSession) {
+      const resolveEndpoint = options.localEndpointResolver;
+      if (!resolveEndpoint) {
+        throw new CapabilityError(
+          'local-discovery',
+          'Generic provider without wsUrl requires local browser discovery, which is not ' +
+            'available in this runtime. Use connect() from the browser-pilot root entry, or ' +
+            'pass wsUrl / providerSession explicitly.'
+        );
+      }
+      const endpoint = await resolveEndpoint({
         channel: options.channel,
         userDataDir: options.userDataDir,
-        allowLocalDiscovery: true,
-        allowLegacyHostFallback: true,
       });
       connectOptions = {
         ...options,
@@ -186,21 +231,72 @@ export class Browser {
       };
     }
 
-    const provider = createProvider(connectOptions);
-    const session = await provider.createSession(connectOptions.session);
+    let provider: Provider;
+    let session: ProviderSession;
+    let releaseOnFailure = true;
+
+    if (connectOptions.providerSession) {
+      // Injected session: skip provider resolution and createSession/resumeSession
+      // entirely (no network call to a provider API). The injected session is
+      // still tracked so close() releases it.
+      session = connectOptions.providerSession;
+      provider = {
+        name: 'injected',
+        async createSession() {
+          throw new Error('createSession is not supported for an injected providerSession');
+        },
+      };
+    } else {
+      provider = createProvider(connectOptions, { secrets: connectOptions.secrets });
+      const rawSessionId = connectOptions.session?.['sessionId'];
+      const sessionId = typeof rawSessionId === 'string' ? rawSessionId : undefined;
+      if (sessionId !== undefined && provider.resumeSession) {
+        session = await provider.resumeSession(sessionId);
+        releaseOnFailure = false;
+      } else {
+        session = await provider.createSession(connectOptions.session);
+      }
+    }
 
     if (session.metadata?.['liveUrl']) {
       console.error(`Live viewer: ${session.metadata['liveUrl']}`);
     }
 
-    const cdp = await createCDPClient(session.wsUrl, {
-      debug: connectOptions.debug,
-      timeout: connectOptions.timeout,
-    });
-
-    const browser = new Browser(cdp, provider, session, connectOptions);
-    await browser.targetDiscoveryReady;
-    return browser;
+    let cdp: CDPClient | undefined;
+    try {
+      cdp = await createCDPClient(session.wsUrl, {
+        debug: connectOptions.debug,
+        timeout: connectOptions.timeout,
+      });
+      // Polymorphic static construction keeps Browser.connect() subclasses
+      // compatible with the root entry's Browser constructor. `this` is
+      // already typed as `typeof Browser` (see the method signature), so the
+      // protected constructor can be invoked directly without a double cast.
+      // biome-ignore lint/complexity/noThisInStatic: required for polymorphic static construction
+      const browser = new this(cdp, provider, session, connectOptions);
+      await browser.targetDiscoveryReady;
+      return browser;
+    } catch (error) {
+      await cdp?.close().catch(() => {});
+      // A failed resume must not terminate someone else's existing session.
+      if (releaseOnFailure) {
+        let cleanup: void | ProviderReleaseResult;
+        try {
+          cleanup = await session.close();
+        } catch (cleanupError) {
+          throw new Error(`${errMsg(error)}; provider cleanup failed: ${errMsg(cleanupError)}`, {
+            cause: error,
+          });
+        }
+        if (cleanup?.status === 'cleanup_pending') {
+          throw new Error(
+            `${errMsg(error)}; provider cleanup pending for session ${cleanup.sessionId}`,
+            { cause: error }
+          );
+        }
+      }
+      throw error;
+    }
   }
 
   /**
@@ -685,13 +781,36 @@ export class Browser {
   }
 
   /**
-   * Close the browser session completely
+   * Close the browser session completely.
+   *
+   * Closes the CDP socket first so a provider release failure never leaves
+   * the connection dangling, then releases the provider session. Returns the
+   * provider's release result when it reports one (e.g. BrowserBase's
+   * `released`/`cleanup_pending`/`already_released`), or `undefined` for
+   * providers with no meaningful release outcome to report.
    */
-  async close(): Promise<void> {
+  async close(): Promise<ProviderReleaseResult | undefined> {
     for (const page of this.pages.values()) page.dispose();
     this.pages.clear();
-    await this.cdp.close();
-    await this.providerSession.close();
+    let cdpError: unknown;
+    try {
+      await this.cdp.close();
+    } catch (error) {
+      cdpError = error;
+    }
+    const releaseResult = (await this.providerSession.close()) ?? undefined;
+    if (cdpError !== undefined) {
+      if (releaseResult) {
+        return {
+          ...releaseResult,
+          error: releaseResult.error
+            ? `${releaseResult.error}; cdp close error: ${errMsg(cdpError)}`
+            : `cdp close error: ${errMsg(cdpError)}`,
+        };
+      }
+      throw cdpError;
+    }
+    return releaseResult;
   }
 
   /**
@@ -700,12 +819,4 @@ export class Browser {
   get cdpClient(): CDPClient {
     return this.cdp;
   }
-}
-
-/**
- * Connect to a browser instance
- * Convenience function for Browser.connect()
- */
-export function connect(options: BrowserOptions): Promise<Browser> {
-  return Browser.connect(options);
 }

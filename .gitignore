@@ -145,3 +145,6 @@ tests/screenshots/
 .bv/
 
 .private/
+
+# Scratch build output (e.g. tests/fitness/packed-exports.test.ts)
+.tmp/
