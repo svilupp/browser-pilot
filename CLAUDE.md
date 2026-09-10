@@ -44,7 +44,12 @@ Entry: `src/index.ts`. Public API report: `etc/browser-pilot.api.md`.
 | CDP client + session scoping | `src/cdp/client.ts`, `src/cdp/session-scope.ts` |
 | Batch executor, step types, validation, conditions, combinators | `src/actions/` |
 | Wait strategies (smart waiting, fast-fail) | `src/wait/strategies.ts` |
-| Providers (Browser Use, BrowserBase, generic) | `src/providers/` |
+| Providers (Browser Use, BrowserBase, generic); portable factory | `src/providers/`, `src/providers/factory.ts` |
+| Portable library entry + optional host contracts (`browser-pilot/core`) | `src/core/ports.ts`, `src/core/index.ts` |
+| Optional host adapters (Node + in-memory test doubles) | `src/adapters/node/`, `src/adapters/memory/` |
+| Artifact sink port + Node/memory sinks | `src/artifacts/` |
+| Shell-agnostic core (`browser-pilot/shell`) | `src/shell/` |
+| just-bash shell bridge (`browser-pilot/just-bash`, thin adapter over `src/shell/`) | `src/just-bash/` |
 | Audio I/O (input, output, encoding, transcribe) | `src/audio/` |
 | CLI entry, commands, attach/daemon-spawn | `src/cli/` |
 | Daemon (server, lifecycle, transport, types) | `src/daemon/` |
@@ -70,7 +75,7 @@ Entry: `src/index.ts`. Public API report: `etc/browser-pilot.api.md`.
 
 ## Docs Index
 
-- `docs/getting-started.md`, `docs/cli.md`, `docs/providers.md`
+- `docs/getting-started.md`, `docs/cli.md`, `docs/providers.md`, `docs/architecture.md`
 - `docs/api/` — browser, page, types reference
 - `docs/guides/` — batch actions, snapshots, multi-selector, recording, tracing, realtime debugging, voice-agent testing, Cloudflare Workers, release checklist
 - `docs/guides/webmcp.md` - current Chrome API contract, security gates, and CLI usage

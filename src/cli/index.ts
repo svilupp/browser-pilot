@@ -31,6 +31,7 @@ import { textCommand } from './commands/text.ts';
 import { traceCommand } from './commands/trace.ts';
 import { useTargetCommand } from './commands/use-target.ts';
 import { webmcpCommand } from './commands/webmcp.ts';
+import { loadDotenv } from './dotenv.ts';
 import { getCliVersion } from './version.ts';
 
 export { output, renderOutput } from './output.ts';
@@ -100,8 +101,13 @@ Options:
   --pretty              Alias for -f pretty
   --debug               Enable debug logs for CDP transport
   --trace               Legacy alias for --debug
+  --env-file <path>     Load env vars from a dotenv file (default: .env)
   -h, --help            Show help
   --version             Print CLI version
+
+  BROWSER_PILOT_NO_DOTENV=1
+                        Skip automatic .env loading (Bun already auto-loads .env;
+                        this affects the built dist/cli.mjs running under Node)
 
 Notes:
   Start with "record summary" or "trace summary" before opening raw artifacts.
@@ -156,8 +162,84 @@ export function parseGlobalOptions(args: string[]): {
   return { options, remaining };
 }
 
+/**
+ * Extract a global `--env-file <path>` flag from raw argv without disturbing
+ * command-specific parsing. Returns the resolved path (default `.env`) and
+ * the remaining args with the flag removed.
+ *
+ * Only scans the leading run of global flags before the subcommand token (or
+ * a `--` separator). Once a non-flag token is seen — the subcommand — the
+ * rest of argv is passed through untouched, so `bp eval`/`bp exec` payloads
+ * that happen to contain the literal string `--env-file` are never consumed.
+ * A dangling trailing `--env-file` (no path argument) is a usage error, not a
+ * silent fallback to `.env`.
+ */
+export function extractEnvFileFlag(args: string[]): {
+  envFile: string;
+  remaining: string[];
+  explicit: boolean;
+  error?: string;
+} {
+  let envFile = '.env';
+  let explicit = false;
+  const remaining: string[] = [];
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]!;
+    if (arg === '--') {
+      remaining.push(...args.slice(i));
+      break;
+    }
+    if (arg === '--env-file') {
+      const next = args[i + 1];
+      if (next === undefined) {
+        return {
+          envFile,
+          remaining,
+          explicit,
+          error: '--env-file requires a file path argument',
+        };
+      }
+      envFile = next;
+      explicit = true;
+      i++;
+      continue;
+    }
+    if (arg.startsWith('-')) {
+      remaining.push(arg);
+      continue;
+    }
+    // First non-flag token is the subcommand; stop scanning and pass the
+    // rest of argv through unchanged.
+    remaining.push(...args.slice(i));
+    break;
+  }
+
+  return { envFile, remaining, explicit };
+}
+
 async function main(): Promise<void> {
-  const args = process.argv.slice(2);
+  const rawArgs = process.argv.slice(2);
+  const {
+    envFile,
+    remaining: argsAfterEnvFile,
+    explicit: envFileExplicit,
+    error: envFileError,
+  } = extractEnvFileFlag(rawArgs);
+
+  if (envFileError) {
+    console.error(`Error: ${envFileError}`);
+    process.exit(1);
+  }
+
+  const dotenvDisabled = ['1', 'true'].includes(
+    (process.env['BROWSER_PILOT_NO_DOTENV'] ?? '').trim().toLowerCase()
+  );
+  if (!dotenvDisabled) {
+    loadDotenv(envFile, { warnOnMissing: envFileExplicit });
+  }
+
+  const args = argsAfterEnvFile;
 
   if (
     args.length === 0 ||

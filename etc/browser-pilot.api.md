@@ -62,6 +62,43 @@ export function addBatchToPage(page: Page): Page & {
 };
 
 // @public (undocumented)
+export interface ArtifactPutOptions {
+    // (undocumented)
+    ctx: OperationContext;
+    overwrite?: boolean;
+    // (undocumented)
+    path: string;
+    // (undocumented)
+    type: string;
+}
+
+// @public
+export type ArtifactPutResult = {
+    status: 'written';
+    ref: string;
+    path: string;
+    size: number;
+    hash: string;
+    type: string;
+} | {
+    status: 'write_pending_after_deadline';
+    ref: string;
+    path: string;
+    error: string;
+} | {
+    status: 'failed';
+    path: string;
+    error: string;
+    dispatched: boolean;
+};
+
+// @public
+export interface ArtifactSink {
+    // (undocumented)
+    put(bytes: Uint8Array, opts: ArtifactPutOptions): Promise<ArtifactPutResult>;
+}
+
+// @public (undocumented)
 export interface AssertionBeforeState {
     // (undocumented)
     capturedAt: string;
@@ -162,28 +199,14 @@ export interface BatchResult {
     totalDurationMs: number;
 }
 
-// @public (undocumented)
-export class Browser {
-    get cdpClient(): CDPClient;
-    close(): Promise<void>;
-    closePage(name: string): Promise<void>;
+// Warning: (ae-forgotten-export) The symbol "Browser_2" needs to be exported by the entry point index.d.ts
+//
+// @public
+export class Browser extends Browser_2 {
+    // (undocumented)
     static connect(options: BrowserOptions): Promise<Browser>;
-    disconnect(): Promise<void>;
-    expectNewPage<T>(trigger: () => Promise<T> | T, options?: ExpectNewPageOptions): Promise<Page>;
-    static fromCDP(cdp: CDPClient, sessionInfo: {
-        wsUrl: string;
-        provider?: string;
-        sessionId?: string;
-    }): Browser;
-    get isConnected(): boolean;
-    // Warning: (ae-forgotten-export) The symbol "TargetInfo" needs to be exported by the entry point index.d.ts
-    listTargets(): Promise<TargetInfo[]>;
-    get metadata(): Record<string, unknown> | undefined;
-    newPage(url?: string, options?: NewPageOptions): Promise<Page>;
-    page(name?: string, options?: PageOptions): Promise<Page>;
-    get provenance(): BuildProvenance;
-    get sessionId(): string | undefined;
-    get wsUrl(): string;
+    // (undocumented)
+    static fromCDP(cdp: Parameters<typeof Browser_2.fromCDP>[0], sessionInfo: Parameters<typeof Browser_2.fromCDP>[1]): Browser;
 }
 
 // @public (undocumented)
@@ -194,6 +217,7 @@ export class BrowserBaseProvider implements Provider {
     createSession(options?: CreateSessionOptions): Promise<ProviderSession>;
     // (undocumented)
     readonly name = "browserbase";
+    releaseSession(sessionId: string): Promise<ProviderReleaseResult>;
     // (undocumented)
     resumeSession(sessionId: string): Promise<ProviderSession>;
 }
@@ -231,9 +255,11 @@ export class BrowserlessProvider implements Provider {
     readonly name = "browserless";
 }
 
-// @public
+// @public (undocumented)
 export interface BrowserOptions extends ConnectOptions {
     debug?: boolean;
+    localEndpointResolver?: LocalEndpointResolver;
+    secrets?: SecretsPort;
 }
 
 // @public
@@ -303,6 +329,13 @@ export type CandidateStrategy = 'testid' | 'role_name' | 'label' | 'scoped_text'
 
 // @public (undocumented)
 export function canonicalizeRecordingArtifact(value: unknown): RecordingManifest;
+
+// @public
+export class CapabilityError extends Error {
+    constructor(capability: string, message?: string);
+    // (undocumented)
+    readonly capability: string;
+}
 
 // @public
 export function captureBeforeState(page: Page, conditions: Condition[]): Promise<AssertionBeforeState>;
@@ -382,7 +415,7 @@ export interface CfAccessJwtResult {
 // @public
 export function chooseOption(page: Page, config: ComboboxConfig): Promise<ComboboxResult>;
 
-// @public (undocumented)
+// @public
 export type ChromeChannel = 'stable' | 'beta' | 'dev' | 'canary';
 
 // @public
@@ -391,6 +424,16 @@ export function classifyStaleError(error: unknown): StaleErrorClassification;
 // @public (undocumented)
 export interface ClearCookiesOptions {
     domain?: string;
+}
+
+// @public
+export function clearEnvOverrides(): void;
+
+// @public
+export interface Clock {
+    now(): number;
+    // (undocumented)
+    sleep(ms: number, signal?: AbortSignal): Promise<void>;
 }
 
 // @public
@@ -545,6 +588,7 @@ export interface ConnectOptions {
     profileId?: string;
     projectId?: string;
     provider: 'browserbase' | 'browserless' | 'browser-use' | 'generic';
+    providerSession?: ProviderSession;
     proxyCountryCode?: string | null;
     session?: CreateSessionOptions;
     timeout?: number;
@@ -605,7 +649,7 @@ export function createFingerprint(node: SnapshotNode, context: {
 }): SemanticFingerprint;
 
 // @public
-export function createProvider(options: ConnectOptions): Provider;
+export function createProvider(options: ConnectOptions, ports?: ProviderFactoryPorts): Provider;
 
 // @public (undocumented)
 export function createRecordingManifest(input: {
@@ -941,6 +985,12 @@ export function evaluateOutcome(page: Page, options: {
     retrySafe: boolean;
 }>;
 
+// @public
+export interface ExecutionContext extends OperationContext {
+    // (undocumented)
+    generation: string;
+}
+
 // @public (undocumented)
 export interface ExpectNewPageOptions {
     openerTargetId?: string;
@@ -1117,6 +1167,19 @@ export interface KeyValuePair {
 // @public
 export function listSockets(cdp: CDPClient, realms: EmitRealm[]): Promise<SocketCandidate[]>;
 
+// @public
+export interface LocalEndpointRequest {
+    // (undocumented)
+    channel?: ChromeChannel;
+    // (undocumented)
+    userDataDir?: string;
+}
+
+// @public
+export type LocalEndpointResolver = (request: LocalEndpointRequest) => Promise<{
+    wsUrl: string;
+}>;
+
 // @public (undocumented)
 export interface MatchedCondition {
     // (undocumented)
@@ -1174,6 +1237,15 @@ export class NetworkResponseTracker {
 // @public (undocumented)
 export interface NewPageOptions {
     background?: boolean;
+}
+
+// @public
+export interface OperationContext {
+    // (undocumented)
+    clock: Clock;
+    deadline?: number;
+    // (undocumented)
+    signal: AbortSignal;
 }
 
 // @public (undocumented)
@@ -1440,8 +1512,21 @@ export interface Provider {
 }
 
 // @public
+export interface ProviderFactoryPorts {
+    secrets?: SecretsPort;
+}
+
+// @public
+export interface ProviderReleaseResult {
+    error?: string;
+    providerStatus?: string;
+    sessionId: string;
+    status: 'released' | 'cleanup_pending' | 'already_released';
+}
+
+// @public (undocumented)
 export interface ProviderSession {
-    close(): Promise<void>;
+    close(): Promise<void | ProviderReleaseResult>;
     metadata?: Record<string, unknown>;
     sessionId?: string;
     wsUrl: string;
@@ -1871,6 +1956,12 @@ export interface RouteOptions {
 export function scoreElement(query: string, element: InteractiveElement): number;
 
 // @public
+export interface SecretsPort {
+    // (undocumented)
+    get(name: string): string | undefined;
+}
+
+// @public
 export interface SemanticFingerprint {
     label: string;
     name: string;
@@ -1880,6 +1971,40 @@ export interface SemanticFingerprint {
     siblingIndex: number;
     stableAttrs: Record<string, string>;
     valueShape: string;
+}
+
+// @public
+export interface SessionHandle {
+    // (undocumented)
+    generation: string;
+    // (undocumented)
+    id: string;
+    // (undocumented)
+    leaseExpiresAt?: number;
+    // (undocumented)
+    provider: string;
+    // (undocumented)
+    sessionId?: string;
+}
+
+// @public
+export type SessionOpenOptions = {
+    provider: 'browserbase' | 'browserless' | 'browser-use' | 'generic';
+    wsUrl?: string;
+    session?: CreateSessionOptions;
+};
+
+// @public
+export interface SessionOwner {
+    // (undocumented)
+    open(opts: SessionOpenOptions, ctx: ExecutionContext): Promise<SessionHandle>;
+    // (undocumented)
+    release(handle: SessionHandle, ctx: ExecutionContext): Promise<ProviderReleaseResult>;
+    // (undocumented)
+    resolve(handle: SessionHandle, ctx: ExecutionContext): Promise<{
+        wsUrl: string;
+    }>;
+    touch?(handle: SessionHandle, ctx: ExecutionContext): Promise<SessionHandle>;
 }
 
 // @public (undocumented)
@@ -1894,6 +2019,9 @@ export interface SetCookieOptions {
     url?: string;
     value: string;
 }
+
+// @public
+export function setEnvOverrides(overrides: Record<string, string | undefined>): void;
 
 // @public
 export function shouldRetry(options: ShouldRetryOptions): RetryDecision;
@@ -2539,6 +2667,9 @@ export interface WebMCPToolDescriptor {
 }
 
 // @public
+export function withEnv<T>(overrides: Record<string, string | undefined>, fn: () => Promise<T> | T): Promise<T>;
+
+// @public
 export interface WorkflowStepSummary {
     // (undocumented)
     actionId?: string;
@@ -2579,12 +2710,12 @@ export interface WorkflowSummary {
 
 // Warnings were encountered during analysis:
 //
-// dist/index.d.ts:394:5 - (ae-forgotten-export) The symbol "CanonicalTraceEvent" needs to be exported by the entry point index.d.ts
-// dist/page-DFkt_onI.d.ts:1035:9 - (ae-forgotten-export) The symbol "CoveringElement" needs to be exported by the entry point index.d.ts
-// dist/page-DFkt_onI.d.ts:1036:9 - (ae-forgotten-export) The symbol "HitElement" needs to be exported by the entry point index.d.ts
-// dist/page-DFkt_onI.d.ts:1037:9 - (ae-forgotten-export) The symbol "PointerEventsDiagnosis" needs to be exported by the entry point index.d.ts
-// dist/types-FT1tAI0H.d.ts:73:9 - (ae-forgotten-export) The symbol "LocalBrowserCandidate" needs to be exported by the entry point index.d.ts
-// dist/types-FT1tAI0H.d.ts:74:9 - (ae-forgotten-export) The symbol "LocalDiscoveryFailure" needs to be exported by the entry point index.d.ts
+// dist/index.d.ts:398:5 - (ae-forgotten-export) The symbol "CanonicalTraceEvent" needs to be exported by the entry point index.d.ts
+// dist/page-0BIQ7oeS.d.ts:494:9 - (ae-forgotten-export) The symbol "CoveringElement" needs to be exported by the entry point index.d.ts
+// dist/page-0BIQ7oeS.d.ts:495:9 - (ae-forgotten-export) The symbol "HitElement" needs to be exported by the entry point index.d.ts
+// dist/page-0BIQ7oeS.d.ts:496:9 - (ae-forgotten-export) The symbol "PointerEventsDiagnosis" needs to be exported by the entry point index.d.ts
+// dist/providers.d.ts:77:9 - (ae-forgotten-export) The symbol "LocalBrowserCandidate" needs to be exported by the entry point index.d.ts
+// dist/providers.d.ts:78:9 - (ae-forgotten-export) The symbol "LocalDiscoveryFailure" needs to be exported by the entry point index.d.ts
 
 // (No @packageDocumentation comment for this package)
 

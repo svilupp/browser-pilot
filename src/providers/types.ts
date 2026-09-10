@@ -2,7 +2,12 @@
  * Provider type definitions
  */
 
-import type { ChromeChannel } from './local-discovery.ts';
+/**
+ * Local Chrome release channel used for auto-discovery (generic provider).
+ * Defined here (not in `local-discovery.ts`) so portable code can reference
+ * the type without pulling Node-only discovery code into its import graph.
+ */
+export type ChromeChannel = 'stable' | 'beta' | 'dev' | 'canary';
 
 export interface ProviderSession {
   /** WebSocket URL to connect to CDP */
@@ -11,8 +16,25 @@ export interface ProviderSession {
   sessionId?: string;
   /** Additional metadata from the provider */
   metadata?: Record<string, unknown>;
-  /** Close the provider session */
-  close(): Promise<void>;
+  /** Close the provider session. May resolve with release details for providers that support them. */
+  close(): Promise<void | ProviderReleaseResult>;
+}
+
+/** Outcome of a provider session release/close attempt. */
+export interface ProviderReleaseResult {
+  /**
+   * `released` — confirmed terminal state with the provider.
+   * `already_released` — provider reports the session no longer exists (e.g. 404/410).
+   * `cleanup_pending` — release was requested/attempted but terminal state was not
+   *   confirmed within the deadline, or the request failed (see `error`).
+   */
+  status: 'released' | 'cleanup_pending' | 'already_released';
+  /** Provider-specific session ID this result pertains to. */
+  sessionId: string;
+  /** Raw provider-reported status at the time of the last check, if known. */
+  providerStatus?: string;
+  /** Error detail when the release could not be confirmed. */
+  error?: string;
 }
 
 export interface Provider {
@@ -68,4 +90,10 @@ export interface ConnectOptions {
   profileId?: string;
   /** Session timeout in minutes for Browser Use provider (max 240) */
   cloudTimeout?: number;
+  /**
+   * Pre-created session for trusted in-process use. Its URL may contain credentials
+   * and its close callback cannot cross RPC. Skips provider creation. connect()
+   * takes ownership and attempts release if connection setup fails.
+   */
+  providerSession?: ProviderSession;
 }

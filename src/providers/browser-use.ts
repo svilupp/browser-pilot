@@ -3,7 +3,16 @@
  * https://browser-use.com/
  */
 
-import type { CreateSessionOptions, Provider, ProviderSession } from './types.ts';
+import type {
+  CreateSessionOptions,
+  Provider,
+  ProviderReleaseResult,
+  ProviderSession,
+} from './types.ts';
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
 
 export interface BrowserUseOptions {
   apiKey: string;
@@ -64,7 +73,7 @@ export class BrowserUseProvider implements Provider {
     if (this.allowResizing !== undefined) body['allowResizing'] = this.allowResizing;
     if (this.customProxy) body['customProxy'] = this.customProxy;
 
-    const response = await fetch(`${this.baseUrl}/browsers`, {
+    const response = await this.request('createSession', '/browsers', {
       method: 'POST',
       headers: {
         'X-Browser-Use-API-Key': this.apiKey,
@@ -74,32 +83,50 @@ export class BrowserUseProvider implements Provider {
     });
 
     if (!response.ok) {
-      const text = await response.text();
-      this.throwApiError(response.status, text);
+      this.throwApiError('createSession', response.status);
     }
 
-    const session = (await response.json()) as BrowserUseSession;
+    let session: BrowserUseSession | undefined;
+    let sessionId: string | undefined;
+    try {
+      session = await this.readSession(response);
+      sessionId = session.id;
 
-    if (!session.cdpUrl) {
-      throw new Error('Browser Use session does not have a cdpUrl');
+      if (!session.cdpUrl) {
+        throw new Error('Browser Use session does not have a cdpUrl');
+      }
+    } catch (error) {
+      // The session may already exist on Browser Use's side even though
+      // setup failed locally. Best-effort release it so we don't leak a
+      // billable cloud session, without masking the original failure.
+      if (sessionId) {
+        const cleanup = await this.releaseSession(sessionId);
+        if (error instanceof Error) {
+          (error as Error & { cause?: unknown }).cause = { cleanup };
+        }
+      }
+      throw error;
     }
 
     return this.toProviderSession(session);
   }
 
   async resumeSession(sessionId: string): Promise<ProviderSession> {
-    const response = await fetch(`${this.baseUrl}/browsers/${sessionId}`, {
-      headers: {
-        'X-Browser-Use-API-Key': this.apiKey,
-      },
-    });
+    const response = await this.request(
+      'resumeSession',
+      `/browsers/${encodeURIComponent(sessionId)}`,
+      {
+        headers: {
+          'X-Browser-Use-API-Key': this.apiKey,
+        },
+      }
+    );
 
     if (!response.ok) {
-      const text = await response.text();
-      throw new Error(`Browser Use resumeSession failed: ${response.status} ${text}`);
+      this.throwApiError('resumeSession', response.status);
     }
 
-    const session = (await response.json()) as BrowserUseSession;
+    const session = await this.readSession(response);
 
     if (session.status !== 'active' || !session.cdpUrl) {
       throw new Error(
@@ -120,31 +147,85 @@ export class BrowserUseProvider implements Provider {
         timeoutAt: session.timeoutAt,
         proxyCountryCode: this.proxyCountryCode,
       },
-      close: async () => {
-        await fetch(`${this.baseUrl}/browsers/${session.id}`, {
+      close: () => this.releaseSession(session.id),
+    };
+  }
+
+  private async releaseSession(sessionId: string): Promise<ProviderReleaseResult> {
+    try {
+      const response = await this.request(
+        'stopSession',
+        `/browsers/${encodeURIComponent(sessionId)}`,
+        {
           method: 'PATCH',
           headers: {
             'X-Browser-Use-API-Key': this.apiKey,
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({ action: 'stop' }),
-        });
-      },
-    };
+        }
+      );
+      if (response.status === 404 || response.status === 410) {
+        return { status: 'already_released', sessionId };
+      }
+      if (!response.ok) this.throwApiError('stopSession', response.status);
+      const stopped = await this.readSession(response);
+      if (stopped.id !== sessionId) throw new Error('Browser Use returned a different session ID');
+      if (stopped.status === 'stopped') {
+        return { status: 'released', sessionId, providerStatus: 'stopped' };
+      }
+      return { status: 'cleanup_pending', sessionId, providerStatus: 'active' };
+    } catch (error) {
+      // Only locally constructed diagnostics reach this point: request/body
+      // failures are normalized below, without untrusted response contents.
+      return {
+        status: 'cleanup_pending',
+        sessionId,
+        error: error instanceof Error ? error.message : 'Browser Use stopSession failed',
+      };
+    }
   }
 
-  private throwApiError(status: number, body: string): never {
+  private async request(operation: string, path: string, init: RequestInit): Promise<Response> {
+    try {
+      return await fetch(`${this.baseUrl}${path}`, init);
+    } catch {
+      // Fetch errors can contain reflected headers or credentials too.
+      throw new Error(`Browser Use ${operation} failed: Network error`);
+    }
+  }
+
+  private async readSession(response: Response): Promise<BrowserUseSession> {
+    let data: unknown;
+    try {
+      data = await response.json();
+    } catch {
+      throw new Error('Browser Use returned invalid session JSON');
+    }
+    if (
+      !isRecord(data) ||
+      typeof data['id'] !== 'string' ||
+      !data['id'] ||
+      (data['status'] !== 'active' && data['status'] !== 'stopped')
+    ) {
+      throw new Error('Browser Use returned an invalid session response');
+    }
+    return data as unknown as BrowserUseSession;
+  }
+
+  private throwApiError(operation: string, status: number): never {
+    const prefix = `Browser Use ${operation} failed (HTTP ${status})`;
     switch (status) {
       case 402:
-        throw new Error(`Browser Use: insufficient credits (min $0.10 required). ${body}`);
+        throw new Error(`${prefix}: insufficient credits`);
       case 403:
-        throw new Error(`Browser Use: invalid API key. ${body}`);
+        throw new Error(`${prefix}: invalid API key`);
       case 422:
-        throw new Error(`Browser Use: validation error. ${body}`);
+        throw new Error(`${prefix}: validation error`);
       case 429:
-        throw new Error(`Browser Use: rate limit exceeded. ${body}`);
+        throw new Error(`${prefix}: rate limit exceeded`);
       default:
-        throw new Error(`Browser Use createSession failed: ${status} ${body}`);
+        throw new Error(prefix);
     }
   }
 }

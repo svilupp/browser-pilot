@@ -221,10 +221,14 @@ describe('BrowserUseProvider', () => {
       globalThis.fetch = async (url: string, init?: RequestInit) => {
         closeUrl = url;
         closeInit = init ?? {};
-        return new Response('{}', { status: 200 });
+        return Response.json(makeSession({ status: 'stopped' }));
       };
 
-      await result.close();
+      expect(await result.close()).toEqual({
+        status: 'released',
+        sessionId: session.id,
+        providerStatus: 'stopped',
+      });
 
       expect(closeUrl).toBe(`${BASE_URL}/browsers/sess-abc-123`);
       expect(closeInit.method).toBe('PATCH');
@@ -236,6 +240,55 @@ describe('BrowserUseProvider', () => {
   // ── Error handling ──────────────────────────────────────────────────
 
   describe('error handling', () => {
+    for (const operation of ['createSession', 'resumeSession'] as const) {
+      test(`${operation} discards credential-bearing HTTP error bodies`, async () => {
+        const reflected = {
+          token: FAKE_API_KEY,
+          authorization: `Bearer ${FAKE_API_KEY}`,
+          detail: 'PRIVATE_BODY',
+        };
+        mockFetch(reflected, 403);
+        const provider = new BrowserUseProvider({ apiKey: FAKE_API_KEY });
+        const attempt =
+          operation === 'createSession'
+            ? provider.createSession()
+            : provider.resumeSession('sess-abc-123');
+        let message = '';
+        try {
+          await attempt;
+        } catch (error) {
+          message = String(error);
+        }
+        expect(message).toContain('HTTP 403');
+        expect(message).toContain('invalid API key');
+        expect(message).not.toContain(FAKE_API_KEY);
+        expect(message).not.toContain('PRIVATE_BODY');
+      });
+
+      test(`${operation} discards credential-bearing network and JSON diagnostics`, async () => {
+        const provider = new BrowserUseProvider({ apiKey: FAKE_API_KEY });
+        const attempt = () =>
+          operation === 'createSession'
+            ? provider.createSession()
+            : provider.resumeSession('sess-abc-123');
+        for (const jsonFailure of [false, true]) {
+          // @ts-expect-error minimal mock
+          globalThis.fetch = async () => {
+            if (jsonFailure) return new Response(`invalid JSON ${FAKE_API_KEY}`);
+            throw new Error(`request headers included ${FAKE_API_KEY}`);
+          };
+          let message = '';
+          try {
+            await attempt();
+          } catch (error) {
+            message = String(error);
+          }
+          expect(message).toContain('Browser Use');
+          expect(message).not.toContain(FAKE_API_KEY);
+        }
+      });
+    }
+
     test('402 → insufficient credits message', async () => {
       mockFetchText('balance too low', 402);
       const provider = new BrowserUseProvider({ apiKey: FAKE_API_KEY });
@@ -250,7 +303,7 @@ describe('BrowserUseProvider', () => {
       await expect(provider.createSession()).rejects.toThrow('invalid API key');
     });
 
-    test('422 → includes validation details from response', async () => {
+    test('422 → reports validation failure without the raw response', async () => {
       mockFetchText('{"detail":"width must be positive"}', 422);
       const provider = new BrowserUseProvider({ apiKey: FAKE_API_KEY });
 
@@ -269,6 +322,43 @@ describe('BrowserUseProvider', () => {
       const provider = new BrowserUseProvider({ apiKey: FAKE_API_KEY });
 
       await expect(provider.createSession()).rejects.toThrow('does not have a cdpUrl');
+    });
+
+    test('missing cdpUrl after successful create → releases the leaked session', async () => {
+      const session = makeSession({ cdpUrl: null });
+      const requests: { url: string; init: RequestInit }[] = [];
+      // @ts-expect-error minimal mock
+      globalThis.fetch = async (url: string, init?: RequestInit) => {
+        requests.push({ url, init: init ?? {} });
+        if (requests.length === 1) {
+          return Response.json(session);
+        }
+        return Response.json(makeSession({ status: 'stopped' }));
+      };
+      const provider = new BrowserUseProvider({ apiKey: FAKE_API_KEY });
+
+      await expect(provider.createSession()).rejects.toThrow('does not have a cdpUrl');
+
+      expect(requests.length).toBe(2);
+      expect(requests[1]?.url).toBe(`${BASE_URL}/browsers/${session.id}`);
+      expect(requests[1]?.init.method).toBe('PATCH');
+      const body = JSON.parse(requests[1]?.init.body as string);
+      expect(body.action).toBe('stop');
+    });
+
+    test('invalid session JSON after successful create → does not attempt a release (no id known)', async () => {
+      const requests: { url: string; init: RequestInit }[] = [];
+      // @ts-expect-error minimal mock
+      globalThis.fetch = async (url: string, init?: RequestInit) => {
+        requests.push({ url, init: init ?? {} });
+        return new Response('not json', { status: 200 });
+      };
+      const provider = new BrowserUseProvider({ apiKey: FAKE_API_KEY });
+
+      await expect(provider.createSession()).rejects.toThrow('invalid session JSON');
+
+      // Only the createSession request was made; no id was recoverable to release.
+      expect(requests.length).toBe(1);
     });
 
     test('network failure → throws', async () => {
@@ -293,7 +383,7 @@ describe('BrowserUseProvider', () => {
 
     test('missing API key and no env var → throws with helpful message', () => {
       expect(() => createProvider({ provider: 'browser-use' })).toThrow(
-        'requires apiKey or BROWSER_USE_API_KEY env var'
+        'requires apiKey or BROWSER_USE_API_KEY through secrets'
       );
     });
 

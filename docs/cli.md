@@ -28,6 +28,30 @@ Global options:
 - `--pretty` emit readable text output
 - `--debug` enable CDP transport logs
 - `--trace` legacy alias for `--debug`
+- `--env-file <path>` load environment variables from a file (default: `.env`)
+
+The Node CLI loads simple dotenv assignments, quoted values, and comments without
+overriding existing environment variables. Set `BROWSER_PILOT_NO_DOTENV=1` to skip
+this loader. Bun loads its own environment files before the CLI runs; this flag
+does not disable Bun's loader. Multiline values and variable expansion are not
+supported by the Node loader.
+
+`bp connect --provider browserbase` reads `BROWSERBASE_API_KEY` and optional
+`BROWSERBASE_PROJECT_ID`. Omit the project ID only when the account has exactly
+one project. Explicit `--api-key` and `--project-id` take precedence. CLI sessions
+request `keepAlive: true` so commands and daemon handoffs can reconnect. This
+requires a [Browserbase paid plan](https://docs.browserbase.com/platform/browser/long-sessions/overview).
+
+`bp close` and `bp clean` release Browserbase sessions through the API using `BROWSERBASE_API_KEY`,
+including sessions created with an explicit `--api-key`. `close` JSON output includes
+`providerRelease`. Pending cleanup exits nonzero and retains the local record for
+another cleanup attempt. `clean` reports retained entries and counts only completed
+deletions; `--dry-run` makes no release requests. Failed setup also retains a record
+if release is pending. These cleanup rules apply to native CLI session records.
+
+The CLI rejects `--provider browserless`: its launch URLs create a new browser per
+connection. Use the direct library, or a generic endpoint whose reconnection and
+cleanup are managed by your host.
 
 Session transport:
 

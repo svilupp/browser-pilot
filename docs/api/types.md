@@ -18,6 +18,7 @@ interface ConnectOptions {
   proxyCountryCode?: string | null;
   profileId?: string;
   cloudTimeout?: number;
+  providerSession?: ProviderSession; // Trusted in-process session; URL may contain credentials.
 }
 
 interface CreateSessionOptions {
@@ -48,7 +49,14 @@ interface ProviderSession {
   wsUrl: string;
   sessionId?: string;
   metadata?: Record<string, unknown>;
-  close(): Promise<void>;
+  close(): Promise<void | ProviderReleaseResult>;
+}
+
+interface ProviderReleaseResult {
+  status: 'released' | 'cleanup_pending' | 'already_released';
+  sessionId: string;
+  providerStatus?: string;
+  error?: string;
 }
 ```
 

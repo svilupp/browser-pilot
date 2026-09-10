@@ -15,6 +15,7 @@ import {
   removeDaemonDescriptor,
 } from '../../daemon/registry.ts';
 import { output } from '../output.ts';
+import { releaseBrowserbaseSession } from '../provider-release.ts';
 import { deleteSession, getDefaultSession, loadSession, type SessionData } from '../session.ts';
 
 const CLOSE_HELP = `
@@ -23,6 +24,10 @@ bp close - Close a browser session
 Usage:
   bp close [session-id]
 
+Local options:
+  --force              Skip provider release and delete the local record only
+                       (warns that the remote session was not released)
+
 Global options:
   -s, --session <id>   Session to close (default: most recent)
   --json               Output JSON
@@ -30,10 +35,16 @@ Global options:
   --debug              Enable CDP transport debugging
   -h, --help           Show this help
 
+Browserbase sessions are released through the API using BROWSERBASE_API_KEY.
+Pending cleanup exits nonzero and keeps the local session for retry.
+Use --force to remove the local record without releasing the remote session
+(e.g. when BROWSERBASE_API_KEY is unavailable and the record is stuck).
+
 Examples:
   bp close                # Close the most recent session
   bp close dev            # Close session named "dev"
   bp close -s dev --json  # Close session, output as JSON
+  bp close dev --force    # Drop the local record without provider release
 `.trimEnd();
 
 async function detachDaemonTarget(session: SessionData): Promise<void> {
@@ -55,6 +66,19 @@ async function detachDaemonTarget(session: SessionData): Promise<void> {
   }
 }
 
+function parseCloseArgs(args: string[]): { sessionArg?: string; force: boolean } {
+  let force = false;
+  let sessionArg: string | undefined;
+  for (const arg of args) {
+    if (arg === '--force') {
+      force = true;
+    } else if (sessionArg === undefined) {
+      sessionArg = arg;
+    }
+  }
+  return { sessionArg, force };
+}
+
 export async function closeCommand(
   args: string[],
   globalOptions: { session?: string; format?: 'json' | 'pretty'; trace?: boolean; help?: boolean }
@@ -64,12 +88,14 @@ export async function closeCommand(
     return;
   }
 
+  const { sessionArg, force } = parseCloseArgs(args);
+
   // Get session
   let session: SessionData | null;
   if (globalOptions.session) {
     session = await loadSession(globalOptions.session);
-  } else if (args[0]) {
-    session = await loadSession(args[0]);
+  } else if (sessionArg) {
+    session = await loadSession(sessionArg);
   } else {
     session = await getDefaultSession();
     if (!session) {
@@ -86,6 +112,22 @@ export async function closeCommand(
     session.transport?.mode === 'daemon' &&
     !!session.transport.daemonId &&
     (await countSessionReferences(session.transport.daemonId)) > 1;
+  const forcedSkipRelease = force && !sharedDaemon && session.provider === 'browserbase';
+  const providerRelease =
+    sharedDaemon || force ? undefined : await releaseBrowserbaseSession(session);
+  if (providerRelease?.status === 'cleanup_pending') {
+    output(
+      {
+        success: false,
+        sessionId: session.id,
+        providerRelease,
+        message: 'Cleanup pending; retry bp close.',
+      },
+      globalOptions.format
+    );
+    process.exitCode = 1;
+    return;
+  }
   const keepLocalDaemon =
     session.provider === 'generic' &&
     session.transport?.mode === 'daemon' &&
@@ -150,8 +192,17 @@ export async function closeCommand(
     {
       success: true,
       sessionId: session.id,
-      message: 'Session closed',
+      message: forcedSkipRelease
+        ? 'Session closed (local record only; provider session was not released due to --force)'
+        : 'Session closed',
       daemonStopped: daemonStopped || undefined,
+      ...(providerRelease ? { providerRelease } : {}),
+      ...(forcedSkipRelease
+        ? {
+            warning:
+              'Browserbase session was not released; only the local record was removed (--force).',
+          }
+        : {}),
     },
     globalOptions.format
   );

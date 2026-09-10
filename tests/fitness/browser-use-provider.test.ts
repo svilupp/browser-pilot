@@ -20,7 +20,7 @@ test('browser-use is in ProviderType union in session.ts', async () => {
 });
 
 test('createProvider handles browser-use case', async () => {
-  const content = await Bun.file('src/providers/index.ts').text();
+  const content = await Bun.file('src/providers/factory.ts').text();
   expect(content).toContain("case 'browser-use':");
 });
 

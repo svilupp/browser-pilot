@@ -23,6 +23,7 @@ let sessions: Array<{
   wsUrl: string;
   lastActivity: string;
   daemon?: { pid: number; socketPath: string };
+  provider?: string;
 }> = [];
 
 mock.module('../../src/cli/session.ts', () => ({
@@ -77,6 +78,53 @@ async function captureJsonOutput(fn: () => Promise<void>): Promise<Record<string
 
   return JSON.parse(output) as Record<string, unknown>;
 }
+
+describe('bp clean --force', () => {
+  const STUCK_SESSION_ID = `bp-clean-stuck-${SESSION_SUFFIX}`;
+  let originalApiKey: string | undefined;
+
+  beforeEach(async () => {
+    deleteCalls.length = 0;
+    stopCalls.length = 0;
+    originalApiKey = process.env['BROWSERBASE_API_KEY'];
+    delete process.env['BROWSERBASE_API_KEY'];
+    sessions = [
+      {
+        id: STUCK_SESSION_ID,
+        wsUrl: 'ws://localhost/devtools/browser/stuck',
+        lastActivity: '2020-01-01T00:00:00.000Z',
+        provider: 'browserbase',
+      },
+    ];
+  });
+
+  afterEach(() => {
+    if (originalApiKey === undefined) delete process.env['BROWSERBASE_API_KEY'];
+    else process.env['BROWSERBASE_API_KEY'] = originalApiKey;
+  });
+
+  test('without --force, a keyless browserbase record is retained (not deleted)', async () => {
+    const payload = await captureJsonOutput(() => cleanCommand(['--all'], { format: 'json' }));
+
+    expect(deleteCalls).toEqual([]);
+    expect((payload['retained'] as Array<{ sessionId: string }>)[0]?.sessionId).toBe(
+      STUCK_SESSION_ID
+    );
+    process.exitCode = 0;
+  });
+
+  test('--force deletes the local record without provider release and warns', async () => {
+    const payload = await captureJsonOutput(() =>
+      cleanCommand(['--all', '--force'], { format: 'json' })
+    );
+
+    expect(deleteCalls).toEqual([STUCK_SESSION_ID]);
+    expect(payload['retained']).toBeUndefined();
+    expect(payload['warnings']).toEqual([
+      `Browserbase session was not released for ${STUCK_SESSION_ID}; only the local record was removed (--force).`,
+    ]);
+  });
+});
 
 describe('bp clean --max-size', () => {
   beforeEach(async () => {

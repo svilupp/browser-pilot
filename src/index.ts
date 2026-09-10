@@ -143,6 +143,8 @@ export {
   type InteractiveElement,
   isDestructiveName,
   type KeyValuePair,
+  type LocalEndpointRequest,
+  type LocalEndpointResolver,
   listSockets,
   NavigationError,
   type NavigationMilestone,
@@ -203,6 +205,20 @@ export {
   CDPError,
   createCDPClient,
 } from './cdp/index.ts';
+// Optional host integration contracts.
+export {
+  type ArtifactPutOptions,
+  type ArtifactPutResult,
+  type ArtifactSink,
+  CapabilityError,
+  type Clock,
+  type ExecutionContext,
+  type OperationContext,
+  type SecretsPort,
+  type SessionHandle,
+  type SessionOpenOptions,
+  type SessionOwner,
+} from './core/ports.ts';
 // Emulation
 export { type DeviceDescriptor, type DeviceName, devices } from './emulation/index.ts';
 // Network Interception
@@ -237,6 +253,8 @@ export {
   GenericProvider,
   getBrowserWebSocketUrl,
   type Provider,
+  type ProviderFactoryPorts,
+  type ProviderReleaseResult,
   type ProviderSession,
   parseDevToolsActivePortFile,
   type ResolvedBrowserEndpoint,
@@ -258,6 +276,8 @@ export {
   type RecordingScreenshot,
   validateRecordingManifest,
 } from './recording/index.ts';
+// Runtime env override hook (e.g. Cloudflare Workers without process.env).
+export { clearEnvOverrides, setEnvOverrides, withEnv } from './runtime/env.ts';
 // Storage (Cookies)
 export type {
   ClearCookiesOptions,

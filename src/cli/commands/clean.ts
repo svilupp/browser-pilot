@@ -15,8 +15,10 @@ import {
   readDaemonDescriptor,
   removeDaemonDescriptor,
 } from '../../daemon/registry.ts';
+import type { ProviderReleaseResult } from '../../providers/types.ts';
 import { output } from '../output.ts';
-import { deleteSessionFull, listSessions } from '../session.ts';
+import { releaseBrowserbaseSession } from '../provider-release.ts';
+import { deleteSessionFull, listSessions, type SessionData } from '../session.ts';
 
 const SESSION_DIR = join(homedir(), '.browser-pilot', 'sessions');
 
@@ -31,6 +33,13 @@ Local options:
   --max-size <size>    Remove oldest sessions until total size < limit (e.g. "100MB", "1GB")
   --dry-run            Show what would be removed without deleting
   --all                Remove all sessions regardless of age
+  --force              Skip provider release and delete local records only
+                       (warns that remote Browserbase sessions were not released)
+
+Browserbase sessions are released before deletion using BROWSERBASE_API_KEY.
+Pending or failed cleanup retains the session for retry and exits nonzero.
+Use --force to remove local records without provider release (e.g. when
+BROWSERBASE_API_KEY is unavailable and records are stuck).
 
 Global options:
   --json               Output JSON
@@ -43,6 +52,7 @@ Examples:
   bp clean --max-size 100MB  # Remove oldest sessions until under 100MB
   bp clean --dry-run         # Preview what would be cleaned
   bp clean --all             # Remove all sessions
+  bp clean --all --force     # Remove all local records without provider release
 `.trimEnd();
 
 interface CleanOptions {
@@ -50,6 +60,7 @@ interface CleanOptions {
   maxSize?: number; // bytes
   dryRun?: boolean;
   all?: boolean;
+  force?: boolean;
   help?: boolean;
 }
 
@@ -145,6 +156,8 @@ function parseCleanArgs(args: string[]): CleanOptions {
       options.dryRun = true;
     } else if (arg === '--all') {
       options.all = true;
+    } else if (arg === '--force') {
+      options.force = true;
     } else if (arg === '-h' || arg === '--help') {
       options.help = true;
     }
@@ -153,16 +166,16 @@ function parseCleanArgs(args: string[]): CleanOptions {
   return options;
 }
 
-async function deleteSessionWithDaemonStop(session: {
-  id: string;
-  wsUrl: string;
-  daemon?: { pid: number; socketPath: string } | null;
-  transport?: { mode: 'daemon' | 'direct'; daemonId?: string };
-}): Promise<void> {
+async function deleteSessionWithDaemonStop(
+  session: SessionData,
+  force: boolean
+): Promise<ProviderReleaseResult | undefined> {
   const shared =
     session.transport?.mode === 'daemon' &&
     !!session.transport.daemonId &&
     (await countSessionReferences(session.transport.daemonId)) > 1;
+  const providerRelease = shared || force ? undefined : await releaseBrowserbaseSession(session);
+  if (providerRelease?.status === 'cleanup_pending') return providerRelease;
   const descriptor =
     session.transport?.mode === 'daemon' && session.transport.daemonId
       ? await readDaemonDescriptor(session.transport.daemonId)
@@ -190,6 +203,46 @@ async function deleteSessionWithDaemonStop(session: {
   await deleteSessionFull(session.id, {
     preserveDaemonRuntime: shared || (ownerAlive && !identityMatches),
   });
+  return undefined;
+}
+
+async function cleanSelectedSessions(
+  sessions: SessionData[],
+  force = false
+): Promise<{
+  cleaned: string[];
+  retained: Array<{ sessionId: string; providerRelease?: ProviderReleaseResult; error?: string }>;
+  warnings: string[];
+}> {
+  const cleaned: string[] = [];
+  const retained: Array<{
+    sessionId: string;
+    providerRelease?: ProviderReleaseResult;
+    error?: string;
+  }> = [];
+  const warnings: string[] = [];
+  for (const session of sessions) {
+    try {
+      const providerRelease = await deleteSessionWithDaemonStop(session, force);
+      if (providerRelease) {
+        retained.push({ sessionId: session.id, providerRelease });
+      } else {
+        cleaned.push(session.id);
+        if (force && session.provider === 'browserbase') {
+          warnings.push(
+            `Browserbase session was not released for ${session.id}; only the local record was removed (--force).`
+          );
+        }
+      }
+    } catch (error) {
+      retained.push({
+        sessionId: session.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  if (retained.length > 0) process.exitCode = 1;
+  return { cleaned, retained, warnings };
 }
 
 async function cleanupRegisteredDaemons(
@@ -197,7 +250,19 @@ async function cleanupRegisteredDaemons(
   dryRun: boolean
 ): Promise<{ daemons: string[]; locks: string[] }> {
   const selected: string[] = [];
+  // These CLI records need confirmed provider release before their runtime
+  // can be removed. The per-session pass handles them, including --all.
+  const providerOwnedDaemons = new Set(
+    (await listSessions())
+      .filter(
+        (session) => session.provider === 'browserbase' && session.transport?.mode === 'daemon'
+      )
+      .map((session) =>
+        session.transport?.mode === 'daemon' ? session.transport.daemonId : undefined
+      )
+  );
   for (const descriptor of await listDaemonDescriptors()) {
+    if (providerOwnedDaemons.has(descriptor.id)) continue;
     // A missing socket plus a live PID is not enough proof to signal the PID;
     // it may have been reused by an unrelated process. `--all` is the explicit
     // operator override. Automatic cleanup handles only dead owners.
@@ -317,26 +382,31 @@ export async function cleanCommand(
       return;
     }
 
-    for (const session of toRemove) {
-      await deleteSessionWithDaemonStop(session);
-    }
+    const cleanup = await cleanSelectedSessions(toRemove, options.force === true);
+    // The selection above projected successful deletions. Retained records
+    // still count toward the size limit.
+    totalSize += toRemove
+      .filter((session) => !cleanup.cleaned.includes(session.id))
+      .reduce((sum, session) => sum + session.size, 0);
 
     output(
-      totalSize <= options.maxSize
-        ? {
-            message: `Cleaned ${toRemove.length} session(s)`,
-            cleaned: toRemove.length,
-            sessions: toRemove.map((s) => s.id),
-            ...registryDetails,
-          }
-        : {
-            message: `Cleaned ${toRemove.length} session(s), but the newest session still exceeds the size limit`,
-            cleaned: toRemove.length,
-            sessions: toRemove.map((s) => s.id),
-            kept: sessionsWithSize[0]?.id,
-            withinLimit: false,
-            ...registryDetails,
-          },
+      {
+        message:
+          `Cleaned ${cleanup.cleaned.length} session(s)` +
+          (cleanup.retained.length > 0
+            ? `; ${cleanup.retained.length} retained for retry`
+            : totalSize > options.maxSize
+              ? ', but the newest session still exceeds the size limit'
+              : ''),
+        cleaned: cleanup.cleaned.length,
+        sessions: cleanup.cleaned,
+        ...(totalSize > options.maxSize
+          ? { kept: sessionsWithSize[0]?.id, withinLimit: false }
+          : {}),
+        ...(cleanup.retained.length > 0 ? { retained: cleanup.retained } : {}),
+        ...(cleanup.warnings.length > 0 ? { warnings: cleanup.warnings } : {}),
+        ...registryDetails,
+      },
       globalOptions.format
     );
     return;
@@ -381,15 +451,17 @@ export async function cleanCommand(
     return;
   }
 
-  for (const session of stale) {
-    await deleteSessionWithDaemonStop(session);
-  }
+  const cleanup = await cleanSelectedSessions(stale, options.force === true);
 
   output(
     {
-      message: `Cleaned ${stale.length} session(s)`,
-      cleaned: stale.length,
-      sessions: stale.map((s) => s.id),
+      message:
+        `Cleaned ${cleanup.cleaned.length} session(s)` +
+        (cleanup.retained.length > 0 ? `; ${cleanup.retained.length} retained for retry` : ''),
+      cleaned: cleanup.cleaned.length,
+      sessions: cleanup.cleaned,
+      ...(cleanup.retained.length > 0 ? { retained: cleanup.retained } : {}),
+      ...(cleanup.warnings.length > 0 ? { warnings: cleanup.warnings } : {}),
       ...registryDetails,
     },
     globalOptions.format

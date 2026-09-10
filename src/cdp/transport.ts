@@ -23,17 +23,39 @@ export function createTransport(wsUrl: string, options: TransportOptions = {}): 
   const { timeout = 30000 } = options;
 
   return new Promise((resolve, reject) => {
-    const timeoutId = setTimeout(() => {
-      reject(new Error(`WebSocket connection timeout after ${timeout}ms`));
-    }, timeout);
-
+    // Construct before starting the timer: an invalid URL can throw synchronously.
     const ws = new WebSocket(wsUrl);
+    let connected = false;
+    let failed = false;
+    const failConnection = (error: Error) => {
+      if (connected || failed) return;
+      failed = true;
+      clearTimeout(timeoutId);
+      reject(error);
+      try {
+        ws.close();
+      } catch {
+        // The socket may already be closed or not support closing during handshake.
+      }
+    };
+    const timeoutId = setTimeout(() => {
+      failConnection(new Error(`WebSocket connection timeout after ${timeout}ms`));
+    }, timeout);
 
     const messageHandlers: Array<(message: string) => void> = [];
     const closeHandlers: Array<() => void> = [];
     const errorHandlers: Array<(error: Error) => void> = [];
 
     ws.addEventListener('open', () => {
+      if (failed) {
+        try {
+          ws.close();
+        } catch {
+          /* Already closed. */
+        }
+        return;
+      }
+      connected = true;
       clearTimeout(timeoutId);
 
       const transport: Transport = {
@@ -109,6 +131,7 @@ export function createTransport(wsUrl: string, options: TransportOptions = {}): 
     });
 
     ws.addEventListener('close', () => {
+      failConnection(new Error('WebSocket closed before connection opened'));
       for (const handler of closeHandlers) {
         handler();
       }
@@ -120,8 +143,7 @@ export function createTransport(wsUrl: string, options: TransportOptions = {}): 
       for (const handler of errorHandlers) {
         handler(error);
       }
-      // Only reject if we haven't resolved yet (during connection phase)
-      reject(error);
+      failConnection(error);
     });
   });
 }

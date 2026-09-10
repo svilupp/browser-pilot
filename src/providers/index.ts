@@ -3,7 +3,11 @@
  */
 
 export { type BrowserUseOptions, BrowserUseProvider } from './browser-use.ts';
-export { type BrowserBaseOptions, BrowserBaseProvider } from './browserbase.ts';
+export {
+  type BrowserBaseClock,
+  type BrowserBaseOptions,
+  BrowserBaseProvider,
+} from './browserbase.ts';
 export { type BrowserlessOptions, BrowserlessProvider } from './browserless.ts';
 export {
   discoverTargets,
@@ -14,7 +18,6 @@ export {
 export {
   BrowserEndpointResolutionError,
   buildLocalBrowserScanTargets,
-  type ChromeChannel,
   type ChromeUserDataDirOptions,
   type DiscoverLocalBrowsersOptions,
   discoverLocalBrowsers,
@@ -26,60 +29,24 @@ export {
 } from './local-discovery.ts';
 export * from './types.ts';
 
+import type { SecretsPort } from '../core/ports.ts';
 import { getEnv } from '../runtime/env.ts';
-import { BrowserUseProvider } from './browser-use.ts';
-import { BrowserBaseProvider } from './browserbase.ts';
-import { BrowserlessProvider } from './browserless.ts';
-import { GenericProvider } from './generic.ts';
+import { createProvider as createProviderCore, type ProviderFactoryPorts } from './factory.ts';
 import type { ConnectOptions, Provider } from './types.ts';
 
+export type { ProviderFactoryPorts } from './factory.ts';
+
+/** Env-backed secrets (honors `setEnvOverrides`); the Node default for this entry. */
+const envSecrets: SecretsPort = { get: getEnv };
+
 /**
- * Create a provider instance based on connection options
+ * Create a provider instance based on connection options.
+ *
+ * This Node-flavored wrapper falls back to environment variables
+ * (`BROWSERBASE_API_KEY`, ...) via an env-backed SecretsPort. For the
+ * portable, env-free variant import `createProvider` from
+ * `browser-pilot/core` and pass an explicit SecretsPort.
  */
-export function createProvider(options: ConnectOptions): Provider {
-  switch (options.provider) {
-    case 'browserbase':
-      if (!options.apiKey) {
-        throw new Error('BrowserBase provider requires apiKey');
-      }
-      if (!options.projectId) {
-        throw new Error('BrowserBase provider requires projectId');
-      }
-      return new BrowserBaseProvider({
-        apiKey: options.apiKey,
-        projectId: options.projectId,
-      });
-
-    case 'browserless':
-      if (!options.apiKey) {
-        throw new Error('Browserless provider requires apiKey (token)');
-      }
-      return new BrowserlessProvider({
-        token: options.apiKey,
-      });
-
-    case 'browser-use': {
-      const apiKey = options.apiKey ?? getEnv('BROWSER_USE_API_KEY');
-      if (!apiKey) {
-        throw new Error('Browser Use provider requires apiKey or BROWSER_USE_API_KEY env var');
-      }
-      return new BrowserUseProvider({
-        apiKey,
-        proxyCountryCode: options.proxyCountryCode === undefined ? 'uk' : options.proxyCountryCode,
-        profileId: options.profileId,
-        timeout: options.cloudTimeout,
-      });
-    }
-
-    case 'generic':
-      if (!options.wsUrl) {
-        throw new Error('Generic provider requires wsUrl');
-      }
-      return new GenericProvider({
-        wsUrl: options.wsUrl,
-      });
-
-    default:
-      throw new Error(`Unknown provider: ${options.provider}`);
-  }
+export function createProvider(options: ConnectOptions, ports?: ProviderFactoryPorts): Provider {
+  return createProviderCore(options, { secrets: ports?.secrets ?? envSecrets });
 }

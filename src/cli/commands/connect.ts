@@ -53,7 +53,7 @@ Usage:
   bp connect [options]
 
 Local options:
-  -p, --provider <type>   Provider: generic | browserbase | browserless | browser-use (default: generic)
+  -p, --provider <type>   Provider: generic | browserbase | browser-use (default: generic)
   --browser-url <ws-url>  Explicit browser WebSocket URL (preferred)
   --page-url <url>        Page URL to open in the attached tab/new tab (preferred)
   --url <value>           Compatibility shorthand; browser URL, or page URL with --new-tab
@@ -65,11 +65,16 @@ Local options:
   --new-tab               Create and attach to a fresh tab instead of reusing an existing one
   --foreground            With --new-tab, opt into foregrounding the created tab
   --target-url <str>      Filter targets to those whose URL contains this string
-  --api-key <key>         API key for cloud providers
-  --project-id <id>       Project ID for BrowserBase provider
+  --api-key <key>         API key for cloud providers. Falls back to
+                          BROWSERBASE_API_KEY / BROWSER_USE_API_KEY depending on --provider
+  --project-id <id>       Project ID for BrowserBase provider (optional;
+                          falls back to BROWSERBASE_PROJECT_ID, and is
+                          auto-resolved from the API key when omitted)
   --proxy-country <code>  Proxy country code for browser-use (default: uk)
   --profile-id <id>       Browser profile ID for browser-use
   --cloud-timeout <mins>  Session timeout in minutes for browser-use (max 240)
+  Browserbase sessions use keepAlive: true for reconnection (requires a paid plan).
+  Browserless launch URLs cannot be reused by CLI sessions; use the direct library.
   --export-log <path>     Export session log to file on close
   --record                Enable screenshot recording for all subsequent exec calls
   --record-format <fmt>   Screenshot format: webp (default), png, jpeg
@@ -319,6 +324,11 @@ export async function connectCommand(
 
   // Determine provider and connection details
   const provider: ProviderType = options.provider ?? 'generic';
+  if (provider === 'browserless') {
+    throw new Error(
+      'CLI sessions cannot reconnect Browserless launch URLs. Use the direct browser library, or a generic endpoint whose reconnection lifecycle is managed by your host.'
+    );
+  }
   let wsUrl = options.browserUrl ?? options.url;
   let pageUrl = options.pageUrl;
   let connectionSource: 'explicit-ws' | 'devtools-active-port' | 'json-version' | undefined;
@@ -380,6 +390,8 @@ export async function connectCommand(
     proxyCountryCode: options.proxyCountry,
     profileId: options.profileId,
     cloudTimeout: options.cloudTimeout,
+    // Both direct commands and the cloud daemon handoff reconnect to this session.
+    ...(provider === 'browserbase' ? { session: { keepAlive: true } } : {}),
   };
 
   // Generic/local sessions can be daemon-first because discovery already gave
@@ -392,241 +404,295 @@ export async function connectCommand(
   let browser!: Awaited<ReturnType<typeof connect>>;
   let page: Page;
 
-  if (useDaemon) {
-    try {
-      const created = await createLocalSession({
-        wsUrl: wsUrl!,
-        trace: globalOptions.trace,
-        name: sessionId,
-        newTab: options.newTab,
-        pageUrl,
-        targetUrl: options.targetUrl,
-        foreground: options.foreground,
-        daemonIdleMins: options.daemonIdleMins,
-        connectionSource,
-        resolvedChannel,
-        resolvedUserDataDir,
-        metadata: { provenance: getBuildProvenance() },
-      });
-      browser = created.browser;
-      page = created.page;
-      daemonSession = created.session;
-      sessionDaemonId =
-        created.session.transport?.mode === 'daemon'
-          ? created.session.transport.daemonId
-          : undefined;
-    } catch (error) {
-      if (browser?.isConnected) {
-        await browser.disconnect().catch(() => {});
-      }
-      throw new Error(
-        `Could not start the session daemon: ${error instanceof Error ? error.message : String(error)}`
-      );
-    }
-  } else {
-    browser = await connect(connectOptions);
-    page = options.newTab
-      ? await browser.newPage(pageUrl ?? 'about:blank', { background: options.foreground !== true })
-      : await browser.page(
-          undefined,
-          options.targetUrl !== undefined ? { targetUrl: options.targetUrl } : undefined
+  try {
+    if (useDaemon) {
+      try {
+        const created = await createLocalSession({
+          wsUrl: wsUrl!,
+          trace: globalOptions.trace,
+          name: sessionId,
+          newTab: options.newTab,
+          pageUrl,
+          targetUrl: options.targetUrl,
+          foreground: options.foreground,
+          daemonIdleMins: options.daemonIdleMins,
+          connectionSource,
+          resolvedChannel,
+          resolvedUserDataDir,
+          metadata: { provenance: getBuildProvenance() },
+        });
+        browser = created.browser;
+        page = created.page;
+        daemonSession = created.session;
+        sessionDaemonId =
+          created.session.transport?.mode === 'daemon'
+            ? created.session.transport.daemonId
+            : undefined;
+      } catch (error) {
+        if (browser?.isConnected) {
+          await browser.disconnect().catch(() => {});
+        }
+        throw new Error(
+          `Could not start the session daemon: ${error instanceof Error ? error.message : String(error)}`
         );
-  }
-  let currentUrl = await resolveInitialPageUrl(page, pageUrl);
-
-  if (browser.metadata?.['liveUrl']) {
-    console.error(`\nLive viewer: ${browser.metadata['liveUrl']}\n`);
-  }
-
-  // Apply Cloudflare Access sugar (--cf-access) before persisting the session,
-  // so the resulting EnvSettings.auth is reapplied on every attach/reattach.
-  let cfAccessAuth: EnvSettings['auth'] | undefined;
-  if (options.cfAccess) {
-    const mode = options.cfAccessMode ?? 'cookie';
-    if (currentUrl === 'about:blank') {
-      throw new Error(
-        '--cf-access requires a target URL. Pass --page-url <url> (with --new-tab) or --url <url>.'
-      );
-    }
-
-    const clientId = getEnv('CF_ACCESS_CLIENT_ID');
-    const clientSecret = getEnv('CF_ACCESS_CLIENT_SECRET');
-    if (!clientId || !clientSecret) {
-      throw new Error(
-        '--cf-access requires CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET to be set in the environment.'
-      );
-    }
-
-    if (mode === 'headers') {
-      await page.setExtraHTTPHeaders({
-        'CF-Access-Client-Id': clientId,
-        'CF-Access-Client-Secret': clientSecret,
-      });
-      cfAccessAuth = {
-        extraHeaders: {
-          fromEnv: {
-            'CF-Access-Client-Id': 'CF_ACCESS_CLIENT_ID',
-            'CF-Access-Client-Secret': 'CF_ACCESS_CLIENT_SECRET',
-          },
-        },
-      };
+      }
     } else {
-      // Mint against the explicit --page-url when given, not the possibly-racy
-      // currentUrl resolved from polling: on an Access-protected origin, the
-      // page may still be sitting on the *.cloudflareaccess.com login
-      // redirect when we sample the URL, which would mint the JWT against the
-      // wrong origin/cookie domain.
-      const mintUrl = pageUrl ?? currentUrl;
-      const { cookie } = await mintCfAccessJwt({
-        url: mintUrl,
-        clientId,
-        clientSecret,
-      });
-      await page.setCookie(cookie);
-      // If we navigated before the cookie was set, the first load may have
-      // hit the Access login redirect instead of the target origin. Re-issue
-      // the navigation now that the cookie is in place so the session lands
-      // on the intended page.
-      if (pageUrl && pageUrl !== 'about:blank') {
-        await page.goto(pageUrl);
-        currentUrl = await page.url();
-      }
-      // The minted JWT is persisted by design (proposal §3): it expires per
-      // the Access session policy, unlike a long-lived client secret.
-      cfAccessAuth = { cookies: [{ ...cookie }] };
+      browser = await connect(connectOptions);
+      page = options.newTab
+        ? await browser.newPage(pageUrl ?? 'about:blank', {
+            background: options.foreground !== true,
+          })
+        : await browser.page(
+            undefined,
+            options.targetUrl !== undefined ? { targetUrl: options.targetUrl } : undefined
+          );
     }
-  }
+    let currentUrl = await resolveInitialPageUrl(page, pageUrl);
 
-  // Build session-level recording settings if --record flag is set
-  let recordSettings: RecordSettings | undefined;
-  if (options.record) {
-    recordSettings = {};
-    if (options.recordFormat) recordSettings.format = options.recordFormat;
-    if (options.recordQuality !== undefined) recordSettings.quality = options.recordQuality;
-    if (options.noHighlights) recordSettings.highlights = false;
-  }
-
-  // Save session
-  const session: SessionData = {
-    id: sessionId,
-    provider,
-    wsUrl: browser.wsUrl,
-    providerSessionId: browser.sessionId,
-    targetId: page.targetId,
-    exportLog: options.exportLog,
-    createdAt: new Date().toISOString(),
-    lastActivity: new Date().toISOString(),
-    currentUrl,
-    daemon: daemonSession?.daemon,
-    transport: useDaemon
-      ? { mode: 'daemon', daemonId: sessionDaemonId }
-      : {
-          mode: 'direct',
-          reason: options.noDaemon ? 'flag' : daemonDisabledByEnv ? 'environment' : 'legacy',
-        },
-    metadata: {
-      ...browser.metadata,
-      ...(connectionSource ? { connectionSource } : {}),
-      ...(resolvedChannel ? { resolvedChannel } : {}),
-      ...(resolvedUserDataDir ? { resolvedUserDataDir } : {}),
-      ...(recordSettings ? { record: recordSettings } : {}),
-      ...(cfAccessAuth ? { env: { auth: cfAccessAuth } } : {}),
-      provenance: getBuildProvenance(),
-    },
-  };
-  const outputMetadata = session.metadata;
-
-  if (daemonSession) {
-    await saveSession(session);
-  } else {
-    try {
-      await createSession(session);
-    } catch (error) {
-      await browser.disconnect().catch(() => {});
-      throw error;
+    if (browser.metadata?.['liveUrl']) {
+      console.error(`\nLive viewer: ${browser.metadata['liveUrl']}\n`);
     }
-  }
 
-  // Disconnect (session can be resumed via daemon or direct WebSocket)
-  await browser.disconnect();
-
-  // Spawn daemon unless --no-daemon
-  let daemonResult: { pid: number; socketPath: string } | undefined;
-
-  if (!options.noDaemon && !daemonDisabledByEnv && !useDaemon) {
-    try {
-      const idleTimeoutMs = options.daemonIdleMins ? options.daemonIdleMins * 60 * 1000 : undefined;
-
-      const spawned = spawnDaemon(sessionId, idleTimeoutMs);
-
-      // Wait for daemon to become ready (writes daemon info to session file)
-      const ready = await waitForDaemonReady(getSessionFilePath(sessionId), spawned.pid);
-      if (!ready) {
-        await stopDaemon(spawned.pid).catch(() => false);
-        throw new Error(`Daemon did not become ready within ${3000}ms (pid ${spawned.pid})`);
+    // Apply Cloudflare Access sugar (--cf-access) before persisting the session,
+    // so the resulting EnvSettings.auth is reapplied on every attach/reattach.
+    let cfAccessAuth: EnvSettings['auth'] | undefined;
+    if (options.cfAccess) {
+      const mode = options.cfAccessMode ?? 'cookie';
+      if (currentUrl === 'about:blank') {
+        throw new Error(
+          '--cf-access requires a target URL. Pass --page-url <url> (with --new-tab) or --url <url>.'
+        );
       }
-      // Re-read session to get daemon info
-      const updated = await loadSession(sessionId);
-      if (updated.daemon) {
+
+      const clientId = getEnv('CF_ACCESS_CLIENT_ID');
+      const clientSecret = getEnv('CF_ACCESS_CLIENT_SECRET');
+      if (!clientId || !clientSecret) {
+        throw new Error(
+          '--cf-access requires CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET to be set in the environment.'
+        );
+      }
+
+      if (mode === 'headers') {
+        await page.setExtraHTTPHeaders({
+          'CF-Access-Client-Id': clientId,
+          'CF-Access-Client-Secret': clientSecret,
+        });
+        cfAccessAuth = {
+          extraHeaders: {
+            fromEnv: {
+              'CF-Access-Client-Id': 'CF_ACCESS_CLIENT_ID',
+              'CF-Access-Client-Secret': 'CF_ACCESS_CLIENT_SECRET',
+            },
+          },
+        };
+      } else {
+        // Mint against the explicit --page-url when given, not the possibly-racy
+        // currentUrl resolved from polling: on an Access-protected origin, the
+        // page may still be sitting on the *.cloudflareaccess.com login
+        // redirect when we sample the URL, which would mint the JWT against the
+        // wrong origin/cookie domain.
+        const mintUrl = pageUrl ?? currentUrl;
+        const { cookie } = await mintCfAccessJwt({
+          url: mintUrl,
+          clientId,
+          clientSecret,
+        });
+        await page.setCookie(cookie);
+        // If we navigated before the cookie was set, the first load may have
+        // hit the Access login redirect instead of the target origin. Re-issue
+        // the navigation now that the cookie is in place so the session lands
+        // on the intended page.
+        if (pageUrl && pageUrl !== 'about:blank') {
+          await page.goto(pageUrl);
+          currentUrl = await page.url();
+        }
+        // The minted JWT is persisted by design (proposal §3): it expires per
+        // the Access session policy, unlike a long-lived client secret.
+        cfAccessAuth = { cookies: [{ ...cookie }] };
+      }
+    }
+
+    // Build session-level recording settings if --record flag is set
+    let recordSettings: RecordSettings | undefined;
+    if (options.record) {
+      recordSettings = {};
+      if (options.recordFormat) recordSettings.format = options.recordFormat;
+      if (options.recordQuality !== undefined) recordSettings.quality = options.recordQuality;
+      if (options.noHighlights) recordSettings.highlights = false;
+    }
+
+    // Save session
+    const session: SessionData = {
+      id: sessionId,
+      provider,
+      wsUrl: browser.wsUrl,
+      providerSessionId: browser.sessionId,
+      targetId: page.targetId,
+      exportLog: options.exportLog,
+      createdAt: new Date().toISOString(),
+      lastActivity: new Date().toISOString(),
+      currentUrl,
+      daemon: daemonSession?.daemon,
+      transport: useDaemon
+        ? { mode: 'daemon', daemonId: sessionDaemonId }
+        : {
+            mode: 'direct',
+            reason: options.noDaemon ? 'flag' : daemonDisabledByEnv ? 'environment' : 'legacy',
+          },
+      metadata: {
+        ...browser.metadata,
+        ...(connectionSource ? { connectionSource } : {}),
+        ...(resolvedChannel ? { resolvedChannel } : {}),
+        ...(resolvedUserDataDir ? { resolvedUserDataDir } : {}),
+        ...(recordSettings ? { record: recordSettings } : {}),
+        ...(cfAccessAuth ? { env: { auth: cfAccessAuth } } : {}),
+        provenance: getBuildProvenance(),
+      },
+    };
+    const outputMetadata = session.metadata;
+
+    if (daemonSession) {
+      await saveSession(session);
+    } else {
+      try {
+        await createSession(session);
+      } catch (error) {
+        await browser.disconnect().catch(() => {});
+        throw error;
+      }
+    }
+
+    // Disconnect (session can be resumed via daemon or direct WebSocket)
+    await browser.disconnect();
+
+    // Spawn daemon unless --no-daemon
+    let daemonResult: { pid: number; socketPath: string } | undefined;
+
+    if (!options.noDaemon && !daemonDisabledByEnv && !useDaemon) {
+      try {
+        const idleTimeoutMs = options.daemonIdleMins
+          ? options.daemonIdleMins * 60 * 1000
+          : undefined;
+
+        // The CLI daemon reads its identity once at startup. Persist the
+        // cloud session's bootstrap contract before spawning, just as the
+        // local CLI connection service does for local sessions.
         const connectionKey = connectionKeyForBrowser({
           provider,
-          wsUrl: updated.wsUrl,
-          userDataDir: updated.metadata?.resolvedUserDataDir,
-          ...(updated.metadata?.connectionSource === 'json-version'
-            ? { legacyHost: new URL(updated.wsUrl).host }
+          wsUrl: session.wsUrl,
+          userDataDir: session.metadata?.resolvedUserDataDir,
+          ...(session.metadata?.connectionSource === 'json-version'
+            ? { legacyHost: new URL(session.wsUrl).host }
             : {}),
-          providerSessionId: updated.providerSessionId,
+          providerSessionId: session.providerSessionId,
         });
         const daemonId = daemonIdForConnection(connectionKey);
         await updateSession(sessionId, { transport: { mode: 'daemon', daemonId } });
-        await writeDaemonDescriptor({
-          schemaVersion: 1,
-          id: daemonId,
-          connectionKey,
-          endpointFingerprint: endpointFingerprint(updated.wsUrl),
-          pid: updated.daemon.pid,
-          socketPath: updated.daemon.socketPath,
-          startedAt: updated.daemon.startedAt,
-          ...(updated.daemon.heartbeatPath ? { heartbeatPath: updated.daemon.heartbeatPath } : {}),
-        });
-        daemonResult = {
-          pid: updated.daemon.pid,
-          socketPath: updated.daemon.socketPath,
-        };
+        const spawned = spawnDaemon(sessionId, idleTimeoutMs);
+
+        // Wait for daemon to become ready (writes daemon info to session file)
+        const ready = await waitForDaemonReady(getSessionFilePath(sessionId), spawned.pid);
+        if (!ready) {
+          await stopDaemon(spawned.pid).catch(() => false);
+          throw new Error(`Daemon did not become ready within ${3000}ms (pid ${spawned.pid})`);
+        }
+        // Re-read session to get daemon info
+        const updated = await loadSession(sessionId);
+        if (updated.daemon) {
+          await writeDaemonDescriptor({
+            schemaVersion: 1,
+            id: daemonId,
+            connectionKey,
+            endpointFingerprint: endpointFingerprint(updated.wsUrl),
+            pid: updated.daemon.pid,
+            socketPath: updated.daemon.socketPath,
+            startedAt: updated.daemon.startedAt,
+            ...(updated.daemon.heartbeatPath
+              ? { heartbeatPath: updated.daemon.heartbeatPath }
+              : {}),
+          });
+          daemonResult = {
+            pid: updated.daemon.pid,
+            socketPath: updated.daemon.socketPath,
+          };
+        }
+      } catch (error) {
+        // Do not silently downgrade a requested daemon session to a second
+        // direct WebSocket connection; that is what caused repeated permission
+        // prompts and makes lifecycle failures invisible.
+        // Keep Browserbase's cleanup handle: keepAlive survives a failed daemon handoff.
+        if (provider !== 'browserbase') await deleteSession(sessionId).catch(() => {});
+        throw new Error(
+          `Could not start the session daemon: ${error instanceof Error ? error.message : String(error)}` +
+            (provider === 'browserbase'
+              ? `; session ${sessionId} retained for retry or bp close.`
+              : '')
+        );
       }
-    } catch (error) {
-      // Do not silently downgrade a requested daemon session to a second
-      // direct WebSocket connection; that is what caused repeated permission
-      // prompts and makes lifecycle failures invisible.
-      await deleteSession(sessionId).catch(() => {});
-      throw new Error(
-        `Could not start the session daemon: ${error instanceof Error ? error.message : String(error)}`
-      );
     }
-  }
 
-  if (useDaemon && daemonSession?.daemon) {
-    daemonResult = {
-      pid: daemonSession.daemon.pid,
-      socketPath: daemonSession.daemon.socketPath,
-    };
-  }
+    if (useDaemon && daemonSession?.daemon) {
+      daemonResult = {
+        pid: daemonSession.daemon.pid,
+        socketPath: daemonSession.daemon.socketPath,
+      };
+    }
 
-  output(
-    {
-      success: true,
-      sessionId,
-      provider,
-      currentUrl,
-      recording: !!recordSettings,
-      transport: useDaemon ? 'daemon' : 'direct',
-      connectionSource,
-      resolvedChannel,
-      resolvedUserDataDir,
-      provenance: getBuildProvenance(),
-      metadata: outputMetadata,
-      daemon: daemonResult,
-    },
-    globalOptions.format
-  );
+    output(
+      {
+        success: true,
+        sessionId,
+        provider,
+        currentUrl,
+        recording: !!recordSettings,
+        transport: daemonResult ? 'daemon' : 'direct',
+        connectionSource,
+        resolvedChannel,
+        resolvedUserDataDir,
+        provenance: getBuildProvenance(),
+        metadata: outputMetadata,
+        daemon: daemonResult,
+      },
+      globalOptions.format
+    );
+  } catch (error) {
+    if (provider === 'browserbase' && browser) {
+      if (await sessionExists(sessionId).catch(() => false)) {
+        await browser.disconnect().catch(() => {});
+      } else {
+        // Setup failed before the normal record was written. Release the
+        // keep-alive session, retaining a cleanup handle if release is pending.
+        const release = await browser.close().catch(() => undefined);
+        if (!release || release.status === 'cleanup_pending') {
+          try {
+            await createSession({
+              id: sessionId,
+              provider,
+              wsUrl: browser.wsUrl,
+              providerSessionId: browser.sessionId,
+              createdAt: new Date().toISOString(),
+              lastActivity: new Date().toISOString(),
+              currentUrl: 'about:blank',
+              transport: { mode: 'direct', reason: 'recovery' },
+              metadata: browser.metadata,
+            });
+          } catch (recordError) {
+            console.error(
+              `Warning: Browserbase setup failed and the local cleanup record could not be persisted ` +
+                `for session ${sessionId} (provider session ${browser.sessionId}). ` +
+                `The remote keep-alive session may still be running; clean it up manually via the ` +
+                `Browserbase dashboard. Record error: ` +
+                `${recordError instanceof Error ? recordError.message : String(recordError)}`
+            );
+            throw error;
+          }
+          throw new Error(
+            `Browserbase setup failed; cleanup pending for session ${sessionId}. Retry bp close.`,
+            { cause: error }
+          );
+        }
+      }
+    }
+    throw error;
+  }
 }

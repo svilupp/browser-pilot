@@ -1,6 +1,66 @@
 # Changelog
 
-## Unreleased
+## [0.5.0] - 2026-09-09
+
+### Added
+
+- New portable entry points: `browser-pilot/core` (host-agnostic `connectCore`/`createProvider`
+  with `Clock`, `ExecutionContext`, `SecretsPort`, `SessionOwner`, and `ArtifactSink` ports and a
+  `CapabilityError` for unsupported capabilities), `browser-pilot/adapters/node`,
+  `browser-pilot/adapters/memory`, shell-agnostic `bp` command core at `browser-pilot/shell`
+  (`runBp`, `BrowserPilotShellPorts`, capability/limits contracts, `SessionOwner`/`ArtifactSink`/`Clock`),
+  and thin `browser-pilot/just-bash` adapter (`registerBrowserPilotCommands`, `addBrowserPilotCommands`)
+  binding to just-bash `Command` (optional peer dependency).
+- `ConnectOptions.providerSession` lets trusted in-process callers inject a pre-created
+  `ProviderSession`, skipping provider/session creation; `connect()` takes ownership and attempts
+  release if setup fails.
+- Node CLI now loads `.env` files by default (`--env-file <path>` to override, `BROWSER_PILOT_NO_DOTENV=1`
+  to disable), with a new `.env.example`.
+- Root export now provides `setEnvOverrides`, `clearEnvOverrides`, and `withEnv` (from `src/runtime/env.ts`) so hosts without `process.env` (e.g. Cloudflare Workers) can inject credentials; `browser-pilot/core` itself never reads env and instead takes a `SecretsPort`.
+- Browserbase provider: `projectId` is now optional and auto-resolves via `GET /v1/projects` when
+  exactly one project exists; falls back to `BROWSERBASE_API_KEY`/`BROWSERBASE_PROJECT_ID` env vars
+  when not passed explicitly.
+- New docs: architecture overview (`docs/architecture.md`) and a just-bash integration guide
+  (`docs/guides/just-bash.md`).
+- Portability fitness tests (`tests/fitness/core-portability.test.ts`,
+  `tests/fitness/packed-exports.test.ts`) guard the new entry points against Node-only imports and
+  export drift.
+
+### Changed
+
+- Hardened the Browserbase provider: bounded per-request timeouts (`requestTimeoutMs`, default
+  30s) and a bounded release/poll budget (`releaseTimeoutMs`, default 10s) with a pollable,
+  injectable `Clock`; `close()` is idempotent and returns a `ProviderReleaseResult`
+  (`released` / `already_released` / `cleanup_pending`) instead of `void`; session release now
+  issues `POST` to `REQUEST_RELEASE` and polls for terminal status; viewport dimensions are nested
+  correctly under `browserSettings.viewport` instead of top-level `width`/`height`; provider errors
+  redact raw response bodies. CLI and in-process owned sessions enable keep-alive;
+  CLI commands reuse the saved endpoint; `bp close` and `bp clean` retain pending cleanup for retry.
+  Browserless launch URLs are rejected by reconnecting CLI and in-process owners.
+- `Browser.close()` now returns `Promise<ProviderReleaseResult | undefined>` instead of
+  `Promise<void>`, surfacing provider release status to callers.
+- `resumeSession` is wired through `connect()`: when a `sessionId` is supplied and the resolved
+  provider supports `resumeSession`, the existing session is resumed instead of a new one created.
+- `ArtifactSink` (`src/artifacts`) implements the Appendix A artifact contract, including a
+  Node filesystem-backed implementation and an in-memory implementation for portable/testing use.
+
+### Fixed
+
+- `connect()` throws `CapabilityError` instead of silently creating a new session when
+  `session.sessionId` is passed but the provider does not support resumption.
+- Cloud sessions are no longer leaked when connection setup fails partway (browser-use
+  create validation, aborted opens, Browserbase CLI recovery).
+- `bp close` / `bp clean` accept `--force` to drop a stuck local session record when the
+  provider session cannot be released (e.g. missing `BROWSERBASE_API_KEY`).
+- `--env-file` no longer consumes arguments after the subcommand, and an explicitly given
+  but missing env file now warns instead of being silently ignored.
+- CLI works on Node 18 (no longer requires `AbortSignal.any`).
+
+### Breaking
+
+- `Browser.close()` and `ProviderSession.close()` return `ProviderReleaseResult` (or `undefined`/`void`) instead of `void`; custom `ProviderSession` implementations should return a result.
+- Missing hosted-provider credentials now throw `CapabilityError` (still an `Error`) with new wording, e.g. "BrowserBase provider requires apiKey: pass `apiKey` or provide BROWSERBASE_API_KEY through secrets".
+- `createProvider` no longer requires `projectId` for Browserbase.
 
 ## [0.4.2] - 2026-08-31
 

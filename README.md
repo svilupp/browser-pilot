@@ -100,7 +100,7 @@ const browser = await connect({
 });
 ```
 
-## The 0.1.0 interface
+## Interface
 
 - **Target-safe control:** each page keeps its own CDP session. Target selection, popups, workers,
   and cross-origin iframes are explicit and isolated.
@@ -217,6 +217,37 @@ For persisted auth that survives reattach/daemon restarts, use `bp env auth set-
 `set-headers` (see [CLI Guide](./docs/cli.md)). Full design and lifecycle semantics:
 [Cloudflare Access auth proposal](./docs/proposals/cloudflare-access-auth.md).
 
+## Package exports
+
+| Export | Use |
+|---|---|
+| `browser-pilot` | Node/Bun library, including environment credentials and local browser discovery |
+| `browser-pilot/core` | Browser/Page APIs and providers with explicit connection options; no local discovery or environment fallback |
+| `browser-pilot/browser`, `/cdp`, `/providers`, `/actions` | Focused entries for the browser, CDP, provider, and action layers |
+| `browser-pilot/adapters/node` | Optional in-process session owner and filesystem artifact sink |
+| `browser-pilot/adapters/memory` | Test doubles and an in-memory artifact sink |
+| `browser-pilot/shell` | Shell-agnostic shell commands over the shared browser APIs |
+| `browser-pilot/just-bash` | Thin `just-bash` command binding over `browser-pilot/shell` |
+| `browser-pilot/cli` | Native `bp` command |
+
+```ts
+// Portable connection with explicit credentials or a pre-created session.
+import { connectCore } from 'browser-pilot/core';
+
+const browser = await connectCore({ provider: 'generic', wsUrl });
+try {
+  const page = await browser.page();
+  await page.goto('https://example.com');
+} finally {
+  await browser.close();
+}
+```
+
+Flightplan, the native CLI, and embedding applications use the same Browser, Page, and action receipt
+contracts. The [shell adapter](./docs/guides/just-bash.md) covers common operations;
+consumers can add commands using the public library. See [Architecture](./docs/architecture.md)
+for runtime boundaries and optional host adapters.
+
 ## Providers
 
 Use [Browser Use](https://browser-use.com) when local Chrome is unavailable:
@@ -228,10 +259,23 @@ BROWSER_USE_API_KEY=bu_... bp connect --provider browser-use
 See [Providers](./docs/providers.md) for BrowserBase, Browserless, local Chrome, and direct CDP
 connections.
 
+BrowserBase reads `BROWSERBASE_API_KEY` (and optional `BROWSERBASE_PROJECT_ID`, auto-resolved from
+the key when exactly one project exists) as an environment fallback for `apiKey`/`projectId`.
+Copy [`.env.example`](./.env.example) to `.env` to set these locally. The Node CLI loads `.env`
+without overriding existing variables; use `--env-file <path>` to select a file or
+`BROWSER_PILOT_NO_DOTENV=1` to disable its loader. Bun has its own environment loader.
+See [CLI configuration](./docs/cli.md#install) for supported dotenv syntax.
+
+`browser.close()` returns a release status for hosted providers; retry on `cleanup_pending` (see [Providers](./docs/providers.md)).
+
 ## Documentation
 
 - [Getting Started](./docs/getting-started.md)
 - [CLI Guide](./docs/cli.md)
+- [Architecture](./docs/architecture.md)
+- [Providers](./docs/providers.md)
+- [Shell / just-bash adapter](./docs/guides/just-bash.md)
+- [Cloudflare Workers](./docs/guides/cloudflare-workers.md)
 - [Automation workflows](./docs/guides/automation-workflows.md)
 - [Action recording](./docs/guides/action-recording.md)
 - [Trace workflows](./docs/guides/trace-workflows.md)

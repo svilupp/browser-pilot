@@ -1,6 +1,6 @@
 {
   "name": "browser-pilot",
-  "version": "0.4.2",
+  "version": "0.5.0",
   "description": "Lightweight CDP-based browser automation for Node.js, Bun, and Cloudflare Workers",
   "type": "module",
   "repository": {
@@ -42,6 +42,29 @@
       "types": "./dist/actions.d.ts",
       "import": "./dist/actions.mjs",
       "require": "./dist/actions.cjs"
+    },
+    "./core": {
+      "types": "./dist/core/index.d.ts",
+      "import": "./dist/core/index.mjs",
+      "require": "./dist/core/index.cjs"
+    },
+    "./adapters/node": {
+      "types": "./dist/adapters/node/index.d.ts",
+      "import": "./dist/adapters/node/index.mjs",
+      "require": "./dist/adapters/node/index.cjs"
+    },
+    "./adapters/memory": {
+      "types": "./dist/adapters/memory/index.d.ts",
+      "import": "./dist/adapters/memory/index.mjs",
+      "require": "./dist/adapters/memory/index.cjs"
+    },
+    "./shell": {
+      "types": "./dist/shell/index.d.ts",
+      "import": "./dist/shell/index.mjs"
+    },
+    "./just-bash": {
+      "types": "./dist/just-bash/index.d.ts",
+      "import": "./dist/just-bash/index.mjs"
     },
     "./cli": {
       "types": "./dist/cli.d.ts",
@@ -95,9 +118,18 @@
     "@microsoft/api-extractor": "^7.57.7",
     "@types/bun": "latest",
     "chrome-launcher": "^1.2.1",
+    "just-bash": "^3.4.2",
     "oxlint": "^1.51.0",
     "oxlint-tsgolint": "^0.16.0",
     "tsup": "^8.0.0"
+  },
+  "peerDependencies": {
+    "just-bash": ">=3.4.0"
+  },
+  "peerDependenciesMeta": {
+    "just-bash": {
+      "optional": true
+    }
   },
   "publishConfig": {
     "access": "public"
