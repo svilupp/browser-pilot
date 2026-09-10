@@ -324,6 +324,43 @@ describe('BrowserUseProvider', () => {
       await expect(provider.createSession()).rejects.toThrow('does not have a cdpUrl');
     });
 
+    test('missing cdpUrl after successful create → releases the leaked session', async () => {
+      const session = makeSession({ cdpUrl: null });
+      const requests: { url: string; init: RequestInit }[] = [];
+      // @ts-expect-error minimal mock
+      globalThis.fetch = async (url: string, init?: RequestInit) => {
+        requests.push({ url, init: init ?? {} });
+        if (requests.length === 1) {
+          return Response.json(session);
+        }
+        return Response.json(makeSession({ status: 'stopped' }));
+      };
+      const provider = new BrowserUseProvider({ apiKey: FAKE_API_KEY });
+
+      await expect(provider.createSession()).rejects.toThrow('does not have a cdpUrl');
+
+      expect(requests.length).toBe(2);
+      expect(requests[1]?.url).toBe(`${BASE_URL}/browsers/${session.id}`);
+      expect(requests[1]?.init.method).toBe('PATCH');
+      const body = JSON.parse(requests[1]?.init.body as string);
+      expect(body.action).toBe('stop');
+    });
+
+    test('invalid session JSON after successful create → does not attempt a release (no id known)', async () => {
+      const requests: { url: string; init: RequestInit }[] = [];
+      // @ts-expect-error minimal mock
+      globalThis.fetch = async (url: string, init?: RequestInit) => {
+        requests.push({ url, init: init ?? {} });
+        return new Response('not json', { status: 200 });
+      };
+      const provider = new BrowserUseProvider({ apiKey: FAKE_API_KEY });
+
+      await expect(provider.createSession()).rejects.toThrow('invalid session JSON');
+
+      // Only the createSession request was made; no id was recoverable to release.
+      expect(requests.length).toBe(1);
+    });
+
     test('network failure → throws', async () => {
       // @ts-expect-error minimal mock
       globalThis.fetch = async () => {

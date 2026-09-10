@@ -73,6 +73,74 @@ describe('MemoryArtifactSink', () => {
     expect(result.dispatched).toBe(false);
   });
 
+  test('normalizes a/../b to b, matching NodeArtifactSink semantics', async () => {
+    const sink = MemoryArtifactSink();
+    const ctx = makeCtx();
+    const result = await sink.put(new Uint8Array([1]), {
+      path: 'a/../b',
+      type: 'text/plain',
+      ctx,
+    });
+    expect(result.status).toBe('written');
+    if (result.status !== 'written') throw new Error('expected written');
+    expect(result.ref).toBe('memory://b');
+    expect(sink.store.has('b')).toBe(true);
+    expect(sink.store.has('a')).toBe(false);
+  });
+
+  test('still rejects traversal that escapes the root after normalization', async () => {
+    const sink = MemoryArtifactSink();
+    const ctx = makeCtx();
+    const result = await sink.put(new Uint8Array([1]), {
+      path: 'a/../../escape.txt',
+      type: 'text/plain',
+      ctx,
+    });
+    expect(result.status).toBe('failed');
+    if (result.status !== 'failed') throw new Error('expected failed');
+    expect(result.dispatched).toBe(false);
+  });
+
+  test('rejects put("a/b") after put("a") - parent path component is not a directory', async () => {
+    const sink = MemoryArtifactSink();
+    const first = await sink.put(new Uint8Array([1]), {
+      path: 'a',
+      type: 'text/plain',
+      ctx: makeCtx(),
+    });
+    expect(first.status).toBe('written');
+
+    const result = await sink.put(new Uint8Array([2]), {
+      path: 'a/b',
+      type: 'text/plain',
+      ctx: makeCtx(),
+    });
+    expect(result.status).toBe('failed');
+    if (result.status !== 'failed') throw new Error('expected failed');
+    expect(result.dispatched).toBe(false);
+    expect(sink.store.has('a/b')).toBe(false);
+  });
+
+  test('rejects put("a") when "a" is already a directory (has a/b stored)', async () => {
+    const sink = MemoryArtifactSink();
+    const first = await sink.put(new Uint8Array([1]), {
+      path: 'a/b',
+      type: 'text/plain',
+      ctx: makeCtx(),
+    });
+    expect(first.status).toBe('written');
+
+    const result = await sink.put(new Uint8Array([2]), {
+      path: 'a',
+      type: 'text/plain',
+      ctx: makeCtx(),
+    });
+    expect(result.status).toBe('failed');
+    if (result.status !== 'failed') throw new Error('expected failed');
+    expect(result.dispatched).toBe(false);
+    expect(sink.store.has('a')).toBe(false);
+  });
+
   test('rejects absolute path', async () => {
     const sink = MemoryArtifactSink();
     const ctx = makeCtx();

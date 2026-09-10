@@ -41,7 +41,7 @@ export interface SessionData {
   /** Explicit transport policy used for this session. */
   transport?:
     | { mode: 'daemon'; daemonId?: string }
-    | { mode: 'direct'; reason: 'flag' | 'environment' | 'legacy' };
+    | { mode: 'direct'; reason: 'flag' | 'environment' | 'legacy' | 'recovery' };
 }
 
 export interface RefCache {

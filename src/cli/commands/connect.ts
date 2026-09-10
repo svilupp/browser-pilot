@@ -664,17 +664,28 @@ export async function connectCommand(
         // keep-alive session, retaining a cleanup handle if release is pending.
         const release = await browser.close().catch(() => undefined);
         if (!release || release.status === 'cleanup_pending') {
-          await createSession({
-            id: sessionId,
-            provider,
-            wsUrl: browser.wsUrl,
-            providerSessionId: browser.sessionId,
-            createdAt: new Date().toISOString(),
-            lastActivity: new Date().toISOString(),
-            currentUrl: 'about:blank',
-            transport: { mode: 'direct', reason: 'legacy' },
-            metadata: browser.metadata,
-          });
+          try {
+            await createSession({
+              id: sessionId,
+              provider,
+              wsUrl: browser.wsUrl,
+              providerSessionId: browser.sessionId,
+              createdAt: new Date().toISOString(),
+              lastActivity: new Date().toISOString(),
+              currentUrl: 'about:blank',
+              transport: { mode: 'direct', reason: 'recovery' },
+              metadata: browser.metadata,
+            });
+          } catch (recordError) {
+            console.error(
+              `Warning: Browserbase setup failed and the local cleanup record could not be persisted ` +
+                `for session ${sessionId} (provider session ${browser.sessionId}). ` +
+                `The remote keep-alive session may still be running; clean it up manually via the ` +
+                `Browserbase dashboard. Record error: ` +
+                `${recordError instanceof Error ? recordError.message : String(recordError)}`
+            );
+            throw error;
+          }
           throw new Error(
             `Browserbase setup failed; cleanup pending for session ${sessionId}. Retry bp close.`,
             { cause: error }

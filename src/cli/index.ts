@@ -166,32 +166,77 @@ export function parseGlobalOptions(args: string[]): {
  * Extract a global `--env-file <path>` flag from raw argv without disturbing
  * command-specific parsing. Returns the resolved path (default `.env`) and
  * the remaining args with the flag removed.
+ *
+ * Only scans the leading run of global flags before the subcommand token (or
+ * a `--` separator). Once a non-flag token is seen — the subcommand — the
+ * rest of argv is passed through untouched, so `bp eval`/`bp exec` payloads
+ * that happen to contain the literal string `--env-file` are never consumed.
+ * A dangling trailing `--env-file` (no path argument) is a usage error, not a
+ * silent fallback to `.env`.
  */
-function extractEnvFileFlag(args: string[]): { envFile: string; remaining: string[] } {
+export function extractEnvFileFlag(args: string[]): {
+  envFile: string;
+  remaining: string[];
+  explicit: boolean;
+  error?: string;
+} {
   let envFile = '.env';
+  let explicit = false;
   const remaining: string[] = [];
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]!;
-    if (arg === '--env-file') {
-      envFile = args[++i] ?? envFile;
-    } else {
-      remaining.push(arg);
+    if (arg === '--') {
+      remaining.push(...args.slice(i));
+      break;
     }
+    if (arg === '--env-file') {
+      const next = args[i + 1];
+      if (next === undefined) {
+        return {
+          envFile,
+          remaining,
+          explicit,
+          error: '--env-file requires a file path argument',
+        };
+      }
+      envFile = next;
+      explicit = true;
+      i++;
+      continue;
+    }
+    if (arg.startsWith('-')) {
+      remaining.push(arg);
+      continue;
+    }
+    // First non-flag token is the subcommand; stop scanning and pass the
+    // rest of argv through unchanged.
+    remaining.push(...args.slice(i));
+    break;
   }
 
-  return { envFile, remaining };
+  return { envFile, remaining, explicit };
 }
 
 async function main(): Promise<void> {
   const rawArgs = process.argv.slice(2);
-  const { envFile, remaining: argsAfterEnvFile } = extractEnvFileFlag(rawArgs);
+  const {
+    envFile,
+    remaining: argsAfterEnvFile,
+    explicit: envFileExplicit,
+    error: envFileError,
+  } = extractEnvFileFlag(rawArgs);
+
+  if (envFileError) {
+    console.error(`Error: ${envFileError}`);
+    process.exit(1);
+  }
 
   const dotenvDisabled = ['1', 'true'].includes(
     (process.env['BROWSER_PILOT_NO_DOTENV'] ?? '').trim().toLowerCase()
   );
   if (!dotenvDisabled) {
-    loadDotenv(envFile);
+    loadDotenv(envFile, { warnOnMissing: envFileExplicit });
   }
 
   const args = argsAfterEnvFile;

@@ -40,6 +40,7 @@ describe('CLI provider lifecycle', () => {
     'commands',
     'setup-failed',
     'setup-pending',
+    'setup-pending-record-failed',
     'daemon-failed',
     'browserless',
   ] as const) {
@@ -56,6 +57,13 @@ describe('CLI provider lifecycle', () => {
           spawnDaemon: () => { throw new Error('scripted daemon failure'); },
           waitForDaemonReady: async () => false,
         }));
+        if (scenario === 'setup-pending-record-failed') {
+          const sessionModule = await import('./src/cli/session.ts');
+          mock.module('./src/cli/session.ts', () => ({
+            ...sessionModule,
+            createSession: async () => { throw new Error('scripted disk failure'); },
+          }));
+        }
         const { Browser } = await import('./src/browser/connect.ts');
         const { createProvider } = await import('./src/providers/index.ts');
         const { connectCommand } = await import('./src/cli/commands/connect.ts');
@@ -63,7 +71,7 @@ describe('CLI provider lifecycle', () => {
         const { textCommand } = await import('./src/cli/commands/text.ts');
         const { sessionExists, loadSession } = await import('./src/cli/session.ts');
         let creates = 0, releases = 0, disconnects = 0;
-        let keepAlive = false, alive = false, failRelease = scenario === 'setup-pending';
+        let keepAlive = false, alive = false, failRelease = scenario === 'setup-pending' || scenario === 'setup-pending-record-failed';
         let currentUrl = 'https://fixture.test/preserved';
         const remote = { id: 'remote-session', projectId: 'project', connectUrl: 'wss://fixture.invalid/session' };
         globalThis.fetch = async (url, init) => {
@@ -107,6 +115,15 @@ describe('CLI provider lifecycle', () => {
           await assert.rejects(connectCommand(args, {}), /cannot reconnect Browserless/);
           assert.equal(creates, 0);
           assert.equal(await sessionExists('test'), false);
+        } else if (scenario === 'setup-pending-record-failed') {
+          // The local record could not be persisted; the original page failure
+          // must be rethrown (not replaced by the createSession error), and a
+          // warning naming the leaked provider session must reach stderr.
+          await assert.rejects(connectCommand(args, {}), /scripted page failure/);
+          assert.equal(creates, 1);
+          assert.equal(releases, 1);
+          assert.equal(await sessionExists('test'), false);
+          assert.equal(alive, true);
         } else if (scenario.startsWith('setup-')) {
           await assert.rejects(connectCommand(args, {}), /scripted page failure|cleanup pending/);
           assert.equal(creates, 1);
@@ -114,6 +131,7 @@ describe('CLI provider lifecycle', () => {
           assert.equal(await sessionExists('test'), failRelease);
           if (failRelease) {
             assert.equal((await loadSession('test')).providerSessionId, remote.id);
+            assert.equal((await loadSession('test')).transport.reason, 'recovery');
             failRelease = false;
             await closeCommand(['test'], { format: 'json' });
             assert.equal(await sessionExists('test'), false);
@@ -165,7 +183,13 @@ describe('CLI provider lifecycle', () => {
           new Response(proc.stderr).text(),
           proc.exited,
         ]);
-        expect({ exitCode, stderr }).toEqual({ exitCode: 0, stderr: '' });
+        if (scenario === 'setup-pending-record-failed') {
+          expect(exitCode).toBe(0);
+          expect(stderr).toContain('remote-session');
+          expect(stderr).toMatch(/could not be persisted|clean it up manually/);
+        } else {
+          expect({ exitCode, stderr }).toEqual({ exitCode: 0, stderr: '' });
+        }
         if (scenario === 'commands') expect(stdout).toContain('preserved document');
       } finally {
         await rm(directory, { recursive: true, force: true });

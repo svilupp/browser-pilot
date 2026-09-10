@@ -164,6 +164,41 @@ describe('InProcessSessionOwner', () => {
     expect(caught).toBeInstanceOf(CapabilityError);
     expect((caught as CapabilityError).capability).toBe('secrets');
   });
+
+  test('lease clock defaults to the opening context clock, not nodeClock, and is pinned per record', async () => {
+    const clock = new FakeClock(1_000);
+    const owner = new InProcessSessionOwner({ leaseMs: 10 });
+    const context = createTestContext({ generation: 'gen-1', clock });
+
+    const handle = await owner.open({ provider: 'generic', wsUrl: WS_URL }, context);
+    expect(handle.leaseExpiresAt).toBe(1_010);
+
+    // Advancing the FakeClock (not real time) must be what expires the
+    // lease - proof that record.clock is ctx.clock, not the real nodeClock.
+    clock.advance(10);
+    await expect(owner.resolve(handle, context)).rejects.toMatchObject({
+      capability: 'lease_expired',
+    });
+  });
+
+  test('open() re-checks the context after createSession resolves and releases on abort', async () => {
+    const owner = new InProcessSessionOwner();
+    const context = ctx();
+    const controller = new AbortController();
+
+    const openPromise = owner.open(
+      { provider: 'generic', wsUrl: WS_URL },
+      { ...context, signal: controller.signal }
+    );
+    // Abort synchronously, before createSession's promise continuation runs:
+    // this simulates cancellation landing while the (non-abortable)
+    // provider createSession() call is still in flight.
+    controller.abort(new Error('cancelled mid-create'));
+
+    await expect(openPromise).rejects.toThrow('cancelled mid-create');
+    // The just-created session must not be stored or returned as a handle.
+    expect(owner.size).toBe(0);
+  });
 });
 
 describe('nodeClock', () => {

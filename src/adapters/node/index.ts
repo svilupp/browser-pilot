@@ -120,23 +120,35 @@ export class InProcessSessionOwner implements SessionOwner {
       { secrets: this.options.secrets ?? nodeSecrets }
     );
     const session = await provider.createSession(sessionOptions);
+    try {
+      assertContextActive(ctx);
+    } catch (error) {
+      // The context aborted or expired while createSession() was in flight.
+      // createSession() itself is not abortable, so the just-created
+      // provider session must be released best-effort here rather than
+      // stored or handed back to the caller.
+      await Promise.resolve()
+        .then(() => session.close())
+        .catch(() => {});
+      throw error;
+    }
     const id = `bp-session-${randomId()}`;
-    const clock = this.leaseClock;
+    // Pin the clock used for this record's lease at open time, matching the
+    // memory adapter's semantics: prefer the explicit option, then the
+    // opening context's clock (not a fixed `nodeClock` default).
+    const clock = this.options.clock ?? ctx.clock;
     const record: SessionRecord = {
       session,
       generation: ctx.generation,
       provider: opts.provider,
       sessionId: session.sessionId ?? id,
+      clock,
       ...(this.options.leaseMs !== undefined
         ? { leaseExpiresAt: clock.now() + this.options.leaseMs }
         : {}),
     };
     this.sessions.set(id, record);
     return this.handleForRecord(id, record);
-  }
-
-  private get leaseClock(): Clock {
-    return this.options.clock ?? nodeClock;
   }
 
   private assertGeneration(
@@ -184,7 +196,7 @@ export class InProcessSessionOwner implements SessionOwner {
   }
 
   private assertLeaseActive(handle: SessionHandle, record: SessionRecord): void {
-    if (record.leaseExpiresAt !== undefined && record.leaseExpiresAt <= this.leaseClock.now()) {
+    if (record.leaseExpiresAt !== undefined && record.leaseExpiresAt <= record.clock.now()) {
       throw new CapabilityError(
         'lease_expired',
         `Session handle ${handle.id} lease expired at ${record.leaseExpiresAt}`
@@ -268,7 +280,7 @@ export class InProcessSessionOwner implements SessionOwner {
     }
     this.assertLeaseActive(handle, record);
     if (this.options.leaseMs !== undefined) {
-      record.leaseExpiresAt = this.leaseClock.now() + this.options.leaseMs;
+      record.leaseExpiresAt = record.clock.now() + this.options.leaseMs;
     }
     return this.handleForRecord(handle.id, record);
   }
@@ -284,6 +296,7 @@ interface SessionRecord {
   generation: string;
   provider: string;
   sessionId: string;
+  clock: Clock;
   leaseExpiresAt?: number;
   releasePromise?: Promise<ProviderReleaseResult>;
 }

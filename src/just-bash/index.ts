@@ -23,6 +23,29 @@ function decodeStdin(stdin: unknown): string {
   return new TextDecoder().decode(Uint8Array.from(raw, (char) => char.charCodeAt(0)));
 }
 
+/**
+ * Combine multiple AbortSignals into one that aborts when any input does.
+ *
+ * `AbortSignal.any` (Node >=20.3) would do this natively, but package.json
+ * declares `engines.node >= 18`, so this stays a manual combiner for
+ * portability.
+ */
+export function combineAbortSignals(signals: AbortSignal[]): AbortSignal {
+  const controller = new AbortController();
+  for (const signal of signals) {
+    if (signal.aborted) {
+      controller.abort(signal.reason);
+      break;
+    }
+  }
+  if (!controller.signal.aborted) {
+    for (const signal of signals) {
+      signal.addEventListener('abort', () => controller.abort(signal.reason), { once: true });
+    }
+  }
+  return controller.signal;
+}
+
 function makeIo(ctx: ResolvedCommandContext): BpIo {
   return {
     stdin: decodeStdin(ctx.stdin),
@@ -52,7 +75,7 @@ export function registerBrowserPilotCommands(ports: BrowserPilotShellPorts): Com
                 const inner = ports.createContext();
                 const shellSignal = ctx.signal;
                 return shellSignal
-                  ? { ...inner, signal: AbortSignal.any([inner.signal, shellSignal]) }
+                  ? { ...inner, signal: combineAbortSignals([inner.signal, shellSignal]) }
                   : inner;
               },
             }

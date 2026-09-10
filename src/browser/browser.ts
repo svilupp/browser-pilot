@@ -250,7 +250,13 @@ export class Browser {
       provider = createProvider(connectOptions, { secrets: connectOptions.secrets });
       const rawSessionId = connectOptions.session?.['sessionId'];
       const sessionId = typeof rawSessionId === 'string' ? rawSessionId : undefined;
-      if (sessionId !== undefined && provider.resumeSession) {
+      if (sessionId !== undefined) {
+        if (!provider.resumeSession) {
+          throw new CapabilityError(
+            'session-reconnect',
+            `Provider "${provider.name}" does not support session resumption (resumeSession is not implemented), so session "${sessionId}" cannot be resumed. Refusing to silently create a new session.`
+          );
+        }
         session = await provider.resumeSession(sessionId);
         releaseOnFailure = false;
       } else {
@@ -798,7 +804,22 @@ export class Browser {
     } catch (error) {
       cdpError = error;
     }
-    const releaseResult = (await this.providerSession.close()) ?? undefined;
+    let releaseResult: ProviderReleaseResult | undefined;
+    let providerError: unknown;
+    try {
+      releaseResult = (await this.providerSession.close()) ?? undefined;
+    } catch (error) {
+      providerError = error;
+    }
+    if (providerError !== undefined) {
+      if (cdpError !== undefined) {
+        throw new Error(
+          `provider close failed: ${errMsg(providerError)}; cdp close error: ${errMsg(cdpError)}`,
+          { cause: providerError }
+        );
+      }
+      throw providerError;
+    }
     if (cdpError !== undefined) {
       if (releaseResult) {
         return {

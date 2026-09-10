@@ -33,9 +33,13 @@ Local options:
   --max-size <size>    Remove oldest sessions until total size < limit (e.g. "100MB", "1GB")
   --dry-run            Show what would be removed without deleting
   --all                Remove all sessions regardless of age
+  --force              Skip provider release and delete local records only
+                       (warns that remote Browserbase sessions were not released)
 
 Browserbase sessions are released before deletion using BROWSERBASE_API_KEY.
 Pending or failed cleanup retains the session for retry and exits nonzero.
+Use --force to remove local records without provider release (e.g. when
+BROWSERBASE_API_KEY is unavailable and records are stuck).
 
 Global options:
   --json               Output JSON
@@ -48,6 +52,7 @@ Examples:
   bp clean --max-size 100MB  # Remove oldest sessions until under 100MB
   bp clean --dry-run         # Preview what would be cleaned
   bp clean --all             # Remove all sessions
+  bp clean --all --force     # Remove all local records without provider release
 `.trimEnd();
 
 interface CleanOptions {
@@ -55,6 +60,7 @@ interface CleanOptions {
   maxSize?: number; // bytes
   dryRun?: boolean;
   all?: boolean;
+  force?: boolean;
   help?: boolean;
 }
 
@@ -150,6 +156,8 @@ function parseCleanArgs(args: string[]): CleanOptions {
       options.dryRun = true;
     } else if (arg === '--all') {
       options.all = true;
+    } else if (arg === '--force') {
+      options.force = true;
     } else if (arg === '-h' || arg === '--help') {
       options.help = true;
     }
@@ -159,13 +167,14 @@ function parseCleanArgs(args: string[]): CleanOptions {
 }
 
 async function deleteSessionWithDaemonStop(
-  session: SessionData
+  session: SessionData,
+  force: boolean
 ): Promise<ProviderReleaseResult | undefined> {
   const shared =
     session.transport?.mode === 'daemon' &&
     !!session.transport.daemonId &&
     (await countSessionReferences(session.transport.daemonId)) > 1;
-  const providerRelease = shared ? undefined : await releaseBrowserbaseSession(session);
+  const providerRelease = shared || force ? undefined : await releaseBrowserbaseSession(session);
   if (providerRelease?.status === 'cleanup_pending') return providerRelease;
   const descriptor =
     session.transport?.mode === 'daemon' && session.transport.daemonId
@@ -197,9 +206,13 @@ async function deleteSessionWithDaemonStop(
   return undefined;
 }
 
-async function cleanSelectedSessions(sessions: SessionData[]): Promise<{
+async function cleanSelectedSessions(
+  sessions: SessionData[],
+  force = false
+): Promise<{
   cleaned: string[];
   retained: Array<{ sessionId: string; providerRelease?: ProviderReleaseResult; error?: string }>;
+  warnings: string[];
 }> {
   const cleaned: string[] = [];
   const retained: Array<{
@@ -207,11 +220,20 @@ async function cleanSelectedSessions(sessions: SessionData[]): Promise<{
     providerRelease?: ProviderReleaseResult;
     error?: string;
   }> = [];
+  const warnings: string[] = [];
   for (const session of sessions) {
     try {
-      const providerRelease = await deleteSessionWithDaemonStop(session);
-      if (providerRelease) retained.push({ sessionId: session.id, providerRelease });
-      else cleaned.push(session.id);
+      const providerRelease = await deleteSessionWithDaemonStop(session, force);
+      if (providerRelease) {
+        retained.push({ sessionId: session.id, providerRelease });
+      } else {
+        cleaned.push(session.id);
+        if (force && session.provider === 'browserbase') {
+          warnings.push(
+            `Browserbase session was not released for ${session.id}; only the local record was removed (--force).`
+          );
+        }
+      }
     } catch (error) {
       retained.push({
         sessionId: session.id,
@@ -220,7 +242,7 @@ async function cleanSelectedSessions(sessions: SessionData[]): Promise<{
     }
   }
   if (retained.length > 0) process.exitCode = 1;
-  return { cleaned, retained };
+  return { cleaned, retained, warnings };
 }
 
 async function cleanupRegisteredDaemons(
@@ -360,7 +382,7 @@ export async function cleanCommand(
       return;
     }
 
-    const cleanup = await cleanSelectedSessions(toRemove);
+    const cleanup = await cleanSelectedSessions(toRemove, options.force === true);
     // The selection above projected successful deletions. Retained records
     // still count toward the size limit.
     totalSize += toRemove
@@ -382,6 +404,7 @@ export async function cleanCommand(
           ? { kept: sessionsWithSize[0]?.id, withinLimit: false }
           : {}),
         ...(cleanup.retained.length > 0 ? { retained: cleanup.retained } : {}),
+        ...(cleanup.warnings.length > 0 ? { warnings: cleanup.warnings } : {}),
         ...registryDetails,
       },
       globalOptions.format
@@ -428,7 +451,7 @@ export async function cleanCommand(
     return;
   }
 
-  const cleanup = await cleanSelectedSessions(stale);
+  const cleanup = await cleanSelectedSessions(stale, options.force === true);
 
   output(
     {
@@ -438,6 +461,7 @@ export async function cleanCommand(
       cleaned: cleanup.cleaned.length,
       sessions: cleanup.cleaned,
       ...(cleanup.retained.length > 0 ? { retained: cleanup.retained } : {}),
+      ...(cleanup.warnings.length > 0 ? { warnings: cleanup.warnings } : {}),
       ...registryDetails,
     },
     globalOptions.format

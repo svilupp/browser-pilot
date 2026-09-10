@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadDotenv } from '../../src/cli/dotenv.ts';
 import { parseDotenv } from '../../src/cli/dotenv-parse.ts';
+import { extractEnvFileFlag } from '../../src/cli/index.ts';
 
 describe('parseDotenv', () => {
   test('parses simple KEY=value pairs', () => {
@@ -143,5 +144,55 @@ describe('loadDotenv', () => {
 
     expect(() => loadDotenv(file)).not.toThrow();
     expect(process.env['DOTENV_TEST_MISSING']).toBeUndefined();
+  });
+
+  test('warns to stderr when warnOnMissing is set and the file is missing', () => {
+    const file = join(dir, 'does-not-exist.env');
+    const originalError = console.error;
+    const calls: unknown[][] = [];
+    console.error = (...args: unknown[]) => {
+      calls.push(args);
+    };
+
+    try {
+      loadDotenv(file, { warnOnMissing: true });
+    } finally {
+      console.error = originalError;
+    }
+
+    expect(calls.length).toBe(1);
+    expect(String(calls[0]?.[0])).toContain(file);
+  });
+});
+
+describe('extractEnvFileFlag', () => {
+  test('extracts a leading --env-file flag', () => {
+    const result = extractEnvFileFlag(['--env-file', '.env.local', 'connect', '--name', 'dev']);
+    expect(result.envFile).toBe('.env.local');
+    expect(result.remaining).toEqual(['connect', '--name', 'dev']);
+    expect(result.error).toBeUndefined();
+  });
+
+  test('defaults to .env when the flag is absent', () => {
+    const result = extractEnvFileFlag(['connect', '--name', 'dev']);
+    expect(result.envFile).toBe('.env');
+    expect(result.remaining).toEqual(['connect', '--name', 'dev']);
+  });
+
+  test('does not consume --env-file appearing inside a subcommand payload', () => {
+    const result = extractEnvFileFlag(['eval', '--env-file', 'not-a-path']);
+    expect(result.envFile).toBe('.env');
+    expect(result.remaining).toEqual(['eval', '--env-file', 'not-a-path']);
+  });
+
+  test('stops scanning at a `--` separator', () => {
+    const result = extractEnvFileFlag(['--', 'exec', '--env-file', 'payload-arg']);
+    expect(result.envFile).toBe('.env');
+    expect(result.remaining).toEqual(['--', 'exec', '--env-file', 'payload-arg']);
+  });
+
+  test('errors on a dangling trailing --env-file with no path', () => {
+    const result = extractEnvFileFlag(['--env-file']);
+    expect(result.error).toBe('--env-file requires a file path argument');
   });
 });

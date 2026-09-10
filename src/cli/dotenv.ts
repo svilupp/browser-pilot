@@ -14,15 +14,21 @@ import { parseDotenv } from './dotenv-parse.ts';
 export interface LoadDotenvOptions {
   /** Override existing process.env values. Default: false. */
   override?: boolean;
+  /**
+   * Print a warning (never values) when the file can't be read. Intended for
+   * an explicitly specified `--env-file`; the implicit default `.env` stays
+   * silent. Default: false.
+   */
+  warnOnMissing?: boolean;
 }
 
 /**
  * Load a dotenv file into `process.env`. Silently no-ops if the file is
- * missing or unreadable. Never prints values. By default, does not
- * override existing `process.env` values.
+ * missing or unreadable (unless `warnOnMissing` is set). Never prints
+ * values. By default, does not override existing `process.env` values.
  */
 export function loadDotenv(path = '.env', options: LoadDotenvOptions = {}): void {
-  const { override = false } = options;
+  const { override = false, warnOnMissing = false } = options;
 
   if (typeof process === 'undefined' || !process.env) {
     return;
@@ -31,10 +37,17 @@ export function loadDotenv(path = '.env', options: LoadDotenvOptions = {}): void
   let content: string;
   try {
     if (!existsSync(path)) {
+      if (warnOnMissing) {
+        console.error(`Warning: --env-file "${path}" does not exist; skipping.`);
+      }
       return;
     }
     content = readFileSync(path, 'utf8');
-  } catch {
+  } catch (error) {
+    if (warnOnMissing) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`Warning: --env-file "${path}" could not be read: ${message}`);
+    }
     return;
   }
 

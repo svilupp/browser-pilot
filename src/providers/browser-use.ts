@@ -86,10 +86,26 @@ export class BrowserUseProvider implements Provider {
       this.throwApiError('createSession', response.status);
     }
 
-    const session = await this.readSession(response);
+    let session: BrowserUseSession | undefined;
+    let sessionId: string | undefined;
+    try {
+      session = await this.readSession(response);
+      sessionId = session.id;
 
-    if (!session.cdpUrl) {
-      throw new Error('Browser Use session does not have a cdpUrl');
+      if (!session.cdpUrl) {
+        throw new Error('Browser Use session does not have a cdpUrl');
+      }
+    } catch (error) {
+      // The session may already exist on Browser Use's side even though
+      // setup failed locally. Best-effort release it so we don't leak a
+      // billable cloud session, without masking the original failure.
+      if (sessionId) {
+        const cleanup = await this.releaseSession(sessionId);
+        if (error instanceof Error) {
+          (error as Error & { cause?: unknown }).cause = { cleanup };
+        }
+      }
+      throw error;
     }
 
     return this.toProviderSession(session);

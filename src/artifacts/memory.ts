@@ -22,17 +22,64 @@ export interface MemoryArtifactSink extends ArtifactSink {
   readonly store: ReadonlyMap<string, MemoryArtifactEntry>;
 }
 
-function normalizeMemoryPath(rawPath: string): { key: string } | { error: string } {
+interface NormalizedMemoryPath {
+  key: string;
+  segments: string[];
+}
+
+/**
+ * Pure POSIX-only normalizer mirroring `path.normalize` + the `resolveScopedPath`
+ * containment check used by `NodeArtifactSink`: `.` segments are dropped, `..`
+ * segments pop a preceding real segment when one is available (so `a/../b`
+ * resolves to `b`, matching Node), and any `..` left over after that
+ * resolution (an attempt to escape the root) is rejected with the same error
+ * Node reports. No `node:path` import — stays portable for Workers/tests.
+ */
+function normalizeMemoryPath(rawPath: string): NormalizedMemoryPath | { error: string } {
   if (rawPath.startsWith('/')) return { error: 'absolute paths are not allowed' };
   const parts = rawPath.split('/');
   const out: string[] = [];
   for (const part of parts) {
     if (part === '' || part === '.') continue;
-    if (part === '..') return { error: 'path traversal (..) is not allowed' };
+    if (part === '..') {
+      if (out.length > 0 && out[out.length - 1] !== '..') {
+        out.pop();
+      } else {
+        return { error: 'path traversal (..) is not allowed' };
+      }
+      continue;
+    }
     out.push(part);
   }
   if (out.length === 0) return { error: 'empty path' };
-  return { key: out.join('/') };
+  return { key: out.join('/'), segments: out };
+}
+
+/**
+ * File-vs-directory shape check matching `NodeArtifactSink`'s filesystem
+ * semantics: a proper prefix of the target that is already stored as a file
+ * conflicts (Node: "parent path component is not a directory"), and a target
+ * that is already used as a directory (some stored key has it as a proper
+ * prefix) conflicts (Node: "target exists and is not a regular file").
+ */
+function checkPathShape(
+  store: ReadonlyMap<string, MemoryArtifactEntry>,
+  normalized: NormalizedMemoryPath
+): { error: string } | undefined {
+  const { key, segments } = normalized;
+  for (let i = 0; i < segments.length - 1; i++) {
+    const prefix = segments.slice(0, i + 1).join('/');
+    if (store.has(prefix)) {
+      return { error: 'parent path component is not a directory' };
+    }
+  }
+  const dirPrefix = `${key}/`;
+  for (const existingKey of store.keys()) {
+    if (existingKey.startsWith(dirPrefix)) {
+      return { error: 'target exists and is not a regular file' };
+    }
+  }
+  return undefined;
 }
 
 function failed(displayPath: string, error: string, dispatched: boolean): ArtifactPutResult {
@@ -64,6 +111,9 @@ export function MemoryArtifactSink(options: MemoryArtifactSinkOptions = {}): Mem
         return failed(opts.path, 'file exists (overwrite not set)', false);
       }
 
+      const shapeConflict = checkPathShape(store, normalized);
+      if (shapeConflict) return failed(opts.path, shapeConflict.error, false);
+
       const { signal: raceSignal, dispose } = createDeadlineSignal(ctx);
       try {
         const writePromise = (async () => {
@@ -78,6 +128,8 @@ export function MemoryArtifactSink(options: MemoryArtifactSinkOptions = {}): Mem
           if (store.has(normalized.key) && opts.overwrite !== true) {
             throw new Error('file exists (overwrite not set)');
           }
+          const commitShapeConflict = checkPathShape(store, normalized);
+          if (commitShapeConflict) throw new Error(commitShapeConflict.error);
           const stored = bytes.slice();
           store.set(normalized.key, { bytes: stored, type: opts.type, hash });
           return {

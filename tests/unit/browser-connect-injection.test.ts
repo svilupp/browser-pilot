@@ -280,4 +280,47 @@ describe('Browser.connect() provider session wiring', () => {
       capability: 'local-discovery',
     });
   });
+
+  test('resuming a session on a provider without resumeSession throws instead of creating a new one', async () => {
+    const fetchMock = mock(async () => {
+      throw new Error('no provider network call should happen for browserless resume attempt');
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    await expect(
+      Browser.connect({
+        provider: 'browserless',
+        apiKey: 'fake-key',
+        session: { sessionId: 'existing-session-id' } as CreateSessionOptions,
+      })
+    ).rejects.toMatchObject({
+      name: 'CapabilityError',
+      capability: 'session-reconnect',
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  test('close() surfaces both errors when cdp.close() and providerSession.close() both reject', async () => {
+    const providerSession: ProviderSession = {
+      wsUrl: 'ws://example.test/bothfail',
+      sessionId: 'bothfail-session',
+      close: mock(async () => {
+        throw new Error('provider close boom');
+      }),
+    };
+    const fakeCdp = makeFakeCDP({
+      close: mock(async () => {
+        throw new Error('cdp close boom');
+      }),
+    });
+
+    const browser = Browser.fromCDP(fakeCdp, {
+      wsUrl: providerSession.wsUrl,
+      sessionId: providerSession.sessionId,
+    });
+    (browser as unknown as { providerSession: ProviderSession }).providerSession = providerSession;
+
+    await expect(browser.close()).rejects.toThrow(/provider close boom/);
+    await expect(browser.close()).rejects.toThrow(/cdp close boom/);
+  });
 });
