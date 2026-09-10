@@ -1,31 +1,5 @@
 # Changelog
 
-## Unreleased
-
-### Fixed
-
-- `Browser.connect()` now throws a `CapabilityError('session-reconnect')` instead of silently
-  creating a brand-new session when `session.sessionId` is passed but the resolved provider does
-  not implement `resumeSession`.
-- `Browser.close()` now guards the provider session's `close()` call: if both the CDP socket close
-  and the provider session close reject, both errors are surfaced together instead of the CDP
-  close error being dropped.
-- The `browser-use` provider now releases the created session when post-create validation fails,
-  instead of leaking a live remote session that nothing ever closes.
-- Session-owner-gated CDP opens are now abortable and honor an injected `Clock`, instead of
-  blocking uninterruptibly until the owner grants access.
-- The in-memory `ArtifactSink` now mirrors the Node filesystem sink's path handling, instead of
-  diverging on how nested/relative artifact paths are resolved.
-- `connect.ts`'s Browserbase recovery-record handling is now hardened against malformed/partial
-  recovery records instead of throwing on unexpected shapes.
-- `bp close` and `bp clean` now accept `--force` to drop a stuck local session record (with a
-  warning) when the provider session cannot be released, e.g. a missing `BROWSERBASE_API_KEY`.
-- Node CLI `--env-file` parsing: a post-subcommand `--env-file` token (never consumed by the
-  parser) no longer spuriously enables the default `.env` missing-file warning; `extractEnvFileFlag`
-  now returns an explicit `explicit` flag reflecting whether `--env-file` was actually parsed.
-- Abort signal combining now works on Node 18, instead of relying on `AbortSignal.any`, which is
-  only available from Node 20+.
-
 ## [0.5.0] - 2026-09-09
 
 ### Added
@@ -69,6 +43,18 @@
   provider supports `resumeSession`, the existing session is resumed instead of a new one created.
 - `ArtifactSink` (`src/artifacts`) implements the Appendix A artifact contract, including a
   Node filesystem-backed implementation and an in-memory implementation for portable/testing use.
+
+### Fixed
+
+- `connect()` throws `CapabilityError` instead of silently creating a new session when
+  `session.sessionId` is passed but the provider does not support resumption.
+- Cloud sessions are no longer leaked when connection setup fails partway (browser-use
+  create validation, aborted opens, Browserbase CLI recovery).
+- `bp close` / `bp clean` accept `--force` to drop a stuck local session record when the
+  provider session cannot be released (e.g. missing `BROWSERBASE_API_KEY`).
+- `--env-file` no longer consumes arguments after the subcommand, and an explicitly given
+  but missing env file now warns instead of being silently ignored.
+- CLI works on Node 18 (no longer requires `AbortSignal.any`).
 
 ### Breaking
 
