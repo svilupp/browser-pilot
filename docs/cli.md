@@ -398,10 +398,11 @@ Primary commands:
 - `bp env visibility ...`
 - `bp env geolocation ...`
 - `bp env auth ...` — persisted Cloudflare-Access-style header/cookie auth,
-  reapplied on every attach/reattach. See
-  `docs/proposals/cloudflare-access-auth.md` for the full lifecycle
-  semantics (persisted `env auth set-*` vs. ephemeral `setCookie`/`setHeaders`
-  actions).
+  reapplied on every attach/reattach (persisted `env auth set-*` vs. ephemeral
+  `setCookie`/`setHeaders` actions), **and** URL-scoped cookie snapshot save/inspect/restore
+  (`env auth save`, `env auth inspect`, `connect --auth`). See
+  [Cookie snapshot auth](./guides/auth-cookies.md) for the full lifecycle semantics of the
+  latter.
 
 Examples:
 
@@ -412,6 +413,19 @@ bp env network throttle -s dev --latency 200 --down 128kbps --up 64kbps
 bp env visibility hidden -s dev
 bp env geolocation set -s dev --lat 37.7749 --lon -122.4194
 
+# Notes on `bp env network`:
+# - Uses classic CDP `Network.emulateNetworkConditions`, applied per-target
+#   (only the session's pinned tab is throttled, not the whole browser).
+# - In daemon mode (default), throttle/online run on the same persistent CDP
+#   session, so `online` reliably clears a prior `throttle`/`offline`.
+# - In `--no-daemon` mode, classic emulation resets whenever the CDP session
+#   detaches; persisted network settings are re-applied on every `bp env`/`bp
+#   exec` command via `applySessionEnvironment()`.
+# - Tabs throttled by browser-pilot versions before this fix may have used
+#   the experimental `Network.emulateNetworkConditionsByRule` API, which
+#   leaks per-target rules that cannot be cleared from any session. If
+#   `bp env network online` does not restore full speed, close that tab.
+
 # Cloudflare Access auth (persisted, reapplied on every attach)
 bp env auth set-headers -s dev --from-env CF-Access-Client-Id=CF_ACCESS_CLIENT_ID --from-env CF-Access-Client-Secret=CF_ACCESS_CLIENT_SECRET
 bp env auth set-cookie CF_Authorization -s dev --value-from-env CF_ACCESS_JWT --domain example.com
@@ -420,7 +434,17 @@ bp env auth clear -s dev
 # Sugar: mint the CF_Authorization cookie automatically (cookie mode, default)
 bp connect --new-tab --page-url https://app.example.com --cf-access
 bp connect --new-tab --page-url https://app.example.com --cf-access --cf-access-mode headers
+
+# URL-scoped cookie snapshot auth: save a login once, restore it in later sessions
+bp env auth save shopify -s shopify-login
+bp env auth save shopify -s shopify-login --include-url https://accounts.shopify.com --force
+bp env auth inspect shopify
+bp connect --name shopify-work --auth shopify
+BROWSER_PILOT_AUTH=shopify bp connect --name shopify-ci  # env fallback; --auth wins if both set
 ```
+
+See [Cookie snapshot auth](./guides/auth-cookies.md) for the full command reference (`env auth
+save|inspect`, `connect --auth`, resolution rules, scope rules, file privacy, and CI usage).
 
 Likely next steps:
 

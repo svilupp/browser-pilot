@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.6.0] - 2026-09-16
+
+### Added
+
+- **Cookie snapshot auth**: log in once by hand, then reuse that session instead of
+  re-authenticating. `bp env auth save <name> -s <session>` captures the cookies from a
+  logged-in tab into a private, offline-inspectable file (`bp env auth inspect <name>`);
+  `bp connect --auth <name>` (or `BROWSER_PILOT_AUTH=<name>` for CI) restores them into a
+  fresh session before any navigation. See [`docs/guides/auth-cookies.md`](./docs/guides/auth-cookies.md).
+- New portable exports for embedding hosts (root and `browser-pilot/core`):
+  `captureCookieState`, `restoreCookieState`, `parseCookieState`, `serializeCookieState`,
+  `CookieStateError`; file I/O helpers (`loadCookieStateFile`, `saveCookieStateFile`,
+  `resolveCookieStateRef`) ship from `browser-pilot/adapters/node`.
+- Snapshot files are private by construction: written with restrictive permissions, never
+  contain values in CLI output/logs/session records, and `--debug`/`--trace` now redact
+  cookie values from CDP traffic.
+
 ## [0.5.0] - 2026-09-09
 
 ### Added

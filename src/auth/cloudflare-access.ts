@@ -3,7 +3,7 @@
  *
  * This is the library-level primitive behind `bp connect --cf-access` and
  * `bp env auth set-cookie`'s sugar path. It performs the out-of-band fetch
- * exchange described in docs/proposals/cloudflare-access-auth.md (Method B)
+ * exchange described in docs/cli.md#env (Method B)
  * and returns a ready-to-apply cookie descriptor; it never reads environment
  * variables itself — callers resolve `clientId`/`clientSecret` (e.g. via
  * `getEnv()`) and pass them in explicitly.

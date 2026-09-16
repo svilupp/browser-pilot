@@ -750,9 +750,8 @@ await page.setExtraHTTPHeaders({
 - **Blast radius caveat:** headers are not origin-scoped — once set, they are sent to
   *every* origin the page navigates to or fetches from, not just the intended target. For
   Cloudflare Access specifically, prefer the cookie-based flow (`mintCfAccessJwt` +
-  `setCookie`, below) unless header mode is required. See
-  [Cloudflare Access auth proposal](../proposals/cloudflare-access-auth.md) for the full
-  tradeoff.
+  `setCookie`, below) unless header mode is required. See [CLI Guide § env](../cli.md#env)
+  for the full tradeoff.
 
 ## Cookies & Storage
 
@@ -805,7 +804,8 @@ Throws if Cloudflare rejects the service token (no `CF_Authorization` cookie in 
 response) — the error message points at the `service_token_status` diagnostic. Never logs
 or persists the raw client secret. This is the library primitive behind
 `bp connect --cf-access` and `bp env auth set-cookie`'s sugar path; see
-[Cloudflare Access auth proposal](../proposals/cloudflare-access-auth.md).
+[CLI Guide § env](../cli.md#env). For reusing a full login session's cookies across
+connects, see [Cookie snapshot auth](../guides/auth-cookies.md).
 
 ### deleteCookie(options) / deleteCookies(options[])
 

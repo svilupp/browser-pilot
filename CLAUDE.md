@@ -47,6 +47,7 @@ Entry: `src/index.ts`. Public API report: `etc/browser-pilot.api.md`.
 | Providers (Browser Use, BrowserBase, generic); portable factory | `src/providers/`, `src/providers/factory.ts` |
 | Portable library entry + optional host contracts (`browser-pilot/core`) | `src/core/ports.ts`, `src/core/index.ts` |
 | Optional host adapters (Node + in-memory test doubles) | `src/adapters/node/`, `src/adapters/memory/` |
+| Cookie snapshot auth (portable core + Node file I/O) | `src/auth/`, `src/adapters/node/cookie-state-files.ts` |
 | Artifact sink port + Node/memory sinks | `src/artifacts/` |
 | Shell-agnostic core (`browser-pilot/shell`) | `src/shell/` |
 | just-bash shell bridge (`browser-pilot/just-bash`, thin adapter over `src/shell/`) | `src/just-bash/` |
@@ -71,7 +72,8 @@ Entry: `src/index.ts`. Public API report: `etc/browser-pilot.api.md`.
 - **OOPIF support**: cross-origin iframes via auto-attach; limited action subset (`src/browser/page.ts`)
 - **Snapshot refs**: accessibility tree with `ref:e12` selectors, cached per session+URL (`docs/guides/snapshots.md`)
 - **Provider pattern**: `createSession()` → `{ wsUrl, sessionId, close() }` (`src/providers/types.ts`, `docs/providers.md`)
-- **Cloudflare Access auth**: `page.setExtraHTTPHeaders()`, `mintCfAccessJwt()`, `bp connect --cf-access`, persisted `bp env auth set-headers|set-cookie|clear`, and ephemeral `setCookie`/`setHeaders` actions (`src/auth/`, `docs/proposals/cloudflare-access-auth.md`)
+- **Cloudflare Access auth**: `page.setExtraHTTPHeaders()`, `mintCfAccessJwt()`, `bp connect --cf-access`, persisted `bp env auth set-headers|set-cookie|clear`, and ephemeral `setCookie`/`setHeaders` actions (`src/auth/`, `docs/cli.md#env`)
+- **Cookie snapshot auth**: `bp env auth save|inspect`, `bp connect --auth`/`BROWSER_PILOT_AUTH` restore a saved login's cookies into a fresh tab; portable `parseCookieState`/`captureCookieState`/`restoreCookieState`/`CookieStateError` (root + `/core`), Node-only file I/O (`/adapters/node`) (`src/auth/`, `src/adapters/node/cookie-state-files.ts`, `docs/guides/auth-cookies.md`)
 
 ## Docs Index
 

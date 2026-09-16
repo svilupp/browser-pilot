@@ -2,12 +2,20 @@
  * Env command - Browser/environment controls for sessions
  */
 
+import { homedir } from 'node:os';
 import { dirname } from 'node:path';
+import {
+  loadCookieStateFile,
+  resolveCookieStateRef,
+  saveCookieStateFile,
+} from '../../adapters/node/cookie-state-files.ts';
 import { grantAudioPermissions } from '../../audio/permissions.ts';
+import { captureCookieState } from '../../auth/cookie-state.ts';
+import { CookieStateError } from '../../auth/errors.ts';
 import type { Browser } from '../../browser/browser.ts';
 import type { Page } from '../../index.ts';
 import { getEnv } from '../../runtime/env.ts';
-import { attachSession } from '../attach.ts';
+import { type AttachResult, attachSession } from '../attach.ts';
 import { formatBrowserDiscoveryError, resolveCLIEndpoint } from '../browser-endpoint.ts';
 import { createLocalSession } from '../connect-service.ts';
 import {
@@ -51,8 +59,9 @@ Subcommands:
   network      offline, online, throttle
   visibility   hidden, visible
   geolocation  set, clear
-  auth         set-headers, set-cookie, clear (Cloudflare-Access-style auth persistence;
-               see docs/proposals/cloudflare-access-auth.md for the full lifecycle semantics)
+  auth         set-headers, set-cookie, clear (Cloudflare-Access-style auth persistence),
+               save, inspect (URL-scoped cookie snapshot files);
+               see docs/guides/auth-cookies.md for the full lifecycle semantics
 
 Common options:
   -s, --session <id>     Session to use (omit: auto-connect, -s: latest, -s <id>: specific)
@@ -82,6 +91,11 @@ Examples:
   bp env auth set-cookie CF_Authorization -s my-session --value-from-env CF_ACCESS_JWT --domain example.com
   bp env auth clear -s my-session
 
+  # Auth (URL-scoped cookie snapshots)
+  bp env auth save shopify -s shopify-login
+  bp env auth save shopify -s shopify-login --include-url https://accounts.shopify.com --force
+  bp env auth inspect shopify
+
 Likely next commands:
   bp trace watch -s my-session --view ws --assert profile:reconnect
   bp exec -s my-session '[{"action":"assertPermission","name":"microphone","state":"granted"}]'
@@ -100,7 +114,7 @@ type PermissionArg =
 type NetworkAction = 'offline' | 'online' | 'throttle';
 type VisibilityStateArg = 'hidden' | 'visible';
 type GeoAction = 'set' | 'clear';
-type AuthAction = 'set-headers' | 'set-cookie' | 'clear';
+type AuthAction = 'set-headers' | 'set-cookie' | 'clear' | 'save' | 'inspect';
 
 type PermissionQuery = { name: string; state: string };
 
@@ -156,11 +170,21 @@ interface EnvOptions {
   authDomain?: string;
   authPath?: string;
   authSecure?: boolean;
+  authRef?: string;
+  authIncludeUrls?: string[];
+  authForce?: boolean;
 }
 
 interface ResolvedConnection {
   browser: Browser;
   session: SessionData;
+  /**
+   * Page pinned by `attachSession` to the persistent daemon flat session
+   * (`session.daemon.cdpSessionId`). Reusing it (instead of re-attaching a
+   * fresh flat session via `browser.page()`) keeps env mutations like
+   * `network throttle`/`network online` on the same CDP session.
+   */
+  page?: AttachResult['page'];
 }
 
 type PermissionPage = Pick<Page, 'evaluate' | 'cdpClient'>;
@@ -272,6 +296,19 @@ export function parseEnvArgs(args: string[]): EnvOptions {
       continue;
     }
 
+    if (arg === '--include-url') {
+      const value = args[++i];
+      if (value) {
+        options.authIncludeUrls = [...(options.authIncludeUrls ?? []), value];
+      }
+      continue;
+    }
+
+    if (arg === '--force') {
+      options.authForce = true;
+      continue;
+    }
+
     if (!arg.startsWith('-') && options.topCommand) {
       if (options.topCommand === 'permissions') {
         if (!options.permissionMode) {
@@ -313,6 +350,13 @@ export function parseEnvArgs(args: string[]): EnvOptions {
         }
         if (options.authAction === 'set-cookie' && !options.authCookieName) {
           options.authCookieName = arg;
+          continue;
+        }
+        if (
+          (options.authAction === 'save' || options.authAction === 'inspect') &&
+          !options.authRef
+        ) {
+          options.authRef = arg;
         }
       }
     }
@@ -325,7 +369,7 @@ function coercePermissionArg(value: string): string {
   return value;
 }
 
-function toBytesPerSecond(raw?: string): number | undefined {
+export function toBytesPerSecond(raw?: string): number | undefined {
   if (!raw) return undefined;
 
   const text = raw.trim().toLowerCase();
@@ -346,8 +390,8 @@ async function resolveConnection(
 ): Promise<ResolvedConnection> {
   if (sessionId) {
     const session = await loadSession(sessionId);
-    const { browser } = await attachSession(session);
-    return { browser, session };
+    const { browser, page, session: attachedSession } = await attachSession(session);
+    return { browser, session: attachedSession, page };
   }
 
   if (useLatestSession) {
@@ -355,8 +399,8 @@ async function resolveConnection(
     if (!defaultSession) {
       throw new Error('No sessions found. Run "bp connect" first or use "-s" for latest session.');
     }
-    const { browser } = await attachSession(defaultSession);
-    return { browser, session: defaultSession };
+    const { browser, page, session: attachedSession } = await attachSession(defaultSession);
+    return { browser, session: attachedSession, page };
   }
 
   let endpoint: Awaited<ReturnType<typeof resolveCLIEndpoint>>;
@@ -506,7 +550,43 @@ function formatPermissionOutput(
   return lines.join('\n');
 }
 
-async function runNetworkCommand(
+/**
+ * Single source of truth for the offline/latency/throughput values used by
+ * both the live CDP call (`runNetworkCommand`) and the persisted session
+ * shape (`networkSettingsFor`). Keeping clamping/defaults/conversion in one
+ * place avoids the two call sites drifting apart.
+ */
+function resolveNetworkParams(
+  action: NetworkAction,
+  options: EnvOptions
+): { offline: boolean; latency: number; downloadThroughput: number; uploadThroughput: number } {
+  if (action === 'offline') {
+    return {
+      offline: true,
+      latency: clampRate(options.latency) ?? 0,
+      downloadThroughput: 0,
+      uploadThroughput: 0,
+    };
+  }
+
+  if (action === 'online') {
+    return {
+      offline: false,
+      latency: 0,
+      downloadThroughput: -1,
+      uploadThroughput: -1,
+    };
+  }
+
+  return {
+    offline: false,
+    latency: clampRate(options.latency) ?? 0,
+    downloadThroughput: clampRate(toBytesPerSecond(options.down)) ?? 1_000_000,
+    uploadThroughput: clampRate(toBytesPerSecond(options.up)) ?? 500_000,
+  };
+}
+
+export async function runNetworkCommand(
   action: NetworkAction,
   options: EnvOptions,
   page: CDPPage,
@@ -514,74 +594,48 @@ async function runNetworkCommand(
 ): Promise<void> {
   await page.cdpClient.send('Network.enable');
 
-  const applyNetworkState = async (
-    offline: boolean,
-    latency: number,
-    downloadThroughput: number,
-    uploadThroughput: number,
-    connectionType: string
-  ) => {
-    const state = {
-      offline,
-      latency,
-      downloadThroughput,
-      uploadThroughput,
-      connectionType,
-    } as Record<string, unknown>;
+  const { offline, latency, downloadThroughput, uploadThroughput } = resolveNetworkParams(
+    action,
+    options
+  );
 
-    try {
-      await page.cdpClient.send('Network.emulateNetworkConditionsByRule', {
-        offline,
-        matchedNetworkConditions: [
-          {
-            urlPattern: '',
-            latency,
-            downloadThroughput,
-            uploadThroughput,
-          },
-        ],
-      } as Record<string, unknown>);
-      await page.cdpClient.send('Network.overrideNetworkState', state);
-    } catch {
-      await page.cdpClient.send('Network.emulateNetworkConditions', state);
-    }
-  };
+  // Classic Network.emulateNetworkConditions is the only mechanism that can
+  // be undone from a fresh session. The experimental
+  // Network.emulateNetworkConditionsByRule/overrideNetworkState pair leaks
+  // per-target rules that outlive session detach and cannot be cleared, so
+  // `bp env network online` could never undo a prior throttle. Never use them.
+  await page.cdpClient.send('Network.emulateNetworkConditions', {
+    offline,
+    latency,
+    downloadThroughput,
+    uploadThroughput,
+  });
+  await applyNetworkOverride(page.cdpClient, { offline, latency });
 
   if (action === 'offline') {
-    await applyNetworkState(true, options.latency ?? 0, 0, 0, 'none');
-    await applyNetworkOverride(page.cdpClient, {
-      offline: true,
-      latency: options.latency ?? 0,
-    });
-
     console.log(`Session ${session.id}: network set to offline`);
     return;
   }
-
   if (action === 'online') {
-    await applyNetworkState(false, 0, -1, -1, 'wifi');
-    await applyNetworkOverride(page.cdpClient, {
-      offline: false,
-      latency: 0,
-    });
-
     console.log(`Session ${session.id}: network set to online`);
     return;
   }
-
-  const latency = clampRate(options.latency) ?? 0;
-  const down = clampRate(toBytesPerSecond(options.down)) ?? 1_000_000;
-  const up = clampRate(toBytesPerSecond(options.up)) ?? 500_000;
-
-  await applyNetworkState(false, latency, down, up, 'wifi');
-  await applyNetworkOverride(page.cdpClient, {
-    offline: false,
-    latency,
-  });
-
   console.log(
-    `Session ${session.id}: network throttled | latency=${latency}ms down=${down}B/s up=${up}B/s`
+    `Session ${session.id}: network throttled | latency=${latency}ms down=${downloadThroughput}B/s up=${uploadThroughput}B/s`
   );
+}
+
+export function networkSettingsFor(
+  action: NetworkAction,
+  options: EnvOptions
+): EnvSettings['network'] {
+  if (action === 'online') {
+    // Clear the persisted throttle entirely so a stored session never carries
+    // stale throughput/latency once online is restored.
+    return undefined;
+  }
+
+  return resolveNetworkParams(action, options);
 }
 
 async function runVisibilityCommand(
@@ -699,6 +753,118 @@ async function runAuthCommand(
   throw new Error(`Unsupported auth action: ${action}`);
 }
 
+function shortenHome(path: string): string {
+  const home = homedir();
+  return path === home || path.startsWith(`${home}/`) ? `~${path.slice(home.length)}` : path;
+}
+
+function uniqueDomains(cookies: { domain: string }[]): string[] {
+  return [...new Set(cookies.map((cookie) => cookie.domain))].sort();
+}
+
+function formatCookieStateErrorMessage(error: CookieStateError, ref: string): string {
+  switch (error.code) {
+    case 'already_exists':
+      return `Snapshot already exists: ${ref} (use --force to overwrite)`;
+    case 'not_found':
+      return `Snapshot not found: ${ref}`;
+    case 'invalid_format':
+      return `Invalid snapshot reference or file format: ${error.message}`;
+    case 'empty':
+      return 'No cookies matched the capture scope; nothing was saved';
+    case 'io_error':
+      return `Failed to read/write snapshot file: ${error.message}`;
+    default:
+      return error.message;
+  }
+}
+
+/** `bp env auth inspect <ref>` - fully offline, no browser/session, no cookie values. */
+async function runAuthInspectCommand(ref: string, outputAsJson: boolean): Promise<void> {
+  let resolvedPath: string;
+  try {
+    resolvedPath = resolveCookieStateRef(ref);
+  } catch (error) {
+    if (error instanceof CookieStateError) {
+      throw new Error(formatCookieStateErrorMessage(error, ref));
+    }
+    throw error;
+  }
+
+  let state: Awaited<ReturnType<typeof loadCookieStateFile>>;
+  try {
+    state = await loadCookieStateFile(ref);
+  } catch (error) {
+    if (error instanceof CookieStateError) {
+      throw new Error(formatCookieStateErrorMessage(error, ref));
+    }
+    throw error;
+  }
+
+  const domains = uniqueDomains(state.cookies);
+  const summary = {
+    file: shortenHome(resolvedPath),
+    sourceUrl: state.sourceUrl,
+    savedAt: state.savedAt,
+    cookieCount: state.cookies.length,
+    domains,
+  };
+
+  if (outputAsJson) {
+    console.log(JSON.stringify(summary, null, 2));
+    return;
+  }
+
+  console.log(`File: ${summary.file}`);
+  console.log(`Source URL: ${summary.sourceUrl}`);
+  console.log(`Saved at: ${summary.savedAt}`);
+  console.log(`Cookies: ${summary.cookieCount}`);
+  console.log(`Domains: ${domains.join(', ')}`);
+}
+
+/** `bp env auth save <ref> -s <session>` - requires an explicit session, no auto-connect. */
+async function runAuthSaveCommand(
+  ref: string,
+  options: EnvOptions,
+  page: { cdpClient: Page['cdpClient']; targetId: Page['targetId']; url: Page['url'] },
+  outputAsJson: boolean
+): Promise<void> {
+  let state: Awaited<ReturnType<typeof captureCookieState>>;
+  try {
+    state = await captureCookieState(page, { includeUrls: options.authIncludeUrls ?? [] });
+  } catch (error) {
+    if (error instanceof CookieStateError) {
+      throw new Error(formatCookieStateErrorMessage(error, ref));
+    }
+    throw error;
+  }
+
+  let saved: { path: string };
+  try {
+    saved = await saveCookieStateFile(ref, state, { overwrite: options.authForce ?? false });
+  } catch (error) {
+    if (error instanceof CookieStateError) {
+      throw new Error(formatCookieStateErrorMessage(error, ref));
+    }
+    throw error;
+  }
+
+  const summary = {
+    file: shortenHome(saved.path),
+    sourceUrl: state.sourceUrl,
+    cookieCount: state.cookies.length,
+  };
+
+  if (outputAsJson) {
+    console.log(JSON.stringify(summary, null, 2));
+    return;
+  }
+
+  console.log(`Saved cookie snapshot: ${summary.file}`);
+  console.log(`Source URL: ${summary.sourceUrl}`);
+  console.log(`Cookies: ${summary.cookieCount}`);
+}
+
 async function runGeolocationCommand(
   action: GeoAction,
   options: EnvOptions,
@@ -736,12 +902,35 @@ export async function envCommand(
     return;
   }
 
-  const { browser, session } = await resolveConnection(
-    globalOptions.session,
-    options.useLatestSession ?? false
-  );
-  const page = await browser.page(undefined, { targetId: session.targetId });
   const outputAsJson = globalOptions.format === 'json';
+
+  // `auth inspect` is fully offline: no connection, no session file, ever.
+  if (options.topCommand === 'auth' && options.authAction === 'inspect') {
+    if (!options.authRef) {
+      throw new Error('auth inspect requires a snapshot name or path');
+    }
+    await runAuthInspectCommand(options.authRef, outputAsJson);
+    return;
+  }
+
+  // `auth save` requires an explicit session; never auto-connect.
+  if (options.topCommand === 'auth' && options.authAction === 'save') {
+    if (!globalOptions.session && !options.useLatestSession) {
+      throw new Error(
+        'auth save requires an explicit session: use -s <session> or bare -s for the latest session'
+      );
+    }
+    if (!options.authRef) {
+      throw new Error('auth save requires a snapshot name or path');
+    }
+  }
+
+  const {
+    browser,
+    session,
+    page: resolvedPage,
+  } = await resolveConnection(globalOptions.session, options.useLatestSession ?? false);
+  const page = resolvedPage ?? (await browser.page(undefined, { targetId: session.targetId }));
   const existingEnv: EnvSettings = session.metadata?.env ?? {};
 
   try {
@@ -814,17 +1003,7 @@ export async function envCommand(
         metadata: {
           env: {
             ...existingEnv,
-            network:
-              action === 'online'
-                ? {
-                    offline: false,
-                    latency: 0,
-                  }
-                : {
-                    offline: action === 'offline',
-                    latency:
-                      action === 'throttle' ? (options.latency ?? 0) : (options.latency ?? 0),
-                  },
+            network: networkSettingsFor(action, options),
           },
         },
       });
@@ -832,14 +1011,18 @@ export async function envCommand(
         await new Promise((resolve) => setTimeout(resolve, options.duration));
         if (action === 'offline' || action === 'throttle') {
           await runNetworkCommand('online', {}, page, session);
+          // Re-read the session immediately before the restore write: a
+          // concurrent `bp env` command may have changed other env fields
+          // (permissions, auth, etc.) while this command was asleep for
+          // --duration, and spreading the pre-sleep `existingEnv` here would
+          // silently clobber that change.
+          const freshSession = await loadSession(session.id);
+          const freshEnv: EnvSettings = freshSession.metadata?.env ?? {};
           await updateSession(session.id, {
             metadata: {
               env: {
-                ...existingEnv,
-                network: {
-                  offline: false,
-                  latency: 0,
-                },
+                ...freshEnv,
+                network: networkSettingsFor('online', {}),
               },
             },
           });
@@ -889,7 +1072,11 @@ export async function envCommand(
 
     if (options.topCommand === 'auth') {
       if (!options.authAction) {
-        throw new Error('auth command requires: set-headers, set-cookie, or clear');
+        throw new Error('auth command requires: set-headers, set-cookie, clear, save, or inspect');
+      }
+      if (options.authAction === 'save') {
+        await runAuthSaveCommand(options.authRef!, options, page, outputAsJson);
+        return;
       }
       const nextEnv = await runAuthCommand(options.authAction, options, page, session, existingEnv);
       await updateSession(session.id, { metadata: { env: nextEnv } });

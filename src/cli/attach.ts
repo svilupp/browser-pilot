@@ -26,6 +26,7 @@ import { getEnv, isDaemonDisabledByEnv } from '../runtime/env.ts';
 import { resolveCLIEndpoint } from './browser-endpoint.ts';
 import { spawnDaemon, waitForDaemonReady } from './daemon-spawn.ts';
 import {
+  applyNetworkEmulation,
   applyNetworkOverride,
   applyPermissionState,
   applyVisibilityState,
@@ -73,6 +74,17 @@ async function applySessionEnvironment(
   }
 
   if (settings.network) {
+    // Best effort: if the target rejects Network.enable/emulateNetworkConditions
+    // (e.g. unsupported target type), attach must still succeed — otherwise
+    // `bp env network online` (the only way to clear persisted state) could
+    // never run.
+    try {
+      await applyNetworkEmulation(page.cdpClient, settings.network);
+    } catch (error) {
+      console.warn(
+        `[browser-pilot] failed to re-apply network emulation: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
     await applyNetworkOverride(page.cdpClient, settings.network);
   }
 

@@ -31,6 +31,17 @@ Connect to a local or cloud browser:
 bp connect --name dev                              # Local Chrome (default)
 bp connect --provider browser-use --name dev       # Cloud browser (recommended when no local Chrome)
 bp connect --new-tab --page-url https://app.example.com --cf-access  # Behind Cloudflare Access
+bp connect --name work --auth shopify              # Restore a saved cookie snapshot
+```
+
+Reuse a login across sessions with cookie snapshots (see `docs/guides/auth-cookies.md`):
+
+```bash
+bp connect --name login --new-tab --foreground --page-url https://app.example.com
+# ... log in manually ...
+bp env auth save shopify -s login
+bp env auth inspect shopify                        # offline, no values shown
+bp connect --name work --auth shopify              # or BROWSER_PILOT_AUTH=shopify
 ```
 
 Inspect and act:

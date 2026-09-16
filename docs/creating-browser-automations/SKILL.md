@@ -49,10 +49,15 @@ Use a profile that matches the job:
 - `voice`
 - `auth`
 
+Prefer a saved cookie snapshot when one exists for the target site — restore it
+(`bp connect --auth <name-or-path>`) instead of logging in again before recording; see
+[Cookie snapshot auth](../guides/auth-cookies.md).
+
 If the target sits behind Cloudflare Access, authenticate before capturing — otherwise the
 recording just captures the Access login redirect. Run `bp connect --cf-access` (or
 `bp env auth set-headers`/`set-cookie` for persisted auth) before `bp record`, not as part
-of the demoed flow. See `docs/proposals/cloudflare-access-auth.md`.
+of the demoed flow. See `docs/cli.md#env` and, for reusing a saved login instead of
+Cloudflare Access, `docs/guides/auth-cookies.md`.
 
 ## Understand the artifact before deriving
 

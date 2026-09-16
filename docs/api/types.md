@@ -212,7 +212,7 @@ interface Step {
   payload?: string | Record<string, unknown>;
   base64?: boolean;
   awaitReply?: { match?: string; where?: Record<string, unknown>; timeout?: number };
-  /** setCookie: ephemeral, not persisted (see docs/proposals/cloudflare-access-auth.md) */
+  /** setCookie: ephemeral, not persisted (see docs/cli.md#env, docs/guides/auth-cookies.md) */
   cookie?: SetCookieOptions;
   /** setHeaders: ephemeral, replaces the whole header set for this step */
   headers?: Record<string, string>;

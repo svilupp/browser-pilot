@@ -10,6 +10,23 @@
 
 import { Browser, type BrowserOptions } from '../browser/browser.ts';
 
+// Cookie state capture/restore (file-specific imports only — never the
+// `src/auth/index.ts` barrel, which also exports `mintCfAccessJwt`, a
+// Node-only helper that must stay root-only).
+export {
+  captureCookieState,
+  parseCookieState,
+  restoreCookieState,
+  serializeCookieState,
+} from '../auth/cookie-state.ts';
+export { CookieStateError } from '../auth/errors.ts';
+export type {
+  CookieCaptureOptions,
+  CookieRestoreResult,
+  CookieState,
+  CookieStateErrorCode,
+  SerializedCookie,
+} from '../auth/types.ts';
 // Browser & Page (portable classes; no ambient runtime access)
 export {
   Browser,

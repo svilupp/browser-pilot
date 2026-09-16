@@ -77,11 +77,15 @@ export interface EnvSettings {
   network?: {
     offline: boolean;
     latency?: number;
+    /** Bytes/sec; -1 disables the throughput cap (online/unthrottled). */
+    downloadThroughput?: number;
+    /** Bytes/sec; -1 disables the throughput cap (online/unthrottled). */
+    uploadThroughput?: number;
   };
   /**
    * Persisted Cloudflare-Access-style auth state, reapplied on every
    * attach/reattach via `applySessionEnvironment()`. See
-   * docs/proposals/cloudflare-access-auth.md for the full lifecycle.
+   * docs/guides/auth-cookies.md for the full lifecycle.
    *
    * `extraHeaders.fromEnv` stores environment variable *names*, never
    * resolved secret values — session files are plaintext on disk.
@@ -107,6 +111,19 @@ export interface SessionMetadata {
   /** Session-level recording settings (set via `bp connect --record`) */
   record?: RecordSettings;
   env?: EnvSettings;
+  /**
+   * Provenance of a `bp connect --auth` cookie-snapshot restore performed at
+   * connect time. Counts and a file path only — never cookie values, and
+   * deliberately separate from `env.auth` (which `applySessionEnvironment()`
+   * re-injects on every attach; a one-time restore must not be replayed).
+   */
+  cookieAuth?: {
+    /** Resolved snapshot file path, `$HOME` shortened to `~`. */
+    source: string;
+    /** ISO timestamp of the restore. */
+    restoredAt: string;
+    cookieCount: number;
+  };
   [key: string]: unknown;
 }
 
