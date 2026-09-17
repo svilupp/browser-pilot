@@ -130,8 +130,9 @@ AUTHENTICATION (EPHEMERAL)
 
   For persisted, auto-reapplied Cloudflare Access auth that survives
   attach/reattach and daemon restarts, use 'bp env auth set-headers' /
-  'set-cookie' / 'clear' instead (see 'bp env --help' and
-  docs/proposals/cloudflare-access-auth.md).
+  'set-cookie' / 'clear' instead (see 'bp env --help' and docs/cli.md#env).
+  For reusing a full login session across connects, see
+  docs/guides/auth-cookies.md ('bp env auth save'/'inspect', 'bp connect --auth').
 
 DIALOG HANDLING
   Use --dialog flag: bp exec --dialog accept '[...]'

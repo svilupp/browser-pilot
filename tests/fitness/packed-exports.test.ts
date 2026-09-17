@@ -121,6 +121,24 @@ describe('packed exports', () => {
         unknown
       >;
       expect(typeof nodeAdapter['InProcessSessionOwner']).toBe('function');
+      expect(typeof nodeAdapter['loadCookieStateFile']).toBe('function');
+      expect(typeof nodeAdapter['resolveCookieStateRef']).toBe('function');
+      expect(typeof nodeAdapter['saveCookieStateFile']).toBe('function');
+
+      const rootEntry = (await import(join(PACKED_OUT_DIR, 'index.mjs'))) as Record<
+        string,
+        unknown
+      >;
+      expect(typeof rootEntry['parseCookieState']).toBe('function');
+      expect(typeof rootEntry['serializeCookieState']).toBe('function');
+      expect(typeof rootEntry['captureCookieState']).toBe('function');
+      expect(typeof rootEntry['restoreCookieState']).toBe('function');
+      expect(typeof rootEntry['CookieStateError']).toBe('function');
+      expect(typeof core['parseCookieState']).toBe('function');
+      expect(typeof core['serializeCookieState']).toBe('function');
+      expect(typeof core['captureCookieState']).toBe('function');
+      expect(typeof core['restoreCookieState']).toBe('function');
+      expect(typeof core['CookieStateError']).toBe('function');
 
       const memoryAdapter = (await import(
         join(PACKED_OUT_DIR, 'adapters/memory/index.mjs')

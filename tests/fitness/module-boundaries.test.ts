@@ -20,6 +20,10 @@ const BOUNDARY_RULES = [
     mustNotImport: ['src/providers/browserbase', 'src/providers/browserless'],
   },
   { from: 'src/actions/', mustNotImport: ['src/cli/', 'src/daemon/'] },
+  {
+    from: 'src/auth/',
+    mustNotImport: ['src/cli/', 'src/adapters/', 'src/daemon/'],
+  },
 ];
 
 for (const rule of BOUNDARY_RULES) {
@@ -43,3 +47,18 @@ for (const rule of BOUNDARY_RULES) {
     expect(violations).toEqual([]);
   });
 }
+
+test('src/auth/** must not import node:* built-ins', async () => {
+  const glob = new Bun.Glob('src/auth/**/*.ts');
+  const violations: string[] = [];
+
+  for await (const file of glob.scan('.')) {
+    const content = await Bun.file(file).text();
+    const re = /from\s+['"]node:/g;
+    if (re.test(content)) {
+      violations.push(`${file} imports a node:* built-in`);
+    }
+  }
+
+  expect(violations).toEqual([]);
+});

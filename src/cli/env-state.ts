@@ -328,3 +328,34 @@ export async function applyNetworkOverride(
   await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: script });
   await cdp.send('Runtime.evaluate', { expression: script, awaitPromise: false });
 }
+
+/**
+ * Re-apply real CDP network emulation on (re)attach, in addition to the JS
+ * `navigator.onLine`/fetch shim from `applyNetworkOverride()`.
+ *
+ * Classic `Network.emulateNetworkConditions` is scoped to the CDP session
+ * that set it and resets once that session detaches — this matters most for
+ * `--no-daemon` direct sessions, where every CLI invocation opens a fresh
+ * session. Safe/no-op when no network settings are stored.
+ */
+export async function applyNetworkEmulation(
+  cdp: CDPClient,
+  state:
+    | {
+        offline: boolean;
+        latency?: number;
+        downloadThroughput?: number;
+        uploadThroughput?: number;
+      }
+    | undefined
+): Promise<void> {
+  if (!state) return;
+
+  await cdp.send('Network.enable');
+  await cdp.send('Network.emulateNetworkConditions', {
+    offline: state.offline,
+    latency: state.latency ?? 0,
+    downloadThroughput: state.downloadThroughput ?? (state.offline ? 0 : -1),
+    uploadThroughput: state.uploadThroughput ?? (state.offline ? 0 : -1),
+  });
+}

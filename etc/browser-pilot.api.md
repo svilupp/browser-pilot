@@ -340,6 +340,11 @@ export class CapabilityError extends Error {
 // @public
 export function captureBeforeState(page: Page, conditions: Condition[]): Promise<AssertionBeforeState>;
 
+// Warning: (ae-forgotten-export) The symbol "CookieStatePage" needs to be exported by the entry point index.d.ts
+//
+// @public
+export function captureCookieState(page: CookieStatePage, opts?: CookieCaptureOptions): Promise<CookieState>;
+
 // @public
 export interface CaptureOptions {
     maxDuration?: number;
@@ -637,6 +642,47 @@ export interface Cookie {
     sourceScheme: 'Unset' | 'NonSecure' | 'Secure';
     value: string;
 }
+
+// @public (undocumented)
+export interface CookieCaptureOptions {
+    includeUrls?: string[];
+}
+
+// @public (undocumented)
+export interface CookieRestoreResult {
+    // (undocumented)
+    domains: string[];
+    // (undocumented)
+    restored: number;
+    // (undocumented)
+    skippedExpired: number;
+    // (undocumented)
+    unverified: number;
+}
+
+// @public (undocumented)
+export interface CookieState {
+    // (undocumented)
+    cookies: SerializedCookie[];
+    // (undocumented)
+    format: 'browser-pilot-cookie-auth';
+    // (undocumented)
+    savedAt: string;
+    // (undocumented)
+    schemaVersion: 1;
+    // (undocumented)
+    sourceUrl: string;
+}
+
+// @public (undocumented)
+export class CookieStateError extends Error {
+    constructor(code: CookieStateErrorCode, message?: string);
+    // (undocumented)
+    readonly code: CookieStateErrorCode;
+}
+
+// @public
+export type CookieStateErrorCode = 'not_found' | 'invalid_format' | 'unsupported_version' | 'expired' | 'empty' | 'invalid_cookie' | 'unsupported_partition' | 'already_exists' | 'io_error' | 'nothing_restored';
 
 // @public
 export function createCDPClient(wsUrl: string, options?: CDPClientOptions): Promise<CDPClient>;
@@ -1470,6 +1516,9 @@ export interface PageState {
     visibleText: string;
 }
 
+// @public
+export function parseCookieState(input: unknown): CookieState;
+
 // Warning: (ae-forgotten-export) The symbol "ParsedDevToolsActivePort" needs to be exported by the entry point index.d.ts
 //
 // @public (undocumented)
@@ -1883,6 +1932,9 @@ export type ResolvedBrowserSource = 'explicit-ws' | 'devtools-active-port' | 'js
 export type ResourceType = 'Document' | 'Stylesheet' | 'Image' | 'Media' | 'Font' | 'Script' | 'TextTrack' | 'XHR' | 'Fetch' | 'Prefetch' | 'EventSource' | 'WebSocket' | 'Manifest' | 'SignedExchange' | 'Ping' | 'CSPViolationReport' | 'Preflight' | 'Other';
 
 // @public
+export function restoreCookieState(page: CookieStatePage, state: CookieState): Promise<CookieRestoreResult>;
+
+// @public
 export interface RetryDecision {
     // Warning: (ae-forgotten-export) The symbol "RetryDecisionReason" needs to be exported by the entry point index.d.ts
     //
@@ -1971,6 +2023,48 @@ export interface SemanticFingerprint {
     siblingIndex: number;
     stableAttrs: Record<string, string>;
     valueShape: string;
+}
+
+// @public
+export function serializeCookieState(state: {
+    savedAt: string;
+    sourceUrl: string;
+    cookies: SerializedCookie[];
+}): string;
+
+// @public
+export interface SerializedCookie {
+    domain: string;
+    expires: number | null;
+    hostOnly: boolean;
+    // (undocumented)
+    httpOnly: boolean;
+    // (undocumented)
+    name: string;
+    // Warning: (ae-forgotten-export) The symbol "CookiePartitionKey" needs to be exported by the entry point index.d.ts
+    //
+    // (undocumented)
+    partitionKey?: CookiePartitionKey;
+    // (undocumented)
+    path: string;
+    // Warning: (ae-forgotten-export) The symbol "CookiePriority" needs to be exported by the entry point index.d.ts
+    //
+    // (undocumented)
+    priority: CookiePriority;
+    // Warning: (ae-forgotten-export) The symbol "CookieSameSite" needs to be exported by the entry point index.d.ts
+    //
+    // (undocumented)
+    sameSite: CookieSameSite | null;
+    // (undocumented)
+    secure: boolean;
+    // (undocumented)
+    sourcePort: number;
+    // Warning: (ae-forgotten-export) The symbol "CookieSourceScheme" needs to be exported by the entry point index.d.ts
+    //
+    // (undocumented)
+    sourceScheme: CookieSourceScheme;
+    // (undocumented)
+    value: string;
 }
 
 // @public
@@ -2710,10 +2804,10 @@ export interface WorkflowSummary {
 
 // Warnings were encountered during analysis:
 //
-// dist/index.d.ts:398:5 - (ae-forgotten-export) The symbol "CanonicalTraceEvent" needs to be exported by the entry point index.d.ts
-// dist/page-0BIQ7oeS.d.ts:494:9 - (ae-forgotten-export) The symbol "CoveringElement" needs to be exported by the entry point index.d.ts
-// dist/page-0BIQ7oeS.d.ts:495:9 - (ae-forgotten-export) The symbol "HitElement" needs to be exported by the entry point index.d.ts
-// dist/page-0BIQ7oeS.d.ts:496:9 - (ae-forgotten-export) The symbol "PointerEventsDiagnosis" needs to be exported by the entry point index.d.ts
+// dist/index.d.ts:400:5 - (ae-forgotten-export) The symbol "CanonicalTraceEvent" needs to be exported by the entry point index.d.ts
+// dist/page-BB6d6Cwo.d.ts:494:9 - (ae-forgotten-export) The symbol "CoveringElement" needs to be exported by the entry point index.d.ts
+// dist/page-BB6d6Cwo.d.ts:495:9 - (ae-forgotten-export) The symbol "HitElement" needs to be exported by the entry point index.d.ts
+// dist/page-BB6d6Cwo.d.ts:496:9 - (ae-forgotten-export) The symbol "PointerEventsDiagnosis" needs to be exported by the entry point index.d.ts
 // dist/providers.d.ts:77:9 - (ae-forgotten-export) The symbol "LocalBrowserCandidate" needs to be exported by the entry point index.d.ts
 // dist/providers.d.ts:78:9 - (ae-forgotten-export) The symbol "LocalDiscoveryFailure" needs to be exported by the entry point index.d.ts
 

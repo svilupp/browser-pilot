@@ -43,6 +43,7 @@ status block and a temporary log path; failures print the captured diagnostics.
 | Change browser conditions | `env` |
 | Discover or invoke page tools | `webmcp status`, `webmcp list`, `webmcp call` |
 | Authenticate behind Cloudflare Access | `connect --cf-access`, `env auth` |
+| Reuse a login across sessions | `env auth save`, `env auth inspect`, `connect --auth` |
 
 For multiple local Chrome profiles, use `--channel` or `--user-data-dir`. Use
 `bp connect --new-tab --page-url <url>` to start from a fresh tab. New tabs stay in the background
@@ -214,8 +215,24 @@ await page.setCookie(cookie);
 ```
 
 For persisted auth that survives reattach/daemon restarts, use `bp env auth set-cookie` /
-`set-headers` (see [CLI Guide](./docs/cli.md)). Full design and lifecycle semantics:
-[Cloudflare Access auth proposal](./docs/proposals/cloudflare-access-auth.md).
+`set-headers` (see [CLI Guide](./docs/cli.md#env)). Full design and lifecycle semantics:
+[CLI Guide § env](./docs/cli.md#env).
+
+## Reuse a login (cookie snapshot auth)
+
+Log in once by hand, save the cookies to a private file, and restore them into later sessions
+instead of repeating the login:
+
+```bash
+bp connect --name app-login --new-tab --foreground --page-url https://app.example.com
+# ... log in manually ...
+bp env auth save app -s app-login
+bp connect --name app-work --auth app
+```
+
+`BROWSER_PILOT_AUTH=<name-or-path>` is an equivalent environment fallback for `--auth`, handy
+in CI. See the [cookie snapshot auth guide](./docs/guides/auth-cookies.md) for scope rules,
+file privacy, expiry/rotation, and the GitHub Actions pattern.
 
 ## Package exports
 
@@ -282,5 +299,5 @@ See [CLI configuration](./docs/cli.md#install) for supported dotenv syntax.
 - [Page API](./docs/api/page.md)
 - [Browser API](./docs/api/browser.md)
 - [Types](./docs/api/types.md)
-- [Cloudflare Access auth proposal](./docs/proposals/cloudflare-access-auth.md)
+- [Cookie snapshot auth](./docs/guides/auth-cookies.md)
 - [LLM contract](./docs/llms.txt)

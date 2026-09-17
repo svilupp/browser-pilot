@@ -398,19 +398,51 @@ Primary commands:
 - `bp env visibility ...`
 - `bp env geolocation ...`
 - `bp env auth ...` — persisted Cloudflare-Access-style header/cookie auth,
-  reapplied on every attach/reattach. See
-  `docs/proposals/cloudflare-access-auth.md` for the full lifecycle
-  semantics (persisted `env auth set-*` vs. ephemeral `setCookie`/`setHeaders`
-  actions).
+  reapplied on every attach/reattach (persisted `env auth set-*` vs. ephemeral
+  `setCookie`/`setHeaders` actions), **and** URL-scoped cookie snapshot save/inspect/restore
+  (`env auth save`, `env auth inspect`, `connect --auth`). See
+  [Cookie snapshot auth](./guides/auth-cookies.md) for the full lifecycle semantics of the
+  latter.
 
 Examples:
 
 ```bash
 bp env permissions grant -s dev microphone
 bp env network offline -s dev --duration 5000
-bp env network throttle -s dev --latency 200 --down 128kbps --up 64kbps
+bp env network throttle -s dev --latency 200 --down 128kbps --up 64kbps --duration 5000
+bp env network online -s dev --recreate-tab
 bp env visibility hidden -s dev
 bp env geolocation set -s dev --lat 37.7749 --lon -122.4194
+
+# `bp env network` flags:
+# - --latency <ms>          added round-trip latency
+# - --down <rate>           download cap, e.g. 128kbps, 1mbps, or raw bytes/sec
+# - --up <rate>             upload cap, same rate syntax
+# - --duration <ms>         auto-restore to online after N ms (works with
+#                           `throttle` and `offline`)
+# - --recreate-tab          `network online` only: swap in a fresh tab/target
+#                           at the same URL instead of clearing conditions on
+#                           the existing one; loses page state (scroll
+#                           position, in-memory JS state, unsubmitted forms)
+
+# Notes on `bp env network`:
+# - Uses classic CDP `Network.emulateNetworkConditions`, applied per-target
+#   (only the session's pinned tab is throttled, not the whole browser).
+# - In daemon mode (default), throttle/online run on the same persistent CDP
+#   session, so `online` reliably clears a prior `throttle`/`offline`.
+# - In `--no-daemon` mode, classic emulation resets whenever the CDP session
+#   detaches; persisted network settings are re-applied on every `bp env`/`bp
+#   exec` command via `applySessionEnvironment()`.
+# - Network conditions are keyed per CDP session: only the session that set
+#   them can clear them, and they clear automatically when that session
+#   detaches. A tab throttled by a browser-pilot version before this fix (or
+#   by a session that leaked without ever detaching) stays throttled until
+#   its own CDP session goes away. Recover with one of:
+#     `bp daemon stop -s <session>` (or restart the daemon) — disposes all
+#       daemon-held sessions;
+#     `bp env network online --recreate-tab` — swaps in a fresh tab, no
+#       stale session to worry about;
+#     or close the affected tab manually.
 
 # Cloudflare Access auth (persisted, reapplied on every attach)
 bp env auth set-headers -s dev --from-env CF-Access-Client-Id=CF_ACCESS_CLIENT_ID --from-env CF-Access-Client-Secret=CF_ACCESS_CLIENT_SECRET
@@ -420,7 +452,17 @@ bp env auth clear -s dev
 # Sugar: mint the CF_Authorization cookie automatically (cookie mode, default)
 bp connect --new-tab --page-url https://app.example.com --cf-access
 bp connect --new-tab --page-url https://app.example.com --cf-access --cf-access-mode headers
+
+# URL-scoped cookie snapshot auth: save a login once, restore it in later sessions
+bp env auth save shopify -s shopify-login
+bp env auth save shopify -s shopify-login --include-url https://accounts.shopify.com --force
+bp env auth inspect shopify
+bp connect --name shopify-work --auth shopify
+BROWSER_PILOT_AUTH=shopify bp connect --name shopify-ci  # env fallback; --auth wins if both set
 ```
+
+See [Cookie snapshot auth](./guides/auth-cookies.md) for the full command reference (`env auth
+save|inspect`, `connect --auth`, resolution rules, scope rules, file privacy, and CI usage).
 
 Likely next steps:
 

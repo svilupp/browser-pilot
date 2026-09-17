@@ -161,6 +161,122 @@ type AnyEventHandler = (
 type TargetAttachedHandler = (info: TargetAttachedInfo) => void;
 
 /**
+ * Cookie-bearing CDP method names: outgoing commands and incoming responses/
+ * events that may carry raw cookie values and must be redacted before being
+ * written to debug logs or trace files.
+ */
+const COOKIE_METHODS = new Set([
+  'Storage.getCookies',
+  'Storage.setCookies',
+  'Network.getCookies',
+  'Network.getAllCookies',
+  'Network.setCookie',
+  'Network.setCookies',
+  'Network.deleteCookies',
+  'Storage.deleteCookies',
+]);
+
+function redactCookieArray(value: unknown): unknown {
+  if (!Array.isArray(value)) return value;
+  return value.map((entry) => {
+    if (isRecord(entry) && 'value' in entry) {
+      return { ...entry, value: '[REDACTED]' };
+    }
+    return entry;
+  });
+}
+
+function redactHeaders(headers: unknown): unknown {
+  if (!isRecord(headers)) return headers;
+  let changed = false;
+  const out: Record<string, unknown> = { ...headers };
+  for (const key of Object.keys(out)) {
+    if (key.toLowerCase() === 'set-cookie') {
+      out[key] = '[REDACTED]';
+      changed = true;
+    }
+  }
+  return changed ? out : headers;
+}
+
+function redactCookieBearingRecord(
+  record: Record<string, unknown>,
+  isCookieMethod: boolean
+): Record<string, unknown> {
+  let changed = false;
+  const out: Record<string, unknown> = { ...record };
+
+  if ('cookies' in out) {
+    const redacted = redactCookieArray(out['cookies']);
+    if (redacted !== out['cookies']) {
+      out['cookies'] = redacted;
+      changed = true;
+    }
+  }
+
+  if (isCookieMethod && 'name' in out && 'value' in out && typeof out['value'] === 'string') {
+    out['value'] = '[REDACTED]';
+    changed = true;
+  }
+
+  if ('headers' in out) {
+    const redacted = redactHeaders(out['headers']);
+    if (redacted !== out['headers']) {
+      out['headers'] = redacted;
+      changed = true;
+    }
+  }
+
+  return changed ? out : record;
+}
+
+/**
+ * Redact raw cookie values from a parsed CDP message before it is written to
+ * a debug log or trace file. Returns a shallow-cloned message when any
+ * redaction applies; returns the original object unchanged otherwise. Never
+ * mutates the input.
+ *
+ * `resolveMethod` lets callers correlate a bare `{id, result}` response (no
+ * `method` field) back to the originating command via a pending-request map,
+ * so responses to cookie-reading commands (e.g. `Storage.getCookies`) are
+ * redacted even though the response itself carries no method name.
+ */
+export function redactCdpMessage(
+  message: Record<string, unknown>,
+  resolveMethod?: (id: number) => string | undefined
+): Record<string, unknown> {
+  const method =
+    typeof message['method'] === 'string'
+      ? message['method']
+      : typeof message['id'] === 'number' && resolveMethod
+        ? resolveMethod(message['id'])
+        : undefined;
+
+  const isCookieMethod = method !== undefined && COOKIE_METHODS.has(method);
+
+  let changed = false;
+  const out: Record<string, unknown> = { ...message };
+
+  if (isRecord(out['result'])) {
+    const redacted = redactCookieBearingRecord(out['result'], isCookieMethod);
+    if (redacted !== out['result']) {
+      out['result'] = redacted;
+      changed = true;
+    }
+  }
+
+  if (isRecord(out['params'])) {
+    const redacted = redactCookieBearingRecord(out['params'], isCookieMethod);
+    if (redacted !== out['params']) {
+      out['params'] = redacted;
+      changed = true;
+    }
+  }
+
+  return changed ? out : message;
+}
+
+/**
  * Create a CDP client from an already-connected transport.
  * Used by the daemon fast-path (Unix socket transport).
  */
@@ -231,7 +347,11 @@ function buildCDPClient(
     }
 
     if (debug) {
-      console.log('[CDP] <--', JSON.stringify(msg, null, 2).slice(0, 500));
+      const redacted = redactCdpMessage(
+        msg as unknown as Record<string, unknown>,
+        (id) => pending.get(id)?.method
+      );
+      console.log('[CDP] <--', JSON.stringify(redacted, null, 2).slice(0, 500));
     }
 
     // Response to a command (has id)
@@ -383,7 +503,8 @@ function buildCDPClient(
       const message = JSON.stringify(request);
 
       if (debug) {
-        console.log('[CDP] -->', message.slice(0, 500));
+        const redacted = redactCdpMessage(request as unknown as Record<string, unknown>);
+        console.log('[CDP] -->', JSON.stringify(redacted).slice(0, 500));
       }
 
       return new Promise<T>((resolve, reject) => {

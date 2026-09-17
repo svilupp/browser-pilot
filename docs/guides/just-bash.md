@@ -137,6 +137,34 @@ exits 1 and retains its handle for a later release attempt.
 
 Run `bp --help` or `bp COMMAND --help` for arguments and exit codes.
 
+## Cookie snapshot auth
+
+`src/shell/` and `browser-pilot/just-bash` stay credential-free: the shell command switch
+does not map `connect`/`run`/`env`, and gains **no** `--auth` flag or `env auth` subcommand.
+A cookie snapshot restore is a host-side operation, not something the embedded shell can
+drive.
+
+The embedding host (owner of `SessionOwner`, e.g. `InProcessSessionOwner` from
+`browser-pilot/adapters/node`) loads the snapshot JSON from its own secret store — using the
+Node-only `loadCookieStateFile`/`resolveCookieStateRef` helpers from
+`browser-pilot/adapters/node`, or any other loader — and calls the portable
+`restoreCookieState(page, state)` (root or `browser-pilot/core`) itself while creating the
+session, before the first navigation happens inside the shell:
+
+```ts
+import { restoreCookieState } from 'browser-pilot/core';
+import { loadCookieStateFile } from 'browser-pilot/adapters/node';
+
+const authState = await loadCookieStateFile('/run/secrets/shopify.json');
+const page = await browser.newPage('about:blank');
+await restoreCookieState(page, authState);
+await page.goto(authState.sourceUrl);
+// ... hand the resulting session/page off to registerBrowserPilotCommands(ports) ...
+```
+
+See [Cookie snapshot auth](./auth-cookies.md) for the file format, scope rules, and the
+`CookieStateError` codes `restoreCookieState` can throw.
+
 ## Extending the shell
 
 Add custom commands alongside `registerBrowserPilotCommands(ports)`, or use

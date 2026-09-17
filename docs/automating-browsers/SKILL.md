@@ -220,6 +220,19 @@ bp connect --new-tab --page-url https://app.example.com --cf-access
 bp env auth set-headers -s vt --from-env CF-Access-Client-Id=CF_ACCESS_CLIENT_ID --from-env CF-Access-Client-Secret=CF_ACCESS_CLIENT_SECRET
 ```
 
+Sites behind an ordinary login: prefer a saved cookie snapshot over re-logging-in. If one
+already exists for the target (check with `bp env auth inspect <name>`), restore it instead
+of driving the login form again:
+
+```bash
+bp env auth inspect shopify           # check whether a snapshot already exists, offline
+bp connect --name work --auth shopify # restore it into a fresh tab, then automate
+```
+
+Only fall back to demoing/scripting the login flow itself when no snapshot exists yet, then
+save one for next time (`bp env auth save <name> -s <session>`; see
+[Cookie snapshot auth](../guides/auth-cookies.md)).
+
 ## Trace-backed assertions in exec/run
 
 Useful steps for realtime and voice apps:

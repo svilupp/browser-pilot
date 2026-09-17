@@ -148,3 +148,7 @@ tests/screenshots/
 
 # Scratch build output (e.g. tests/fitness/packed-exports.test.ts)
 .tmp/
+
+# Cookie snapshot auth (docs/guides/auth-cookies.md) - never commit
+*.cookies.json
+.browser-pilot-auth/

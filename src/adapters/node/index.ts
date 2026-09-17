@@ -20,8 +20,14 @@ import type { ProviderReleaseResult, ProviderSession } from '../../providers/typ
 import { now } from '../../runtime/clock.ts';
 import { getEnv } from '../../runtime/env.ts';
 import { randomId } from '../../runtime/id.ts';
+import {
+  loadCookieStateFile,
+  resolveCookieStateRef,
+  saveCookieStateFile,
+} from './cookie-state-files.ts';
 
 export { NodeArtifactSink, type NodeArtifactSinkOptions };
+export { loadCookieStateFile, resolveCookieStateRef, saveCookieStateFile };
 
 function abortReason(signal: AbortSignal): Error {
   const reason: unknown = signal.reason;

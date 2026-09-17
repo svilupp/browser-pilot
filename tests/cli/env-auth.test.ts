@@ -392,3 +392,263 @@ async function cleanupSession(sessionName: string): Promise<void> {
   rmSync(join(SESSION_DIR, sessionName), { recursive: true, force: true });
   rmSync(join(SESSION_DIR, `${sessionName}.json`), { force: true });
 }
+
+const COOKIE_SENTINEL = 'super-secret-cookie-value-do-not-leak';
+
+// Cookie capture relies on `Storage.getCookies`, which is scoped to the
+// browsing context that *created* the target. Reusing the harness's
+// pre-existing blank tab (the default `connectDaemonSession` behavior)
+// attaches to a target created by a different connection, so capture
+// legitimately reports zero cookies. `--new-tab` creates the target through
+// our own connection instead, matching real `bp connect --new-tab` usage
+// from the canonical save/inspect flow.
+async function connectDaemonSessionNewTab(sessionName: string): Promise<void> {
+  const wsUrl = await getWebSocketUrl();
+  const connectResult = await runCLI([
+    'connect',
+    '--provider',
+    'generic',
+    '--url',
+    wsUrl,
+    '--new-tab',
+    '--name',
+    sessionName,
+    '--json',
+  ]);
+  expect(connectResult.exitCode).toBe(0);
+}
+
+describe('CLI env auth save/inspect (cookie snapshots)', () => {
+  let saveEchoServer: ReturnType<typeof Bun.serve> | null = null;
+  let saveEchoBaseUrl = '';
+  let tmpDir = '';
+
+  beforeAll(async () => {
+    await setup();
+
+    saveEchoServer = Bun.serve({
+      port: 0,
+      fetch() {
+        return new Response('<!doctype html><html><body>ok</body></html>', {
+          headers: {
+            'content-type': 'text/html; charset=utf-8',
+            'set-cookie': `bp_test_sentinel=${COOKIE_SENTINEL}; Path=/`,
+          },
+        });
+      },
+    });
+
+    const port = saveEchoServer.port;
+    if (port === undefined) {
+      throw new Error('Expected Bun.serve() to allocate a port');
+    }
+    saveEchoBaseUrl = `http://127.0.0.1:${port}`;
+
+    tmpDir = await Bun.$`mktemp -d`.text().then((s) => s.trim());
+  });
+
+  afterAll(async () => {
+    saveEchoServer?.stop(true);
+    saveEchoServer = null;
+    rmSync(tmpDir, { recursive: true, force: true });
+    await teardown();
+  });
+
+  function refPath(name: string): string {
+    return join(tmpDir, name);
+  }
+
+  test('save requires an explicit session (bare command rejected)', async () => {
+    const result = await runCLI(['env', 'auth', 'save', refPath('no-session.json')]);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr.toLowerCase()).toContain('session');
+  });
+
+  test('save + inspect happy path, no cookie values anywhere, human output', async () => {
+    await withRetry(async () => {
+      const sessionName = generateSessionName();
+      const ref = refPath(`${sessionName}.json`);
+
+      try {
+        await connectDaemonSessionNewTab(sessionName);
+        const gotoResult = await runCLI([
+          'exec',
+          '-s',
+          sessionName,
+          '--json',
+          JSON.stringify({ action: 'goto', url: saveEchoBaseUrl }),
+        ]);
+        expect(gotoResult.exitCode).toBe(0);
+
+        const saveResult = await runCLI(['env', 'auth', 'save', ref, '-s', sessionName]);
+        expect(saveResult.exitCode).toBe(0);
+        expect(saveResult.stdout).not.toContain(COOKIE_SENTINEL);
+        expect(saveResult.stdout).toContain(ref);
+        expect(saveResult.stdout).toContain('127.0.0.1');
+
+        // Snapshot file itself only omitted from stdout assertions above; the
+        // save command's own stdout must never include the value, but the
+        // file on disk legitimately stores it (that's the point of the file).
+
+        const inspectResult = await runCLI(['env', 'auth', 'inspect', ref]);
+        expect(inspectResult.exitCode).toBe(0);
+        expect(inspectResult.stdout).not.toContain(COOKIE_SENTINEL);
+        expect(inspectResult.stdout).toContain(ref);
+        expect(inspectResult.stdout).toContain('127.0.0.1');
+        expect(inspectResult.stdout).toMatch(/Cookies:\s*1/);
+      } finally {
+        await cleanupSession(sessionName);
+      }
+    });
+  }, 90000);
+
+  test('save + inspect --json output, no cookie values, correct metadata shape', async () => {
+    await withRetry(async () => {
+      const sessionName = generateSessionName();
+      const ref = refPath(`${sessionName}-json.json`);
+
+      try {
+        await connectDaemonSessionNewTab(sessionName);
+        await runCLI([
+          'exec',
+          '-s',
+          sessionName,
+          '--json',
+          JSON.stringify({ action: 'goto', url: saveEchoBaseUrl }),
+        ]);
+
+        const saveResult = await runCLI(['env', 'auth', 'save', ref, '-s', sessionName, '--json']);
+        expect(saveResult.exitCode).toBe(0);
+        expect(saveResult.stdout).not.toContain(COOKIE_SENTINEL);
+        const saveJson = saveResult.json as {
+          file?: string;
+          sourceUrl?: string;
+          cookieCount?: number;
+        };
+        expect(saveJson.file).toBe(ref);
+        expect(saveJson.cookieCount).toBe(1);
+        expect(saveJson.sourceUrl).toContain('127.0.0.1');
+
+        const inspectResult = await runCLI(['env', 'auth', 'inspect', ref, '--json']);
+        expect(inspectResult.exitCode).toBe(0);
+        expect(inspectResult.stdout).not.toContain(COOKIE_SENTINEL);
+        const inspectJson = inspectResult.json as {
+          file?: string;
+          sourceUrl?: string;
+          savedAt?: string;
+          cookieCount?: number;
+          domains?: string[];
+        };
+        expect(inspectJson.file).toBe(ref);
+        expect(inspectJson.cookieCount).toBe(1);
+        expect(typeof inspectJson.savedAt).toBe('string');
+        expect(inspectJson.domains).toEqual(['127.0.0.1']);
+      } finally {
+        await cleanupSession(sessionName);
+      }
+    });
+  }, 90000);
+
+  test('inspect is fully offline: no browser required, no new session file created', async () => {
+    await withRetry(async () => {
+      const sessionName = generateSessionName();
+      const ref = refPath(`${sessionName}-offline.json`);
+
+      try {
+        await connectDaemonSessionNewTab(sessionName);
+        await runCLI([
+          'exec',
+          '-s',
+          sessionName,
+          '--json',
+          JSON.stringify({ action: 'goto', url: saveEchoBaseUrl }),
+        ]);
+        const saveResult = await runCLI(['env', 'auth', 'save', ref, '-s', sessionName]);
+        expect(saveResult.exitCode).toBe(0);
+
+        const { readdirSync } = await import('node:fs');
+        const before = new Set(readdirSync(SESSION_DIR));
+
+        const inspectResult = await runCLI(['env', 'auth', 'inspect', ref]);
+        expect(inspectResult.exitCode).toBe(0);
+
+        const after = new Set(readdirSync(SESSION_DIR));
+        expect(after).toEqual(before);
+      } finally {
+        await cleanupSession(sessionName);
+      }
+    });
+  }, 90000);
+
+  test('save fails without --force when snapshot already exists; --force overwrites', async () => {
+    await withRetry(async () => {
+      const sessionName = generateSessionName();
+      const ref = refPath(`${sessionName}-exists.json`);
+
+      try {
+        await connectDaemonSessionNewTab(sessionName);
+        await runCLI([
+          'exec',
+          '-s',
+          sessionName,
+          '--json',
+          JSON.stringify({ action: 'goto', url: saveEchoBaseUrl }),
+        ]);
+
+        const first = await runCLI(['env', 'auth', 'save', ref, '-s', sessionName]);
+        expect(first.exitCode).toBe(0);
+
+        const second = await runCLI(['env', 'auth', 'save', ref, '-s', sessionName]);
+        expect(second.exitCode).toBe(1);
+        expect(second.stderr).toContain('--force');
+
+        const third = await runCLI(['env', 'auth', 'save', ref, '-s', sessionName, '--force']);
+        expect(third.exitCode).toBe(0);
+      } finally {
+        await cleanupSession(sessionName);
+      }
+    });
+  }, 90000);
+
+  test('inspect rejects a missing file', async () => {
+    const result = await runCLI(['env', 'auth', 'inspect', refPath('does-not-exist.json')]);
+    expect(result.exitCode).toBe(1);
+  });
+
+  test('inspect/save reject invalid ref grammar: "." and ".."', async () => {
+    const dotResult = await runCLI(['env', 'auth', 'inspect', '.']);
+    expect(dotResult.exitCode).toBe(1);
+
+    const dotDotResult = await runCLI(['env', 'auth', 'inspect', '..']);
+    expect(dotDotResult.exitCode).toBe(1);
+  });
+
+  test('auth clear never deletes snapshot files on disk', async () => {
+    await withRetry(async () => {
+      const sessionName = generateSessionName();
+      const ref = refPath(`${sessionName}-clear.json`);
+
+      try {
+        await connectDaemonSessionNewTab(sessionName);
+        await runCLI([
+          'exec',
+          '-s',
+          sessionName,
+          '--json',
+          JSON.stringify({ action: 'goto', url: saveEchoBaseUrl }),
+        ]);
+
+        const saveResult = await runCLI(['env', 'auth', 'save', ref, '-s', sessionName]);
+        expect(saveResult.exitCode).toBe(0);
+
+        const clearResult = await runCLI(['env', 'auth', 'clear', '-s', sessionName]);
+        expect(clearResult.exitCode).toBe(0);
+
+        const inspectAfterClear = await runCLI(['env', 'auth', 'inspect', ref]);
+        expect(inspectAfterClear.exitCode).toBe(0);
+      } finally {
+        await cleanupSession(sessionName);
+      }
+    });
+  }, 90000);
+});

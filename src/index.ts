@@ -68,10 +68,21 @@ export {
   transcribe,
 } from './audio/index.ts';
 // Cloudflare Access auth helpers
+// Cookie state capture/restore (Cloudflare Access / cookie-based auth persistence)
 export {
   type CfAccessJwtResult,
+  type CookieCaptureOptions,
+  type CookieRestoreResult,
+  type CookieState,
+  CookieStateError,
+  type CookieStateErrorCode,
+  captureCookieState,
   type MintCfAccessJwtOptions,
   mintCfAccessJwt,
+  parseCookieState,
+  restoreCookieState,
+  type SerializedCookie,
+  serializeCookieState,
 } from './auth/index.ts';
 // Browser & Page
 // Includes the Phase 7 resolution / diagnostics / fuzzy-matching / structural-signature

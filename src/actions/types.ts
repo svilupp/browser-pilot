@@ -328,8 +328,8 @@ export interface Step {
   /**
    * Cookie descriptor for the setCookie action. Ephemeral: not persisted
    * into EnvSettings.auth and lost on next attach/reattach. See
-   * docs/proposals/cloudflare-access-auth.md for the lifecycle contrast with
-   * `bp env auth set-cookie`.
+   * docs/cli.md#env for the lifecycle contrast with `bp env auth set-cookie`,
+   * and docs/guides/auth-cookies.md for reusing a full login session.
    */
   cookie?: SetCookieOptions;
 

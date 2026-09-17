@@ -155,9 +155,25 @@ bp run ./artifacts/demo.workflow.json -s demo
 `bp record derive` emits browser-pilot workflow JSON for `bp run`. Use the companion Flightplan
 package for simple reusable workflows.
 
+### Reuse a login with cookie snapshots
+
+Log in once by hand, save the cookies, then restore them into later sessions instead of
+logging in again:
+
+```bash
+bp connect --name app-login --new-tab --foreground --page-url https://app.example.com
+# ... log in manually ...
+bp env auth save app -s app-login
+bp connect --name app-work --auth app
+```
+
+See the [cookie snapshot auth guide](./guides/auth-cookies.md) for scope rules, expiry, and
+CI usage.
+
 ## Next Steps
 
 - [Providers](./providers.md) - Configure Browser Use, BrowserBase, Browserless, or local Chrome
+- [Cookie snapshot auth](./guides/auth-cookies.md) - Reuse a login across sessions
 - [Multi-Selector Guide](./guides/multi-selector.md) - Build resilient automations
 - [Batch Actions](./guides/batch-actions.md) - Execute action sequences efficiently
 - [API Reference](./api/page.md) - Full Page API documentation

@@ -18,6 +18,9 @@ For simple, reusable, low-cost automation on top of browser-pilot, use the compa
 - Discover and invoke page tools: `webmcp status|list|call`
 - Authenticate behind Cloudflare Access: `connect --cf-access` (mint+apply once) or
   `env auth set-headers`/`set-cookie` (persisted, reapplied on every attach)
+- Reuse a login instead of re-authenticating: check `env auth inspect <name>` first; if a
+  snapshot exists, `connect --auth <name>` restores it instead of driving the login form
+  again (see [Cookie snapshot auth](../guides/auth-cookies.md))
 
 ## If the task is...
 

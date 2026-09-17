@@ -1,5 +1,48 @@
 # Changelog
 
+## [0.6.0] - 2026-09-16
+
+### Fixed
+
+- **`bp env network throttle`/`offline`/`online` leaked network conditions across
+  sessions.** Network emulation is now applied with the stable, per-session CDP
+  `Network.emulateNetworkConditions` only; the experimental
+  `Network.emulateNetworkConditionsByRule`/`overrideNetworkState` pair has been removed
+  — their rules are keyed to the CDP session that set them and were never cleared
+  because daemon mode created a throwaway session per command and never detached it,
+  so a later `online` (on a different session) could not undo a prior `throttle`.
+  `bp env` commands now reuse the daemon-pinned CDP session so `online` reliably
+  clears state set by `throttle`/`offline` on the same session; persisted network
+  settings (including throughput) are re-applied on every attach; and re-pinning a
+  session to a new CDP session id now best-effort detaches the stale one (unless
+  another logical session still references it), so it stops holding leaked state.
+
+### Added
+
+- `bp env network online --recreate-tab` swaps a session onto a brand-new tab at the
+  same URL instead of clearing conditions on the existing one — useful when a tab was
+  throttled by a browser-pilot version before this fix, or otherwise never cleaned up.
+  Loses page state (scroll position, in-memory JS state, unsubmitted forms). Tabs
+  stuck from older versions can also be cleared with `bp daemon stop` (disposes all
+  daemon-held CDP sessions) or by closing the tab.
+- `--duration <ms>` on `bp env network throttle`/`offline` (auto-restore to online
+  after N ms) is now documented in `bp env --help`. `bp env network` now rejects
+  `--recreate-tab` on any action other than `online`, and rejects `--duration` on
+  `online` (there is nothing to auto-restore from).
+
+- **Cookie snapshot auth**: log in once by hand, then reuse that session instead of
+  re-authenticating. `bp env auth save <name> -s <session>` captures the cookies from a
+  logged-in tab into a private, offline-inspectable file (`bp env auth inspect <name>`);
+  `bp connect --auth <name>` (or `BROWSER_PILOT_AUTH=<name>` for CI) restores them into a
+  fresh session before any navigation. See [`docs/guides/auth-cookies.md`](./docs/guides/auth-cookies.md).
+- New portable exports for embedding hosts (root and `browser-pilot/core`):
+  `captureCookieState`, `restoreCookieState`, `parseCookieState`, `serializeCookieState`,
+  `CookieStateError`; file I/O helpers (`loadCookieStateFile`, `saveCookieStateFile`,
+  `resolveCookieStateRef`) ship from `browser-pilot/adapters/node`.
+- Snapshot files are private by construction: written with restrictive permissions, never
+  contain values in CLI output/logs/session records, and `--debug`/`--trace` now redact
+  cookie values from CDP traffic.
+
 ## [0.5.0] - 2026-09-09
 
 ### Added

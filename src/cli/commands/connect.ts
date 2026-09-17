@@ -5,6 +5,14 @@
  * for faster subsequent commands. Use --no-daemon to disable.
  */
 
+import { homedir } from 'node:os';
+import {
+  loadCookieStateFile,
+  resolveCookieStateRef,
+} from '../../adapters/node/cookie-state-files.ts';
+import { domainMatches, hostFromUrl } from '../../auth/cookie-scope.ts';
+import { restoreCookieState } from '../../auth/cookie-state.ts';
+import type { CookieState } from '../../auth/types.ts';
 import { stopDaemon } from '../../daemon/lifecycle.ts';
 import {
   connectionKeyForBrowser,
@@ -65,6 +73,14 @@ Local options:
   --new-tab               Create and attach to a fresh tab instead of reusing an existing one
   --foreground            With --new-tab, opt into foregrounding the created tab
   --target-url <str>      Filter targets to those whose URL contains this string
+  --auth <name-or-path>   Restore a saved cookie snapshot into a fresh tab before
+                          navigation. Implies --new-tab. Conflicts with --resume,
+                          -s, --target-url. Env fallback: BROWSER_PILOT_AUTH (name-or-path
+                          resolved identically to --auth; --auth wins when both are set;
+                          prints "auth: using BROWSER_PILOT_AUTH → <resolved path>").
+                          Compatible with --page-url (overrides the snapshot's saved
+                          source URL) and --cf-access (restore → mint → single navigation).
+                          See docs/guides/auth-cookies.md.
   --api-key <key>         API key for cloud providers. Falls back to
                           BROWSERBASE_API_KEY / BROWSER_USE_API_KEY depending on --provider
   --project-id <id>       Project ID for BrowserBase provider (optional;
@@ -90,7 +106,7 @@ Local options:
                           against --page-url when given (falling back to the
                           resolved page URL) and re-navigates afterward so the
                           first load succeeds (see
-                          docs/proposals/cloudflare-access-auth.md)
+                          docs/guides/auth-cookies.md)
   --cf-access-mode <m>    cookie (default, out-of-band JWT exchange) | headers
                           (persist raw service-token headers, global blast radius)
 
@@ -150,6 +166,13 @@ interface ConnectOptions {
   noHighlights?: boolean;
   cfAccess?: boolean;
   cfAccessMode?: 'headers' | 'cookie';
+  auth?: string;
+}
+
+/** Shorten an absolute path under $HOME to a `~`-prefixed path for display/metadata. */
+function shortenHome(path: string): string {
+  const home = homedir();
+  return path === home || path.startsWith(`${home}/`) ? `~${path.slice(home.length)}` : path;
 }
 
 async function resolveInitialPageUrl(
@@ -255,6 +278,8 @@ function parseConnectArgs(args: string[]): ConnectOptions {
         throw new Error('--cloud-timeout must be 1-240 minutes');
       }
       options.cloudTimeout = mins;
+    } else if (arg === '--auth') {
+      options.auth = args[++i];
     } else if (arg === '--cf-access') {
       options.cfAccess = true;
     } else if (arg === '--cf-access-mode') {
@@ -279,6 +304,15 @@ export async function connectCommand(
   }
 
   const options = parseConnectArgs(args);
+
+  if (options.auth && (options.resume || globalOptions.session)) {
+    throw new Error(
+      '--auth conflicts with --resume/-s. Cookie snapshots are restored only when creating a new session.'
+    );
+  }
+  if (options.auth && options.targetUrl) {
+    throw new Error('--auth conflicts with --target-url.');
+  }
 
   // Resume existing session
   if (options.resume || globalOptions.session) {
@@ -329,6 +363,7 @@ export async function connectCommand(
       'CLI sessions cannot reconnect Browserless launch URLs. Use the direct browser library, or a generic endpoint whose reconnection lifecycle is managed by your host.'
     );
   }
+
   let wsUrl = options.browserUrl ?? options.url;
   let pageUrl = options.pageUrl;
   let connectionSource: 'explicit-ws' | 'devtools-active-port' | 'json-version' | undefined;
@@ -344,6 +379,43 @@ export async function connectCommand(
     pageUrl = options.url;
     if (!options.browserUrl) {
       wsUrl = undefined;
+    }
+  }
+
+  // --auth: resolve/load the cookie snapshot before any provider/session
+  // creation so an invalid ref fails fast, before a browser is touched.
+  // Env fallback only applies when --auth is absent (never on resume, which
+  // already returned above).
+  let authRef = options.auth;
+  let authFromEnv = false;
+  if (!authRef) {
+    const envAuth = getEnv('BROWSER_PILOT_AUTH');
+    if (envAuth) {
+      authRef = envAuth;
+      authFromEnv = true;
+    }
+  }
+  const usingAuth = !!authRef;
+  let authState: CookieState | undefined;
+  let authResolvedPath: string | undefined;
+  if (usingAuth) {
+    authResolvedPath = resolveCookieStateRef(authRef!);
+    if (authFromEnv) {
+      console.error(`auth: using BROWSER_PILOT_AUTH \u2192 ${authResolvedPath}`);
+    }
+    authState = await loadCookieStateFile(authRef!);
+    // Implies --new-tab: a saved cookie snapshot is restored into a fresh
+    // tab so it never touches an existing, already-authenticated tab.
+    options.newTab = true;
+    if (
+      options.pageUrl &&
+      !authState.cookies.some((c) =>
+        domainMatches(hostFromUrl(options.pageUrl!), c.domain, c.hostOnly)
+      )
+    ) {
+      console.error(
+        `Warning: --page-url host does not match any cookie domain in the snapshot (${authResolvedPath}).`
+      );
     }
   }
 
@@ -412,7 +484,7 @@ export async function connectCommand(
           trace: globalOptions.trace,
           name: sessionId,
           newTab: options.newTab,
-          pageUrl,
+          pageUrl: usingAuth ? undefined : pageUrl,
           targetUrl: options.targetUrl,
           foreground: options.foreground,
           daemonIdleMins: options.daemonIdleMins,
@@ -439,7 +511,7 @@ export async function connectCommand(
     } else {
       browser = await connect(connectOptions);
       page = options.newTab
-        ? await browser.newPage(pageUrl ?? 'about:blank', {
+        ? await browser.newPage(usingAuth ? 'about:blank' : (pageUrl ?? 'about:blank'), {
             background: options.foreground !== true,
           })
         : await browser.page(
@@ -447,7 +519,7 @@ export async function connectCommand(
             options.targetUrl !== undefined ? { targetUrl: options.targetUrl } : undefined
           );
     }
-    let currentUrl = await resolveInitialPageUrl(page, pageUrl);
+    let currentUrl = await resolveInitialPageUrl(page, usingAuth ? undefined : pageUrl);
 
     if (browser.metadata?.['liveUrl']) {
       console.error(`\nLive viewer: ${browser.metadata['liveUrl']}\n`);
@@ -456,7 +528,104 @@ export async function connectCommand(
     // Apply Cloudflare Access sugar (--cf-access) before persisting the session,
     // so the resulting EnvSettings.auth is reapplied on every attach/reattach.
     let cfAccessAuth: EnvSettings['auth'] | undefined;
-    if (options.cfAccess) {
+
+    // Restore a saved cookie snapshot (--auth) into the fresh, still-unnavigated
+    // tab before any navigation happens, so no request ever leaves without the
+    // restored cookies attached.
+    let cookieAuthMetadata: NonNullable<SessionData['metadata']>['cookieAuth'] | undefined;
+    let cookieAuthOutput:
+      | {
+          file: string;
+          sourceUrl: string;
+          savedAt: string;
+          cookieCount: number;
+          restored: number;
+          skippedExpired: number;
+          unverified: number;
+        }
+      | undefined;
+    if (usingAuth) {
+      let restoreResult: Awaited<ReturnType<typeof restoreCookieState>>;
+      try {
+        restoreResult = await restoreCookieState(page, authState!);
+      } catch (error) {
+        // Restore failed before any navigation. Close only the resources this
+        // command just created; cookie writes are not transactional, so this
+        // never claims a rollback of whatever `Storage.setCookies` already did.
+        if (daemonSession) {
+          await deleteSession(sessionId).catch(() => {});
+        }
+        await browser.disconnect().catch(() => {});
+        throw error;
+      }
+
+      if (globalOptions.format !== 'json') {
+        console.log(
+          `Restored ${restoreResult.restored} cookies (${restoreResult.skippedExpired} expired skipped) from ${authResolvedPath}. Authentication has not been verified.`
+        );
+        if (restoreResult.unverified > 0) {
+          console.log(
+            `Warning: ${restoreResult.unverified} of ${restoreResult.restored} restored cookies could not be verified after read-back (domains: ${restoreResult.domains.join(', ')}).`
+          );
+        }
+      }
+
+      const destUrl = pageUrl ?? authState!.sourceUrl;
+
+      if (options.cfAccess) {
+        const mode = options.cfAccessMode ?? 'cookie';
+        const clientId = getEnv('CF_ACCESS_CLIENT_ID');
+        const clientSecret = getEnv('CF_ACCESS_CLIENT_SECRET');
+        if (!clientId || !clientSecret) {
+          throw new Error(
+            '--cf-access requires CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET to be set in the environment.'
+          );
+        }
+        if (mode === 'headers') {
+          await page.setExtraHTTPHeaders({
+            'CF-Access-Client-Id': clientId,
+            'CF-Access-Client-Secret': clientSecret,
+          });
+          cfAccessAuth = {
+            extraHeaders: {
+              fromEnv: {
+                'CF-Access-Client-Id': 'CF_ACCESS_CLIENT_ID',
+                'CF-Access-Client-Secret': 'CF_ACCESS_CLIENT_SECRET',
+              },
+            },
+          };
+        } else {
+          // Mint against the resolved destination (pageUrl ?? snapshot sourceUrl),
+          // not a page URL sampled mid-flight: the fresh CF cookie must win before
+          // the single navigation below.
+          const { cookie } = await mintCfAccessJwt({ url: destUrl, clientId, clientSecret });
+          await page.setCookie(cookie);
+          cfAccessAuth = { cookies: [{ ...cookie }] };
+        }
+      }
+
+      // Single navigation: the destination was withheld from tab-open above so
+      // that restore always precedes the first request.
+      await page.goto(destUrl);
+      currentUrl = await page.url();
+
+      cookieAuthMetadata = {
+        source: shortenHome(authResolvedPath!),
+        restoredAt: new Date().toISOString(),
+        cookieCount: restoreResult.restored,
+      };
+      cookieAuthOutput = {
+        file: authResolvedPath!,
+        sourceUrl: authState!.sourceUrl,
+        savedAt: authState!.savedAt,
+        cookieCount: restoreResult.restored,
+        restored: restoreResult.restored,
+        skippedExpired: restoreResult.skippedExpired,
+        unverified: restoreResult.unverified,
+      };
+    }
+
+    if (options.cfAccess && !usingAuth) {
       const mode = options.cfAccessMode ?? 'cookie';
       if (currentUrl === 'about:blank') {
         throw new Error(
@@ -546,6 +715,7 @@ export async function connectCommand(
         ...(resolvedUserDataDir ? { resolvedUserDataDir } : {}),
         ...(recordSettings ? { record: recordSettings } : {}),
         ...(cfAccessAuth ? { env: { auth: cfAccessAuth } } : {}),
+        ...(cookieAuthMetadata ? { cookieAuth: cookieAuthMetadata } : {}),
         provenance: getBuildProvenance(),
       },
     };
@@ -652,6 +822,7 @@ export async function connectCommand(
         provenance: getBuildProvenance(),
         metadata: outputMetadata,
         daemon: daemonResult,
+        ...(cookieAuthOutput ? { cookieAuth: cookieAuthOutput } : {}),
       },
       globalOptions.format
     );
