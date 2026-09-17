@@ -15,6 +15,7 @@ import { clearDaemonFromSession, isDaemonAlive, stopDaemon } from '../daemon/lif
 import {
   acquireDaemonLock,
   connectionKeyForBrowser,
+  countSessionReferences,
   daemonIdForConnection,
   endpointFingerprint,
   readDaemonDescriptor,
@@ -50,7 +51,12 @@ export interface AttachResult {
   viaDaemon: boolean;
 }
 
-async function applySessionEnvironment(
+/**
+ * Re-applies persisted permission/geolocation/visibility/network/auth
+ * settings to a page. Used on every daemon attach and by `bp env network
+ * online --recreate-tab` after swapping in a fresh page/target.
+ */
+export async function applySessionEnvironment(
   page: Page,
   currentUrl: string,
   settings: EnvSettings | undefined
@@ -531,8 +537,31 @@ export async function attachSession(
           session.daemon &&
           session.daemon.cdpSessionId !== activeCdpSessionId
         ) {
+          const previousCdpSessionId = session.daemon.cdpSessionId;
           const updatedDaemon = { ...session.daemon, cdpSessionId: activeCdpSessionId };
           attachedSession = await updateSessionDaemon(session.id, updatedDaemon);
+
+          // Best-effort: detach the stale pinned CDP session so any
+          // session-keyed state it holds (e.g. network emulation rules) is
+          // cleared, unless another logical bp session still references it.
+          // Inherent TOCTOU: if two commands concurrently re-pin the same
+          // logical session, the second can read the first's freshly written
+          // cdpSessionId as "previous" and detach the session the first is
+          // still actively using. Best-effort + `.catch(() => {})` means the
+          // failure mode is a failed in-flight command, not corrupted state.
+          if (
+            previousCdpSessionId &&
+            attachedSession.transport?.mode === 'daemon' &&
+            attachedSession.transport.daemonId &&
+            (await countSessionReferences(
+              attachedSession.transport.daemonId,
+              previousCdpSessionId
+            )) === 0
+          ) {
+            await cdp
+              .send('daemon.detach', { sessionId: previousCdpSessionId }, null)
+              .catch(() => {});
+          }
         }
 
         return { session: attachedSession, browser, page, viaDaemon: true };

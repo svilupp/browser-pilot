@@ -409,9 +409,21 @@ Examples:
 ```bash
 bp env permissions grant -s dev microphone
 bp env network offline -s dev --duration 5000
-bp env network throttle -s dev --latency 200 --down 128kbps --up 64kbps
+bp env network throttle -s dev --latency 200 --down 128kbps --up 64kbps --duration 5000
+bp env network online -s dev --recreate-tab
 bp env visibility hidden -s dev
 bp env geolocation set -s dev --lat 37.7749 --lon -122.4194
+
+# `bp env network` flags:
+# - --latency <ms>          added round-trip latency
+# - --down <rate>           download cap, e.g. 128kbps, 1mbps, or raw bytes/sec
+# - --up <rate>             upload cap, same rate syntax
+# - --duration <ms>         auto-restore to online after N ms (works with
+#                           `throttle` and `offline`)
+# - --recreate-tab          `network online` only: swap in a fresh tab/target
+#                           at the same URL instead of clearing conditions on
+#                           the existing one; loses page state (scroll
+#                           position, in-memory JS state, unsubmitted forms)
 
 # Notes on `bp env network`:
 # - Uses classic CDP `Network.emulateNetworkConditions`, applied per-target
@@ -421,10 +433,16 @@ bp env geolocation set -s dev --lat 37.7749 --lon -122.4194
 # - In `--no-daemon` mode, classic emulation resets whenever the CDP session
 #   detaches; persisted network settings are re-applied on every `bp env`/`bp
 #   exec` command via `applySessionEnvironment()`.
-# - Tabs throttled by browser-pilot versions before this fix may have used
-#   the experimental `Network.emulateNetworkConditionsByRule` API, which
-#   leaks per-target rules that cannot be cleared from any session. If
-#   `bp env network online` does not restore full speed, close that tab.
+# - Network conditions are keyed per CDP session: only the session that set
+#   them can clear them, and they clear automatically when that session
+#   detaches. A tab throttled by a browser-pilot version before this fix (or
+#   by a session that leaked without ever detaching) stays throttled until
+#   its own CDP session goes away. Recover with one of:
+#     `bp daemon stop -s <session>` (or restart the daemon) — disposes all
+#       daemon-held sessions;
+#     `bp env network online --recreate-tab` — swaps in a fresh tab, no
+#       stale session to worry about;
+#     or close the affected tab manually.
 
 # Cloudflare Access auth (persisted, reapplied on every attach)
 bp env auth set-headers -s dev --from-env CF-Access-Client-Id=CF_ACCESS_CLIENT_ID --from-env CF-Access-Client-Secret=CF_ACCESS_CLIENT_SECRET

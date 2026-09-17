@@ -1,7 +1,7 @@
 import { describe, expect, it, mock } from 'bun:test';
 import {
   networkSettingsFor,
-  type parseEnvArgs,
+  parseEnvArgs,
   runNetworkCommand,
   toBytesPerSecond,
 } from '../../src/cli/commands/env.ts';
@@ -181,13 +181,41 @@ describe('applyNetworkEmulation (re-apply on attach)', () => {
   });
 });
 
-// Note: a test asserting that `applySessionEnvironment` in `src/cli/attach.ts`
-// swallows a rejection from `applyNetworkEmulation` is intentionally skipped
-// here. `applySessionEnvironment` is not exported, and exercising it through
-// the exported `attachSession`/`openSession` entry points would require
-// mocking the daemon/session-file/CDP-transport machinery well beyond the
-// mock-CDP pattern used in this file. The attach.ts change wraps the call in
-// try/catch with a `console.warn`, matching the guard added for this task.
+describe('parseEnvArgs (network options)', () => {
+  it('parses --duration, --latency, --down, --up together', () => {
+    const options = parseEnvArgs([
+      'network',
+      'throttle',
+      '--latency',
+      '200',
+      '--down',
+      '128kbps',
+      '--up',
+      '64kbps',
+      '--duration',
+      '5000',
+    ]);
+    expect(options.topCommand).toBe('network');
+    expect(options.networkAction).toBe('throttle');
+    expect(options.latency).toBe(200);
+    expect(options.down).toBe('128kbps');
+    expect(options.up).toBe('64kbps');
+    expect(options.duration).toBe(5000);
+  });
+
+  it('parses --recreate-tab on network online', () => {
+    const options = parseEnvArgs(['network', 'online', '--recreate-tab']);
+    expect(options.topCommand).toBe('network');
+    expect(options.networkAction).toBe('online');
+    expect(options.recreateTab).toBe(true);
+  });
+
+  it('parses --recreate-tab regardless of the action it is paired with (validated at runtime)', () => {
+    const options = parseEnvArgs(['network', 'throttle', '--recreate-tab']);
+    expect(options.networkAction).toBe('throttle');
+    expect(options.recreateTab).toBe(true);
+  });
+});
 
 describe('networkSettingsFor (persisted EnvSettings.network)', () => {
   it('persists full throughput shape on throttle', () => {

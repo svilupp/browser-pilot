@@ -88,6 +88,9 @@ Entry: `src/index.ts`. Public API report: `etc/browser-pilot.api.md`.
 ## Conventions
 
 - Actions scroll into view before interaction; event listeners cleaned up after use
+- Prefer stable CDP methods over experimental ones; never fall back from an experimental
+  method on *error* only, since it can succeed while still misbehaving (e.g. leaking
+  session-keyed state) — verify the actual effect instead
 - No production dependencies — pure Web Standard APIs (WebSocket, fetch)
 - Never activate a tab or bring the browser to the foreground
 - Daemon mode is CLI/Node-only (Unix sockets); Workers use direct WS

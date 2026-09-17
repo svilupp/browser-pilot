@@ -13,9 +13,10 @@ import { grantAudioPermissions } from '../../audio/permissions.ts';
 import { captureCookieState } from '../../auth/cookie-state.ts';
 import { CookieStateError } from '../../auth/errors.ts';
 import type { Browser } from '../../browser/browser.ts';
+import { countSessionReferences } from '../../daemon/registry.ts';
 import type { Page } from '../../index.ts';
 import { getEnv } from '../../runtime/env.ts';
-import { type AttachResult, attachSession } from '../attach.ts';
+import { type AttachResult, applySessionEnvironment, attachSession } from '../attach.ts';
 import { formatBrowserDiscoveryError, resolveCLIEndpoint } from '../browser-endpoint.ts';
 import { createLocalSession } from '../connect-service.ts';
 import {
@@ -27,7 +28,13 @@ import {
   type StoredPermissionName,
 } from '../env-state.ts';
 import type { EnvSettings, SessionData } from '../session.ts';
-import { getDefaultSession, getSessionFilePath, loadSession, updateSession } from '../session.ts';
+import {
+  getDefaultSession,
+  getSessionFilePath,
+  loadSession,
+  updateSession,
+  updateSessionTargetBinding,
+} from '../session.ts';
 
 const ENV_HELP = `
 bp env - Browser/session environment controls
@@ -63,6 +70,15 @@ Subcommands:
                save, inspect (URL-scoped cookie snapshot files);
                see docs/guides/auth-cookies.md for the full lifecycle semantics
 
+Network options:
+  --latency <ms>         Added round-trip latency (throttle, offline)
+  --down <rate>          Download cap, e.g. 128kbps, 1mbps, or raw bytes/sec (throttle)
+  --up <rate>            Upload cap, same rate syntax (throttle)
+  --duration <ms>        Auto-restore to online after N ms (throttle, offline)
+  --recreate-tab         network online only: swap in a fresh tab/target at the
+                         same URL instead of clearing conditions on the existing
+                         one; loses page state (scroll, in-memory JS, unsubmitted forms)
+
 Common options:
   -s, --session <id>     Session to use (omit: auto-connect, -s: latest, -s <id>: specific)
   -h, --help             Show help
@@ -77,6 +93,8 @@ Examples:
   bp env network offline -s my-session
   bp env network online -s my-session
   bp env network throttle -s my-session --latency 200 --down 128kbps --up 64kbps
+  bp env network throttle -s my-session --latency 200 --down 128kbps --duration 5000
+  bp env network online -s my-session --recreate-tab
 
   # Visibility
   bp env visibility hidden -s my-session
@@ -156,6 +174,7 @@ interface EnvOptions {
   latency?: number;
   down?: string;
   up?: string;
+  recreateTab?: boolean;
 
   // Geolocation options
   lat?: number;
@@ -261,6 +280,11 @@ export function parseEnvArgs(args: string[]): EnvOptions {
 
     if (arg === '--up') {
       options.up = args[++i];
+      continue;
+    }
+
+    if (arg === '--recreate-tab') {
+      options.recreateTab = true;
       continue;
     }
 
@@ -638,6 +662,118 @@ export function networkSettingsFor(
   return resolveNetworkParams(action, options);
 }
 
+/**
+ * `bp env network online --recreate-tab`: swap the pinned session onto a
+ * brand-new tab at the same URL. Network conditions are session-keyed (both
+ * the classic and now-removed experimental CDP mechanisms), so a tab that
+ * was throttled by an older bp version — or by a session that never got
+ * cleaned up — keeps its rules until its *own* CDP session detaches. Rather
+ * than requiring the caller to hunt down and close that tab manually, this
+ * creates a fresh target, re-points the session at it, best-effort detaches
+ * the stale pinned session (unless another logical session still references
+ * it, mirroring `use-target.ts`), and closes the old target. Page state
+ * (scroll position, in-memory JS state, unsubmitted form input) is lost.
+ */
+/** Validates flag combinations for `bp env network <action>` before any CDP call runs. */
+export function validateNetworkOptions(action: NetworkAction, options: EnvOptions): void {
+  if (options.recreateTab && action !== 'online') {
+    throw new Error('--recreate-tab is only valid with "network online"');
+  }
+  if (options.duration && options.duration > 0 && action === 'online') {
+    throw new Error(
+      '--duration is not valid with "network online" (there is nothing to restore from)'
+    );
+  }
+}
+
+export async function recreateTab(
+  page: Page,
+  session: SessionData,
+  browser: Browser
+): Promise<{ oldTargetId: string; newTargetId: string }> {
+  const oldTargetId = session.targetId;
+  if (!oldTargetId) {
+    throw new Error('--recreate-tab requires a session with an attached target');
+  }
+
+  let currentUrl: string;
+  try {
+    currentUrl = await page.url();
+    if (!currentUrl) currentUrl = session.currentUrl ?? 'about:blank';
+  } catch {
+    currentUrl = session.currentUrl ?? 'about:blank';
+  }
+  const previousCdpSessionId = page.cdpClient.sessionId;
+
+  const { targetId: newTargetId } = await page.cdpClient.send<{ targetId: string }>(
+    'Target.createTarget',
+    { url: currentUrl, background: true },
+    null
+  );
+
+  let newPage: Page;
+  let nextCdpSessionId: string | undefined;
+  let updated: SessionData;
+  try {
+    newPage = await browser.page(undefined, { targetId: newTargetId });
+    nextCdpSessionId = newPage.cdpClient.sessionId;
+
+    updated = await updateSessionTargetBinding(session.id, {
+      targetId: newTargetId,
+      currentUrl,
+      ...(nextCdpSessionId ? { cdpSessionId: nextCdpSessionId } : {}),
+    });
+  } catch (error) {
+    // The new target was created but never bound to the session (re-pin
+    // failed before the session file was updated) — close it so it doesn't
+    // leak, then rethrow so the caller sees the original failure. The
+    // session still points at the old target, which was never touched.
+    await page.cdpClient
+      .send('Target.closeTarget', { targetId: newTargetId }, null)
+      .catch(() => {});
+    throw error;
+  }
+
+  if (
+    previousCdpSessionId &&
+    nextCdpSessionId &&
+    previousCdpSessionId !== nextCdpSessionId &&
+    updated.transport?.mode === 'daemon' &&
+    updated.transport.daemonId &&
+    (await countSessionReferences(updated.transport.daemonId, previousCdpSessionId)) === 0
+  ) {
+    await newPage.cdpClient
+      .send('daemon.detach', { sessionId: previousCdpSessionId }, null)
+      .catch(() => {});
+  }
+
+  const closeResult = await page.cdpClient
+    .send('Target.closeTarget', { targetId: oldTargetId }, null)
+    .then(() => true)
+    .catch(() => false);
+  if (!closeResult) {
+    console.warn(
+      `Session ${session.id}: failed to close old target ${oldTargetId}; it may still be throttled and should be closed manually.`
+    );
+  }
+
+  // Re-apply persisted env settings (permissions/geolocation/visibility/
+  // network/auth) onto the new page — the fresh target starts with none of
+  // them. Best-effort: the tab swap already succeeded, so a re-apply
+  // failure here shouldn't be reported as a command failure.
+  try {
+    const freshSession = await loadSession(session.id);
+    await applySessionEnvironment(newPage, currentUrl, freshSession.metadata?.env);
+  } catch (error) {
+    console.warn(
+      `Session ${session.id}: recreated tab but failed to re-apply env settings: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+
+  console.log(`Session ${session.id}: recreated tab ${oldTargetId} -> ${newTargetId}`);
+  return { oldTargetId, newTargetId };
+}
+
 async function runVisibilityCommand(
   state: VisibilityStateArg,
   page: CDPPage,
@@ -998,6 +1134,7 @@ export async function envCommand(
       if (!action) {
         throw new Error('network command requires action: offline, online, or throttle');
       }
+      validateNetworkOptions(action, options);
       await runNetworkCommand(action, options, page, session);
       await updateSession(session.id, {
         metadata: {
@@ -1007,6 +1144,9 @@ export async function envCommand(
           },
         },
       });
+      if (options.recreateTab && action === 'online') {
+        await recreateTab(page, session, browser);
+      }
       if (options.duration && options.duration > 0) {
         await new Promise((resolve) => setTimeout(resolve, options.duration));
         if (action === 'offline' || action === 'throttle') {
