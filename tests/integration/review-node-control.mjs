@@ -7,8 +7,9 @@ const browser = await connect({
   wsUrl: process.argv[2],
   transportFactory: await createNodeTransportFactory(),
 });
+let p;
 try {
-  const p = await browser.newPage(process.argv[3]);
+  p = await browser.newPage(process.argv[3]);
   const s = await p.snapshot();
   const ref = s.interactiveElements.find((e) => e.role === 'textbox').ref;
   await p.evaluate('history.pushState({},"","?spa=1");true');
@@ -22,16 +23,21 @@ try {
   assert.ok(Date.now() - start < 400);
   await new Promise((r) => setTimeout(r, 650));
   assert.equal(await p.evaluate('document.querySelector("#value").value'), 'leaf original');
-  await p.close();
-  await p.cdpClient.send('Target.closeTarget', { targetId: p.targetId }, null);
-  const deadline = Date.now() + 1000;
-  let exists = true;
-  while (exists && Date.now() < deadline) {
-    exists = (await browser.listTargets()).some((t) => t.targetId === p.targetId);
-    if (exists) await new Promise((resolve) => setTimeout(resolve, 20));
-  }
-  assert.equal(exists, false, 'Owned target must disappear after close');
   console.log('NODE CONTROL PASS stale-ref and slow-action deadline');
 } finally {
-  await browser.close();
+  try {
+    if (p) {
+      await p.close();
+      await browser.cdpClient.send('Target.closeTarget', { targetId: p.targetId }, null);
+      const deadline = Date.now() + 1000;
+      let exists = true;
+      while (exists && Date.now() < deadline) {
+        exists = (await browser.listTargets()).some((t) => t.targetId === p.targetId);
+        if (exists) await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      assert.equal(exists, false, 'Owned target must disappear after close');
+    }
+  } finally {
+    await browser.close();
+  }
 }

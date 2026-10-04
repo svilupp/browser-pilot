@@ -46,6 +46,16 @@ import {
   updateSessionDaemon,
 } from './session.ts';
 
+export interface AttachOptions {
+  trace?: boolean;
+  /** Observe preserves existing viewport/auth/permissions/network/visibility. */
+  policy?: 'automation' | 'observe';
+  /** Explicit switching selects this target before attaching any old target. */
+  targetId?: string;
+  /** Borrowers never update the logical owner's current target or CDP binding. */
+  persistBinding?: boolean;
+}
+
 export interface AttachResult {
   session: SessionData;
   browser: Browser;
@@ -286,7 +296,7 @@ async function cleanupStaleDaemon(session: SessionData, reason: string): Promise
 /** Recover a daemon-owned session once, without ever downgrading it to direct mode. */
 async function recoverDaemonAttachment(
   session: SessionData,
-  options: { trace?: boolean },
+  options: AttachOptions,
   allowRecovery: boolean,
   reason: string
 ): Promise<AttachResult> {
@@ -460,10 +470,25 @@ async function recoverDaemonAttachment(
  * without a transport policy) open a direct browser WebSocket.
  */
 export async function attachSession(
-  session: SessionData,
-  options: { trace?: boolean } = {},
+  savedSession: SessionData,
+  options: AttachOptions = {},
   allowRecovery = true
 ): Promise<AttachResult> {
+  let session = savedSession;
+  if (options.targetId && options.targetId !== session.targetId) {
+    session = {
+      ...session,
+      targetId: options.targetId,
+      daemon: session.daemon ? { ...session.daemon, cdpSessionId: undefined } : undefined,
+    };
+  }
+  if (options.policy === 'observe' && !session.targetId)
+    throw new Error('Observation borrowing requires an explicit existing target ID');
+  const pageOptions = {
+    targetId: session.targetId,
+    ...(options.policy === 'observe' ? { minViewport: false as const } : {}),
+    fallbackToBestTarget: false,
+  };
   const daemonDisabled = isDaemonDisabledByEnv();
   const daemonRequired = session.transport?.mode === 'daemon';
 
@@ -548,17 +573,18 @@ export async function attachSession(
                       // The target was verified above. A stale flat attachment
                       // can be replaced on this owner without changing tabs or
                       // allocating/reconnecting the browser.
-                      return browser.page(undefined, { targetId: session.targetId });
+                      return browser.page(undefined, pageOptions);
                     }
                     throw error;
                   }
                 })()
               )
-            : addBatchToPage(await browser.page(undefined, { targetId: session.targetId }));
+            : addBatchToPage(await browser.page(undefined, pageOptions));
 
         // Hydrate ref map from session cache if URL matches
         const currentUrl = await page.url();
-        await applySessionEnvironment(page, currentUrl, session.metadata?.env);
+        if (options.policy !== 'observe')
+          await applySessionEnvironment(page, currentUrl, session.metadata?.env);
         const refCache = session.metadata?.refCache;
         if (
           refCache &&
@@ -575,6 +601,7 @@ export async function attachSession(
         const activeCdpSessionId = page.cdpClient.sessionId;
         let attachedSession = session;
         if (
+          options.persistBinding !== false &&
           activeCdpSessionId &&
           session.daemon &&
           session.daemon.cdpSessionId !== activeCdpSessionId
@@ -650,21 +677,27 @@ export async function attachSession(
     );
   }
 
-  const page = addBatchToPage(await browser.page(undefined, { targetId: session.targetId }));
+  try {
+    const page = addBatchToPage(await browser.page(undefined, pageOptions));
 
-  // Hydrate ref map from session cache if URL matches
-  const currentUrl = await page.url();
-  await applySessionEnvironment(page, currentUrl, session.metadata?.env);
-  const refCache = session.metadata?.refCache;
-  if (
-    refCache &&
-    refCache.url === currentUrl &&
-    refCache.documentIdentity === (await page.documentIdentity())
-  ) {
-    page.importRefMap(refCache.refMap, refCache.semantics);
+    // Hydrate ref map from session cache if URL matches
+    const currentUrl = await page.url();
+    if (options.policy !== 'observe')
+      await applySessionEnvironment(page, currentUrl, session.metadata?.env);
+    const refCache = session.metadata?.refCache;
+    if (
+      refCache &&
+      refCache.url === currentUrl &&
+      refCache.documentIdentity === (await page.documentIdentity())
+    ) {
+      page.importRefMap(refCache.refMap, refCache.semantics);
+    }
+
+    return { session, browser, page, viaDaemon: false };
+  } catch (error) {
+    await browser.disconnect().catch(() => {});
+    throw error;
   }
-
-  return { session, browser, page, viaDaemon: false };
 }
 
 /** Canonical connection entry point for stored CLI sessions. */

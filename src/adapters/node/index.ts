@@ -65,6 +65,11 @@ export class InProcessSessionOwner extends PortableLegacyOwner {
   }
 }
 
+export {
+  describeObservationSession,
+  type ObservedSession,
+  type ObserveSessionOptions,
+  observeSession,
+} from './observe-session.ts';
 export { nodeRecordingIo } from './recording.ts';
-
 export { ConnectionSessionOwner } from './session-owner.ts';

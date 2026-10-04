@@ -26,6 +26,7 @@ let browser;
 let page;
 try {
   chrome = await launch({
+    chromePath: process.env.BROWSER_PILOT_CHROME_PATH ?? process.env.CHROME_PATH,
     userDataDir: profile,
     chromeFlags: [
       '--headless=new',
@@ -45,7 +46,15 @@ try {
   page = await browser.newPage();
   await page.goto(baseUrl);
   await page.fill('#query', 'Ada Lovelace');
-  await page.press('Enter');
+  // Subscribe before Enter: the server receiving a request does not mean the
+  // destination document is ready, and #notes also exists in the old document.
+  await Promise.all([
+    page.waitForNavigation({
+      expectedUrl: `${baseUrl}/submitted?query=Ada+Lovelace`,
+      timeout: 5000,
+    }),
+    page.press('Enter'),
+  ]);
   const deadline = Date.now() + 5000;
   while (!requests.includes('/submitted?query=Ada+Lovelace') && Date.now() < deadline)
     await new Promise((resolve) => setTimeout(resolve, 20));
@@ -96,9 +105,20 @@ try {
       assert.equal(exists, false, 'Owned target must disappear after close');
     }
   } finally {
-    await browser?.close();
-    await Promise.resolve(chrome?.kill());
+    // Each resource must be released even if another cleanup operation fails.
+    const cleanup = await Promise.allSettled([
+      browser?.close(),
+      chrome?.kill(),
+      new Promise((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+        server.closeAllConnections();
+      }),
+    ]);
     await rm(profile, { recursive: true, force: true });
-    await new Promise((resolve) => server.close(resolve));
+    await Promise.all(
+      cleanup.map((result) =>
+        result.status === 'rejected' ? Promise.reject(result.reason) : undefined
+      )
+    );
   }
 }

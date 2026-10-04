@@ -184,9 +184,12 @@ const nodeTypeTransformAvailable =
       ],
       { stdout: 'pipe', stderr: 'pipe' }
     );
-    const output = await new Response(proc.stdout).text();
-    const error = await new Response(proc.stderr).text();
-    expect(await proc.exited, `${output}\n${error}`).toBe(0);
+    const [output, error, exitCode] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    expect(exitCode, `${output}\n${error}`).toBe(0);
     console.log(output.trim());
   },
   15000

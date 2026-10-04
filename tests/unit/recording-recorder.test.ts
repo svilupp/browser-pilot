@@ -9,7 +9,6 @@
 
 import { describe, expect, test } from 'bun:test';
 import { Recorder } from '../../src/recording/recorder.ts';
-import { RECORDER_BINDING_NAME, RECORDER_SCRIPT } from '../../src/recording/script.ts';
 
 /**
  * Create a mock CDP client that tracks sent commands and can emit events.
@@ -94,7 +93,7 @@ describe('Recorder CDP Integration', () => {
 
       const addBindingCall = cdp.sent.find((c) => c.method === 'Runtime.addBinding');
       expect(addBindingCall).toBeDefined();
-      expect(addBindingCall?.params).toEqual({ name: RECORDER_BINDING_NAME });
+      expect(addBindingCall?.params).toEqual({ name: recorder.bindingName });
     });
 
     test('should call Page.addScriptToEvaluateOnNewDocument with recorder script', async () => {
@@ -107,7 +106,7 @@ describe('Recorder CDP Integration', () => {
         (c) => c.method === 'Page.addScriptToEvaluateOnNewDocument'
       );
       expect(addScriptCall).toBeDefined();
-      expect((addScriptCall?.params as { source: string })?.source).toBe(RECORDER_SCRIPT);
+      expect((addScriptCall?.params as { source: string })?.source).toContain(recorder.bindingName);
     });
 
     test('should call Runtime.evaluate to inject script into current document', async () => {
@@ -118,8 +117,8 @@ describe('Recorder CDP Integration', () => {
 
       // Find the evaluate call that injects the recorder script
       const evaluateCalls = cdp.sent.filter((c) => c.method === 'Runtime.evaluate');
-      const scriptInjectionCall = evaluateCalls.find(
-        (c) => (c.params as { expression?: string })?.expression === RECORDER_SCRIPT
+      const scriptInjectionCall = evaluateCalls.find((c) =>
+        (c.params as { expression?: string })?.expression?.includes(recorder.bindingName)
       );
       expect(scriptInjectionCall).toBeDefined();
     });
@@ -161,7 +160,7 @@ describe('Recorder CDP Integration', () => {
 
       await recorder.start();
 
-      expect(cdp.getEventHandlerCount('Runtime.bindingCalled')).toBe(1);
+      expect(cdp.getEventHandlerCount('Runtime.bindingCalled')).toBe(3);
     });
 
     test('should add events to getEvents() when binding is called', async () => {
@@ -180,7 +179,7 @@ describe('Recorder CDP Integration', () => {
       };
 
       cdp.emit('Runtime.bindingCalled', {
-        name: RECORDER_BINDING_NAME,
+        name: recorder.bindingName,
         payload: JSON.stringify(testEvent),
       });
 
@@ -215,12 +214,12 @@ describe('Recorder CDP Integration', () => {
       };
 
       cdp.emit('Runtime.bindingCalled', {
-        name: RECORDER_BINDING_NAME,
+        name: recorder.bindingName,
         payload: JSON.stringify(clickEvent),
       });
 
       cdp.emit('Runtime.bindingCalled', {
-        name: RECORDER_BINDING_NAME,
+        name: recorder.bindingName,
         payload: JSON.stringify(inputEvent),
       });
 
@@ -252,7 +251,7 @@ describe('Recorder CDP Integration', () => {
       await recorder.start();
 
       cdp.emit('Runtime.bindingCalled', {
-        name: RECORDER_BINDING_NAME,
+        name: recorder.bindingName,
         payload: 'invalid json {{{',
       });
 
@@ -267,7 +266,7 @@ describe('Recorder CDP Integration', () => {
       await recorder.stop();
 
       cdp.emit('Runtime.bindingCalled', {
-        name: RECORDER_BINDING_NAME,
+        name: recorder.bindingName,
         payload: JSON.stringify({
           kind: 'click',
           timestamp: Date.now(),
@@ -329,7 +328,7 @@ describe('Recorder CDP Integration', () => {
 
       // Add test events - URL matches the mock's default startUrl
       cdp.emit('Runtime.bindingCalled', {
-        name: RECORDER_BINDING_NAME,
+        name: recorder.bindingName,
         payload: JSON.stringify({
           kind: 'click',
           timestamp: Date.now(),
@@ -354,7 +353,7 @@ describe('Recorder CDP Integration', () => {
       const recorder = new Recorder(cdp as never);
 
       await recorder.start();
-      expect(cdp.getEventHandlerCount('Runtime.bindingCalled')).toBe(1);
+      expect(cdp.getEventHandlerCount('Runtime.bindingCalled')).toBe(3);
 
       await recorder.stop();
       expect(cdp.getEventHandlerCount('Runtime.bindingCalled')).toBe(0);
@@ -394,5 +393,141 @@ describe('Recorder CDP Integration', () => {
 
       expect(recorder.isRecording).toBe(false);
     });
+  });
+});
+
+describe('recording lifecycle regressions', () => {
+  test('drains ordered asynchronous captures and retains failed actions', async () => {
+    const cdp = createMockCDPClient();
+    cdp.mockResponse('Page.addScriptToEvaluateOnNewDocument', { identifier: 'owned-script' });
+    const order: number[] = [];
+    const recorder = new Recorder(cdp as never, {
+      onEvent: async (_event, context) => {
+        await new Promise((r) => setTimeout(r, 20));
+        order.push(context.sequence);
+        if (context.sequence === 2) throw new Error('image failed');
+      },
+    });
+    await recorder.start();
+    for (let i = 0; i < 2; i++)
+      cdp.emit('Runtime.bindingCalled', {
+        name: recorder.bindingName,
+        payload: JSON.stringify({
+          kind: 'click',
+          timestamp: Date.now() + i,
+          url: 'https://example.com/',
+          selectors: [{ quality: 'id', selector: `#button${i}` }],
+        }),
+      });
+    const output = await recorder.stop();
+    expect(order).toEqual([1, 2]);
+    expect(output.steps.filter((step) => step.action === 'click')).toHaveLength(2);
+    expect(output.capture).toMatchObject({
+      completed: 1,
+      failed: 1,
+      pending: 0,
+      drainTimedOut: false,
+    });
+    expect(
+      cdp.sent.filter((c) => c.method === 'Page.removeScriptToEvaluateOnNewDocument')
+    ).toHaveLength(2);
+    expect(cdp.sent.some((c) => c.method === 'Network.disable')).toBe(false);
+  });
+  test('deadline cancels pending capture and marks incomplete without dropping the action', async () => {
+    const cdp = createMockCDPClient();
+    let signal: AbortSignal | undefined;
+    const recorder = new Recorder(cdp as never, {
+      drainTimeoutMs: 10,
+      onEvent: async (_event, context) => {
+        signal = context.signal;
+        await new Promise<void>(() => {});
+      },
+    });
+    await recorder.start();
+    cdp.emit('Runtime.bindingCalled', {
+      name: recorder.bindingName,
+      payload: JSON.stringify({
+        kind: 'click',
+        timestamp: Date.now(),
+        url: 'https://example.com/',
+        selectors: [{ quality: 'id', selector: '#button' }],
+      }),
+    });
+    const output = await recorder.stop();
+    expect(output.steps.filter((step) => step.action === 'click')).toHaveLength(1);
+    expect(output.capture).toMatchObject({ drainTimedOut: true, pending: 1 });
+    expect(signal?.aborted).toBe(true);
+  });
+  test('restart clears previous HTTP and DOM data and uses a distinct owned binding', async () => {
+    const cdp = createMockCDPClient();
+    const one = new Recorder(cdp as never, { listen: true });
+    await one.start();
+    cdp.emit('Network.requestWillBeSent', {
+      requestId: 'old',
+      request: { url: 'https://example.com/old', method: 'GET' },
+    });
+    await one.stop();
+    await one.start();
+    const second = await one.stop();
+    expect(second.network?.requests).toHaveLength(0);
+    expect(second.steps).toHaveLength(0);
+    const other = new Recorder(cdp as never);
+    expect(other.bindingName).not.toBe(one.bindingName);
+  });
+  test('metadata excludes URL secrets, field values, console args and websocket content', async () => {
+    const cdp = createMockCDPClient();
+    cdp.mockResponse('Runtime.evaluate', {
+      result: {
+        value:
+          'https://user:SECRET_CREDENTIAL@example.com/start?token=SECRET_START#SECRET_FRAGMENT',
+      },
+    });
+    const recorder = new Recorder(cdp as never, { listen: true, privacy: 'metadata' });
+    await recorder.start();
+    cdp.emit('Runtime.bindingCalled', {
+      name: recorder.bindingName,
+      payload: JSON.stringify({
+        kind: 'input',
+        timestamp: Date.now(),
+        url: 'https://example.com/?token=SECRET_URL',
+        value: 'SECRET_FIELD',
+        selectors: [{ quality: 'id', selector: '#quantity' }],
+      }),
+    });
+    cdp.emit('Runtime.consoleAPICalled', {
+      type: 'error',
+      args: [{ type: 'string', value: 'SECRET_CONSOLE' }],
+    });
+    cdp.emit('Network.webSocketCreated', {
+      requestId: 'ws',
+      url: 'wss://example.com/?auth=SECRET_WS_URL',
+    });
+    cdp.emit('Network.webSocketFrameReceived', {
+      requestId: 'ws',
+      response: { opcode: 1, payloadData: 'SECRET_WS_FRAME' },
+    });
+    cdp.emit('Network.requestWillBeSent', {
+      requestId: 'request',
+      request: {
+        url: 'https://example.com/?token=SECRET_HTTP',
+        method: 'POST',
+        headers: { Authorization: 'SECRET_HEADER' },
+        postData: 'SECRET_BODY',
+      },
+    });
+    expect(JSON.stringify(await recorder.stop())).not.toContain('SECRET_');
+  });
+  test('current-document mode owns no future injection and capture is byte bounded', async () => {
+    const cdp = createMockCDPClient();
+    const recorder = new Recorder(cdp as never, { navigation: 'current-document', maxBytes: 200 });
+    await recorder.start();
+    expect(cdp.sent.some((c) => c.method === 'Page.addScriptToEvaluateOnNewDocument')).toBe(false);
+    cdp.emit('Runtime.consoleAPICalled', {
+      type: 'error',
+      args: [{ type: 'string', value: 'x'.repeat(500) }],
+    });
+    expect(recorder.limitReached).toBe(true);
+    expect(recorder.byteCount).toBeLessThanOrEqual(200);
+    await recorder.stop();
   });
 });

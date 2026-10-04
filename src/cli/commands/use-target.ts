@@ -36,13 +36,18 @@ export async function useTargetCommand(
     const arg = args[i]!;
     if (arg === '--target-id') targetId = args[++i];
     else if (!targetId && !arg.startsWith('-')) targetId = arg;
+    else throw new Error(`Unexpected use-target argument: ${arg}`);
   }
   if (!targetId) {
     throw new Error('use-target requires a target ID. Run "bp targets --json" to list tabs.');
   }
 
   const requestedSession = await resolveSession(globalOptions.session);
-  const { browser, session } = await attachSession(requestedSession);
+  const { browser, session, page } = await attachSession(requestedSession, {
+    targetId,
+    policy: 'observe',
+    persistBinding: false,
+  });
 
   try {
     const target = (await browser.listTargets()).find(
@@ -54,9 +59,8 @@ export async function useTargetCommand(
       );
     }
 
-    const page = await browser.page(undefined, { targetId });
     const currentUrl = await page.url();
-    const previousCdpSessionId = session.daemon?.cdpSessionId;
+    const previousCdpSessionId = requestedSession.daemon?.cdpSessionId;
     const nextCdpSessionId = page.cdpClient.sessionId;
     const updated = await updateSessionTargetBinding(session.id, {
       targetId,

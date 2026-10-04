@@ -104,6 +104,15 @@ export interface RecordingExecution {
 }
 
 export interface RecordingManifest {
+  recording?: {
+    id: string;
+    segmentMode: 'new' | 'append';
+    screenshotPolicy: 'off' | 'markers' | 'events';
+    privacy: 'standard' | 'metadata';
+    complete: boolean;
+    capture?: import('./recorder.ts').RecorderCaptureStatus;
+    stopReason?: string;
+  };
   version: 2;
   recordedAt: string;
   session: {
@@ -212,23 +221,25 @@ export function createRecordingManifest(input: {
     };
   });
 
-  const screenshots = normalizedFrames.map<RecordingScreenshot>((frame, index) => ({
-    id: `shot-${index + 1}`,
-    stepIndex: frame.stepIndex ?? Math.max(0, frame.seq - 1),
-    actionId: frame.actionId!,
-    file: frame.screenshot,
-    ts: new Date(frame.timestamp).toISOString(),
-    success: frame.success,
-    pageUrl: frame.pageUrl,
-    pageTitle: frame.pageTitle,
-    coordinates: frame.coordinates,
-    boundingBox: frame.boundingBox,
-    executionId: frame.executionId ?? executionId,
-    attempt: frame.attempt,
-    targetId: frame.targetId,
-    effect: frame.effect,
-    anchor: frame.anchor,
-  }));
+  const screenshots = normalizedFrames
+    .filter((frame) => Boolean(frame.screenshot))
+    .map<RecordingScreenshot>((frame, index) => ({
+      id: `shot-${index + 1}`,
+      stepIndex: frame.stepIndex ?? Math.max(0, frame.seq - 1),
+      actionId: frame.actionId!,
+      file: frame.screenshot,
+      ts: new Date(frame.timestamp).toISOString(),
+      success: frame.success,
+      pageUrl: frame.pageUrl,
+      pageTitle: frame.pageTitle,
+      coordinates: frame.coordinates,
+      boundingBox: frame.boundingBox,
+      executionId: frame.executionId ?? executionId,
+      attempt: frame.attempt,
+      targetId: frame.targetId,
+      effect: frame.effect,
+      anchor: frame.anchor,
+    }));
 
   const executions = [
     ...(input.executions ?? []),

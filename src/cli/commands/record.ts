@@ -1,38 +1,52 @@
+import { spawn } from 'node:child_process';
+import { createHash, randomUUID } from 'node:crypto';
 import * as nodeFs from 'node:fs';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import type { Step } from '../../actions/types.ts';
 import type { Browser } from '../../browser/browser.ts';
+import { exportRecordingBundle, resolveRecordingImage } from '../../recording/bundle.ts';
+import {
+  activeRecording,
+  type RecordingControlState,
+  readRecordingMarkers,
+  readRecordingState,
+  recordingControlPaths,
+  recordingStopRequested,
+  requestRecordingMarker,
+  requestRecordingStop,
+  reserveRecording,
+  writeRecordingState,
+} from '../../recording/control.ts';
 import {
   canonicalizeRecordingArtifact,
   createRecordingManifest,
   type RecordingFrame,
   type RecordingManifest,
 } from '../../recording/manifest.ts';
-import {
-  type ListenMode,
-  Recorder,
-  type RecorderListenOptions,
-  type RecorderOptions,
-} from '../../recording/recorder.ts';
-import { redactValueForRecording } from '../../recording/redaction.ts';
+import { recordingReadiness } from '../../recording/readiness.ts';
+import { type ListenMode, Recorder, type RecorderListenOptions } from '../../recording/recorder.ts';
+import { redactRecordingURL } from '../../recording/redaction.ts';
 import type { RawRecordedEvent } from '../../recording/types.ts';
 import { buildTraceSummaries } from '../../trace/views.ts';
-import { attachSession } from '../attach.ts';
+import { attachSession, resolveSession } from '../attach.ts';
 import { formatBrowserDiscoveryError, resolveCLIEndpoint } from '../browser-endpoint.ts';
 import { createLocalSession } from '../connect-service.ts';
 import { output } from '../output.ts';
-import {
-  getDefaultSession,
-  loadSession,
-  type RecordSettings,
-  type SessionData,
-  updateSession,
-} from '../session.ts';
+import { getDefaultSession, loadSession, type SessionData } from '../session.ts';
 
 type RecordProfile = 'automation' | 'realtime' | 'voice' | 'auth';
-type RecordSubcommand = 'capture' | 'inspect' | 'summary' | 'derive' | 'export';
+type RecordSubcommand =
+  | 'capture'
+  | 'inspect'
+  | 'summary'
+  | 'derive'
+  | 'export'
+  | 'bundle'
+  | 'status'
+  | 'stop'
+  | 'marker';
 
 const RECORD_HELP = `
 bp record - Capture a human demo into one canonical artifact
@@ -51,7 +65,7 @@ Default flow:
   bp record inspect ./artifacts/demo.recording.json
   bp record derive ./artifacts/demo.recording.json -o ./artifacts/demo.workflow.json
   jq . ./artifacts/demo.workflow.json
-  bp run ./artifacts/demo.workflow.json -s demo
+  # review candidate steps and .readiness.json prerequisites before any replay
 
 Common mistake:
   Opening \`recording.json\` first. Start with \`bp record summary\`.
@@ -69,7 +83,17 @@ Usage:
 Capture options:
   -s, --session [id]   Existing session (omit: auto-connect, -s: latest, -s <id>: specific)
   -f, --file <path>    Artifact output path (default: recording.json)
-  --timeout <ms>       Auto-stop after timeout
+  --timeout <ms>       Auto-stop after timeout (default: 300000)
+  --max-mb <n>         Bound runtime data and images (default: 50)
+  --observe            Preserve viewport and session environment
+  --segment <mode>     new | append (default: append)
+  --screenshots <mode> off | markers | events (default: events)
+  --privacy <mode>     standard | metadata (metadata requires bodies/images off)
+  --navigation <mode> all | current-document (default: all)
+  --drain-timeout <ms> Bound asynchronous capture drain (default: 5000)
+  --background         Return after a supervised worker declares ready
+  status | stop        Inspect/stop the named session recording
+  marker --label <s>   Add a monotonic marker to a ready recording
   --profile <name>     automation | realtime | voice | auth (default: automation)
   --listen [mode]      ws | http | all (default: all)
   --bodies             Capture HTTP response bodies
@@ -79,8 +103,9 @@ Capture options:
 Artifact subcommands:
   inspect [artifact]   Show artifact metadata and next commands
   summary [artifact]   Show workflow summary plus trace views
-  derive <artifact> -o <output>   Write replayable steps for bp run
-  export <artifact> -o <output>   Write canonical triage bundle
+  derive <artifact> -o <output>   Write candidate steps and replay-readiness report
+  export <artifact> -o <output>   Write JSON triage bundle with embedded images
+  bundle <artifact> -o <directory> Copy a portable directory with verified image hashes
 
 Examples:
   bp connect --name demo
@@ -99,6 +124,16 @@ Likely next commands:
 const DEFAULT_ARTIFACT = 'recording.json';
 
 interface RecordOptions {
+  segment?: 'new' | 'append';
+  screenshots?: 'off' | 'markers' | 'events';
+  privacy?: 'standard' | 'metadata';
+  observe?: boolean;
+  navigation?: 'all' | 'current-document';
+  drainTimeout?: number;
+  maxMb?: number;
+  background?: boolean;
+  workerId?: string;
+  label?: string;
   subcommand?: RecordSubcommand;
   artifactPath?: string;
   output?: string;
@@ -126,17 +161,48 @@ export function parseRecordArgs(args: string[]): RecordOptions {
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]!;
 
-    if (arg === '-f' || arg === '--file') {
+    if (
+      arg === '--segment' ||
+      arg === '--screenshots' ||
+      arg === '--privacy' ||
+      arg === '--navigation'
+    ) {
+      const value = args[++i];
+      const allowed =
+        arg === '--segment'
+          ? ['new', 'append']
+          : arg === '--screenshots'
+            ? ['off', 'markers', 'events']
+            : arg === '--privacy'
+              ? ['standard', 'metadata']
+              : ['all', 'current-document'];
+      if (!value || !allowed.includes(value))
+        throw new Error(`${arg} requires ${allowed.join(' | ')}`);
+      if (arg === '--segment') options.segment = value as RecordOptions['segment'];
+      else if (arg === '--screenshots') options.screenshots = value as RecordOptions['screenshots'];
+      else if (arg === '--privacy') options.privacy = value as RecordOptions['privacy'];
+      else options.navigation = value as RecordOptions['navigation'];
+    } else if (arg === '--observe') options.observe = true;
+    else if (arg === '--background') options.background = true;
+    else if (arg === '--worker-id') options.workerId = args[++i];
+    else if (arg === '--label') options.label = args[++i];
+    else if (arg === '--drain-timeout' || arg === '--max-mb') {
+      const value = Number(args[++i]);
+      if (!Number.isFinite(value) || value <= 0)
+        throw new Error(`${arg} requires a positive number`);
+      if (arg === '--drain-timeout') options.drainTimeout = value;
+      else options.maxMb = value;
+    } else if (arg === '-f' || arg === '--file') {
       options.file = args[++i];
     } else if (arg === '--timeout') {
-      options.timeout = Number.parseInt(args[++i] ?? '', 10);
+      options.timeout = Number(args[++i]);
     } else if (arg === '-h' || arg === '--help') {
       options.help = true;
     } else if (arg === '-s' || arg === '--session') {
       const nextArg = args[i + 1];
       if (!nextArg || nextArg.startsWith('-')) {
         options.useLatestSession = true;
-      }
+      } else i++;
     } else if (arg === '--listen') {
       const nextArg = args[i + 1];
       if (nextArg === 'ws' || nextArg === 'http' || nextArg === 'all') {
@@ -150,7 +216,7 @@ export function parseRecordArgs(args: string[]): RecordOptions {
     } else if (arg === '-m' || arg === '--match') {
       options.match = args[++i];
     } else if (arg === '--max-payload') {
-      options.maxPayload = Number.parseInt(args[++i] ?? '', 10);
+      options.maxPayload = Number(args[++i]);
     } else if (arg === '--profile') {
       const profile = args[++i];
       if (
@@ -160,7 +226,7 @@ export function parseRecordArgs(args: string[]): RecordOptions {
         profile === 'auth'
       ) {
         options.profile = profile;
-      }
+      } else throw new Error('--profile requires automation | realtime | voice | auth');
     } else if (arg === '-o' || arg === '--output') {
       options.output = args[++i];
     } else if (!arg.startsWith('-') && !options.subcommand && !nextIsArtifact) {
@@ -173,9 +239,31 @@ export function parseRecordArgs(args: string[]): RecordOptions {
     } else if (!arg.startsWith('-') && nextIsArtifact && !options.artifactPath) {
       options.artifactPath = arg;
       nextIsArtifact = false;
-    }
+    } else throw new Error(`Unexpected record argument: ${arg}`);
   }
 
+  for (const flag of [
+    '--worker-id',
+    '--label',
+    '-f',
+    '--file',
+    '-m',
+    '--match',
+    '-o',
+    '--output',
+  ]) {
+    const index = args.indexOf(flag);
+    if (index >= 0 && (!args[index + 1] || args[index + 1]!.startsWith('-')))
+      throw new Error(`${flag} requires a value`);
+  }
+
+  if (options.timeout !== undefined && (!Number.isFinite(options.timeout) || options.timeout <= 0))
+    throw new Error('--timeout requires positive milliseconds');
+  if (
+    options.maxPayload !== undefined &&
+    (!Number.isFinite(options.maxPayload) || options.maxPayload < 0)
+  )
+    throw new Error('--max-payload requires a nonnegative number');
   return options;
 }
 
@@ -185,18 +273,26 @@ function isSubcommand(value: string): value is RecordSubcommand {
     value === 'inspect' ||
     value === 'summary' ||
     value === 'derive' ||
-    value === 'export'
+    value === 'export' ||
+    value === 'bundle' ||
+    value === 'status' ||
+    value === 'stop' ||
+    value === 'marker'
   );
 }
 
 async function resolveConnection(
   sessionId: string | undefined,
   useLatestSession: boolean,
-  debug: boolean
+  debug: boolean,
+  observe = false
 ): Promise<ResolvedConnection> {
   if (sessionId) {
     const session = await loadSession(sessionId);
-    const { browser } = await attachSession(session, { trace: debug });
+    const { browser } = await attachSession(session, {
+      trace: debug,
+      ...(observe ? { policy: 'observe' as const } : {}),
+    });
     return { browser, session, isNewSession: false };
   }
 
@@ -205,7 +301,10 @@ async function resolveConnection(
     if (!session) {
       throw new Error('No sessions found. Run "bp connect" first or omit -s to auto-connect.');
     }
-    const { browser } = await attachSession(session, { trace: debug });
+    const { browser } = await attachSession(session, {
+      trace: debug,
+      ...(observe ? { policy: 'observe' as const } : {}),
+    });
     return { browser, session, isNewSession: false };
   }
 
@@ -286,6 +385,8 @@ function buildSummary(artifact: RecordingManifest, source: string) {
       assertions: artifact.assertions.length,
     },
     trace: artifact.trace.summaries,
+    recording: artifact.recording,
+    readiness: recordingReadiness(artifact),
     tips: tipsForArtifact(source),
   };
 }
@@ -298,7 +399,12 @@ function deriveAssertions(artifact: RecordingManifest): Step[] {
   }
 
   for (const action of artifact.actions) {
-    if (action.action === 'fill' && action.selector && typeof action.value === 'string') {
+    if (
+      action.action === 'fill' &&
+      action.selector &&
+      typeof action.value === 'string' &&
+      action.value !== '[REDACTED]'
+    ) {
       assertions.push({
         action: 'assertValue',
         selector: action.selector,
@@ -318,7 +424,14 @@ async function loadArtifact(
   }
 
   const raw = JSON.parse(nodeFs.readFileSync(pathOrFallback, 'utf-8')) as unknown;
-  return { path: pathOrFallback, artifact: canonicalizeRecordingArtifact(raw) };
+  return {
+    path: pathOrFallback,
+    artifact: canonicalizeRecordingArtifact(
+      raw && typeof raw === 'object' && 'artifact' in raw
+        ? (raw as { artifact: unknown }).artifact
+        : raw
+    ),
+  };
 }
 
 function artifactToFrames(artifact: RecordingManifest): RecordingFrame[] {
@@ -349,202 +462,334 @@ function artifactToFrames(artifact: RecordingManifest): RecordingFrame[] {
 
 async function runRecordCapture(
   args: RecordOptions,
-  globalOptions: { session?: string; format?: 'json' | 'pretty'; trace?: boolean; help?: boolean }
+  globalOptions: { session?: string; format?: 'json' | 'pretty'; trace?: boolean }
 ): Promise<void> {
+  if (
+    args.privacy === 'metadata' &&
+    (args.bodies || (args.screenshots && args.screenshots !== 'off'))
+  )
+    throw new Error('Metadata privacy requires response bodies off and --screenshots off');
   const profile = normalizeProfile(args.profile);
-  const { browser, session, isNewSession } = await resolveConnection(
+  const { browser, session } = await resolveConnection(
     globalOptions.session,
     args.useLatestSession ?? false,
-    globalOptions.trace ?? false
+    globalOptions.trace ?? false,
+    args.observe
   );
-
-  if (isNewSession) {
-    console.log(`Created new session: ${session.id}`);
-  }
-
-  if (!session.metadata?.record) {
-    const recordSettings: RecordSettings = {};
-    await updateSession(session.id, { metadata: { record: recordSettings } });
-  }
-
-  const page = await browser.page(undefined, { targetId: session.targetId });
-  const cdp = page.cdpClient;
-  const sessionDir = artifactSessionDir(session.id);
-  const screenshotDir = join(sessionDir, 'screenshots');
-  const canonicalPath = join(sessionDir, DEFAULT_ARTIFACT);
-  const outputPath = resolve(args.file ?? DEFAULT_ARTIFACT);
-
-  nodeFs.mkdirSync(screenshotDir, { recursive: true });
-
-  const existingArtifact = existsSync(canonicalPath)
-    ? canonicalizeRecordingArtifact(
-        JSON.parse(nodeFs.readFileSync(canonicalPath, 'utf-8')) as unknown
-      )
-    : null;
-  const recordingFrames = existingArtifact ? artifactToFrames(existingArtifact) : [];
-
-  let listenConfig: RecorderListenOptions | boolean | undefined = {
-    mode: typeof args.listen === 'string' ? args.listen : 'all',
-    match: args.match,
-    captureResponseBodies: Boolean(args.bodies),
-    maxPayload: args.maxPayload,
-  };
-  if (args.listen === false) {
-    listenConfig = undefined;
-  }
-
-  if (!args.listen && profile === 'voice') {
-    listenConfig = {
-      mode: 'all',
+  let page: Awaited<ReturnType<Browser['page']>> | undefined, recorder: Recorder | undefined;
+  let timer: ReturnType<typeof setInterval> | undefined;
+  let signalHandler: (() => void) | undefined;
+  let state: RecordingControlState | undefined;
+  let releaseReservation: (() => void) | undefined;
+  let tick: Promise<void> | undefined;
+  try {
+    releaseReservation = reserveRecording(session.id);
+    if (activeRecording(readRecordingState(session.id)))
+      throw new Error('A recording is already active for this session; use record status/stop');
+    // Preserve the named target, disable viewport remediation in observation mode.
+    page = await browser.page('record-capture', {
+      targetId: session.targetId,
+      ...(args.observe ? { minViewport: false as const } : {}),
+    });
+    if (!(await browser.listTargets()).some((target) => target.targetId === page!.targetId))
+      throw new Error('Exact recording target disappeared before readiness');
+    const recordingId = args.workerId ?? randomUUID();
+    if (!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(recordingId))
+      throw new Error('Invalid recording worker identity');
+    const sessionDir = artifactSessionDir(session.id),
+      relativeDir = `recordings/${recordingId}`;
+    const segmentDir = join(sessionDir, relativeDir),
+      screenshotDir = join(segmentDir, 'screenshots');
+    const canonicalPath = join(sessionDir, DEFAULT_ARTIFACT),
+      outputPath = resolve(args.file ?? DEFAULT_ARTIFACT);
+    nodeFs.mkdirSync(screenshotDir, { recursive: true, mode: 0o700 });
+    const previous =
+      existsSync(canonicalPath) && (args.segment ?? 'append') === 'append'
+        ? canonicalizeRecordingArtifact(JSON.parse(nodeFs.readFileSync(canonicalPath, 'utf8')))
+        : null;
+    if (previous?.session.targetId && previous.session.targetId !== page.targetId)
+      throw new Error('Append cannot mix targets; use --segment new');
+    const frames: RecordingFrame[] = [],
+      base = previous ? artifactToFrames(previous) : [];
+    const screenshotPolicy = args.screenshots ?? (args.privacy === 'metadata' ? 'off' : 'events');
+    let imageBytes = 0,
+      stopReason: RecordingControlState['stopReason'] | undefined;
+    const seenMarkers = new Set<string>();
+    state = {
+      schemaVersion: 1,
+      recordingId,
+      sessionId: session.id,
+      targetId: page.targetId,
+      pid: process.pid,
+      status: 'starting',
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      artifactPath: outputPath,
+      canonicalPath,
+      segmentPath: join(segmentDir, DEFAULT_ARTIFACT),
+      screenshotDir,
+      timeoutMs: args.timeout ?? 300000,
+      maxBytes: (args.maxMb ?? 50) * 1024 * 1024,
+      bytes: 0,
+      events: 0,
+      markers: [],
+    };
+    writeRecordingState(state);
+    const listen: RecorderListenOptions = {
+      mode: typeof args.listen === 'string' ? args.listen : 'all',
       match: args.match,
       captureResponseBodies: Boolean(args.bodies),
       maxPayload: args.maxPayload,
     };
-  }
-
-  const recordSettings = session.metadata?.record;
-  const recordFormat = recordSettings?.format ?? 'webp';
-  const recordQuality = recordSettings?.quality ?? 40;
-
-  let screenshotCount = 0;
-
-  async function captureScreenshotForEvent(event: RawRecordedEvent): Promise<void> {
-    try {
-      const ts = Date.now();
-      const seq = String(recordingFrames.length + 1).padStart(4, '0');
-      const label = eventKindLabel(event.kind);
-      const filename = `${seq}-${ts}-${label}.${recordFormat}`;
-      const filepath = join(screenshotDir, filename);
-      const result = await cdp.send<{ data: string }>('Page.captureScreenshot', {
-        format: recordFormat === 'png' ? 'png' : recordFormat === 'jpeg' ? 'jpeg' : 'webp',
-        quality: recordFormat === 'png' ? undefined : recordQuality,
-      });
-      nodeFs.writeFileSync(filepath, Buffer.from(result.data, 'base64'));
-
-      let pageUrl: string | undefined;
-      let pageTitle: string | undefined;
-      try {
-        pageUrl = await page.url();
-        pageTitle = await page.title();
-      } catch {
-        // best effort
-      }
-
-      const targetMetadata = event.element
-        ? {
-            tagName: event.element['tag'],
-            inputType: event.element['type'] ?? undefined,
-          }
-        : undefined;
-
-      recordingFrames.push({
-        seq: recordingFrames.length + 1,
-        timestamp: ts,
-        action: label,
-        selector: event.selectors?.[0]?.selector,
-        selectorUsed: event.selectors?.[0]?.selector,
-        value: redactValueForRecording(event.value, targetMetadata),
+    const cdp = page.cdpClient;
+    async function capture(
+      event: RawRecordedEvent,
+      context: { sequence: number; signal: AbortSignal }
+    ): Promise<void> {
+      const frame: RecordingFrame = {
+        seq: context.sequence,
+        timestamp: event.timestamp,
+        action: eventKindLabel(event.kind),
+        selector: event.selectors[0]?.selector,
+        value: event.value,
         coordinates: event.client,
         success: true,
         durationMs: 0,
-        screenshot: `screenshots/${filename}`,
-        pageUrl,
-        pageTitle,
-        stepIndex: recordingFrames.length,
-        actionId: `action-${recordingFrames.length + 1}`,
-      });
-      screenshotCount += 1;
-    } catch {
-      // best effort
-    }
-  }
-
-  const recorderOptions: RecorderOptions = {
-    ...(listenConfig ? { listen: listenConfig } : {}),
-    onEvent: captureScreenshotForEvent,
-  };
-
-  const recorder = new Recorder(cdp, recorderOptions);
-  let stopping = false;
-
-  const stopAndSave = async (): Promise<void> => {
-    if (stopping) {
-      return;
-    }
-    stopping = true;
-
-    try {
-      const recording = await recorder.stop();
-      const currentUrl = await page.url().catch(() => recording.startUrl);
-      const manifest = createRecordingManifest({
-        recordedAt: existingArtifact?.recordedAt ?? recording.recordedAt,
-        sessionId: session.id,
-        startUrl: existingArtifact?.session.startUrl ?? recording.startUrl,
-        endUrl: currentUrl,
-        targetId: page.targetId,
-        profile,
-        steps: recording.steps,
-        frames: recordingFrames,
-        traceEvents: recording.traceEvents ?? [],
-        assertions: deriveAssertions(
-          createRecordingManifest({
-            recordedAt: recording.recordedAt,
-            sessionId: session.id,
-            startUrl: recording.startUrl,
-            endUrl: currentUrl,
-            targetId: page.targetId,
-            profile,
-            steps: recording.steps,
-            frames: recordingFrames,
-            traceEvents: recording.traceEvents ?? [],
-          })
-        ),
-        notes: profile === 'voice' ? ['Voice profile capture'] : [],
-        recordingManifest: DEFAULT_ARTIFACT,
-        screenshotDir: 'screenshots/',
-      });
-
-      nodeFs.writeFileSync(canonicalPath, JSON.stringify(manifest, null, 2));
-      if (outputPath !== canonicalPath) {
-        nodeFs.mkdirSync(dirname(outputPath), { recursive: true });
-        nodeFs.writeFileSync(outputPath, JSON.stringify(manifest, null, 2));
-      }
-
-      await updateSession(session.id, { currentUrl });
-      await browser.disconnect();
-
-      const summary = buildSummary(manifest, outputPath);
-      if (globalOptions.format === 'json') {
-        output({ success: true, ...summary }, 'json');
-      } else {
-        console.log(
-          `Saved ${manifest.recipe.steps.length} steps, ${screenshotCount} screenshots, ${manifest.trace.events.length} trace events to ${outputPath}`
-        );
-        console.log(`Use: bp record summary ${outputPath}`);
-      }
-    } catch (error) {
-      console.error(
-        `Error saving recording: ${error instanceof Error ? error.message : String(error)}`
+        screenshot: '',
+        pageUrl: event.url,
+        stepIndex: context.sequence - 1,
+        actionId: `event-${recordingId}-${context.sequence}`,
+      };
+      frames.push(frame); // Keep the action even if pixels fail or hit a bound.
+      if (screenshotPolicy !== 'events') return;
+      const filename = `${String(context.sequence).padStart(6, '0')}.webp`;
+      const result = await cdp.send<{ data: string }>(
+        'Page.captureScreenshot',
+        {
+          format: 'webp',
+          quality: session.metadata?.record?.quality ?? 40,
+          captureBeyondViewport: false,
+        },
+        undefined,
+        { timeout: args.drainTimeout ?? 5000 }
       );
-      process.exit(1);
+      if (context.signal.aborted) {
+        frame.error = 'Screenshot cancelled by drain deadline';
+        throw new Error(frame.error);
+      }
+      const bytes = Buffer.from(result.data, 'base64');
+      if (
+        bytes.length > 8 * 1024 * 1024 ||
+        imageBytes + recorder!.byteCount + bytes.length > state!.maxBytes
+      ) {
+        frame.error = 'Screenshot skipped by byte limit';
+        stopReason = 'size_limit';
+        throw new Error(frame.error);
+      }
+      nodeFs.writeFileSync(join(screenshotDir, filename), bytes, { mode: 0o600 });
+      imageBytes += bytes.length;
+      frame.screenshot = `screenshots/${filename}`;
     }
-  };
-
-  const handleSignal = () => {
-    void stopAndSave();
-  };
-  process.on('SIGINT', handleSignal);
-  process.on('SIGTERM', handleSignal);
-
-  if (args.timeout && args.timeout > 0) {
-    setTimeout(() => void stopAndSave(), args.timeout);
+    recorder = new Recorder(cdp, {
+      listen,
+      onEvent: capture,
+      privacy: args.privacy,
+      drainTimeoutMs: args.drainTimeout,
+      navigation: args.navigation,
+      maxBytes: state.maxBytes,
+    });
+    await recorder.start();
+    state.status = 'ready';
+    writeRecordingState(state);
+    process.stderr.write(
+      `Recording... Press Ctrl+C to stop. Artifact: ${outputPath}\nSession: ${session.id}\nRecording ID: ${recordingId}\n`
+    );
+    await new Promise<void>((resolveStop) => {
+      let busy = false;
+      signalHandler = () => {
+        stopReason = 'signal';
+        resolveStop();
+      };
+      process.on('SIGINT', signalHandler);
+      process.on('SIGTERM', signalHandler);
+      timer = setInterval(() => {
+        if (busy) return;
+        busy = true;
+        tick = (async () => {
+          if (recordingStopRequested(state!)) stopReason = 'requested';
+          if (Date.now() - Date.parse(state!.startedAt) >= state!.timeoutMs) stopReason = 'timeout';
+          for (const marker of readRecordingMarkers(state!))
+            if (!seenMarkers.has(marker.id)) {
+              seenMarkers.add(marker.id);
+              state!.markers!.push({ id: marker.id, ...recorder!.marker(marker.label) });
+              if (screenshotPolicy === 'markers') {
+                const picture = await cdp.send<{ data: string }>(
+                  'Page.captureScreenshot',
+                  { format: 'webp', quality: 40, captureBeyondViewport: false },
+                  undefined,
+                  { timeout: 5000 }
+                );
+                const bytes = Buffer.from(picture.data, 'base64');
+                if (
+                  bytes.length > 8 * 1024 * 1024 ||
+                  imageBytes + recorder!.byteCount + bytes.length > state!.maxBytes
+                ) {
+                  stopReason = 'size_limit';
+                  break;
+                }
+                const filename = `marker-${marker.id}.webp`;
+                nodeFs.writeFileSync(join(screenshotDir, filename), bytes, { mode: 0o600 });
+                imageBytes += bytes.length;
+                frames.push({
+                  seq: frames.length + 1,
+                  timestamp: Date.now(),
+                  action: 'marker',
+                  success: true,
+                  durationMs: 0,
+                  screenshot: `screenshots/${filename}`,
+                  actionId: marker.id,
+                });
+              }
+            }
+          state!.events = recorder!.getEvents().length;
+          // Include bounded runtime data in the cap; no raw response bodies in metadata mode.
+          state!.bytes = imageBytes + recorder!.byteCount;
+          if (recorder!.limitReached || state!.bytes >= state!.maxBytes) stopReason = 'size_limit';
+          const targets = await browser.listTargets();
+          if (!targets.some((target) => target.targetId === page!.targetId))
+            stopReason = 'target_closed';
+          writeRecordingState(state!);
+          if (stopReason) resolveStop();
+        })()
+          .catch(() => {
+            stopReason = 'target_closed';
+            resolveStop();
+          })
+          .finally(() => {
+            busy = false;
+          });
+      }, 100);
+    });
+    clearInterval(timer);
+    timer = undefined;
+    await tick;
+    if (signalHandler) {
+      process.off('SIGINT', signalHandler);
+      process.off('SIGTERM', signalHandler);
+      signalHandler = undefined;
+    }
+    state.status = 'stopping';
+    state.stopReason = stopReason;
+    writeRecordingState(state);
+    const recording = await recorder.stop();
+    const endUrl =
+      args.privacy === 'metadata'
+        ? redactRecordingURL(await page.url().catch(() => recording.startUrl))
+        : await page.url().catch(() => recording.startUrl);
+    const segment = createRecordingManifest({
+      recordedAt: recording.recordedAt,
+      sessionId: session.id,
+      startUrl: recording.startUrl,
+      endUrl,
+      targetId: page.targetId,
+      profile,
+      steps: recording.steps,
+      frames,
+      traceEvents: recording.traceEvents ?? [],
+      notes: [
+        'Captures only subsequent interactions; browser starting state is not a restorable checkpoint.',
+      ],
+      screenshotDir: 'screenshots/',
+    });
+    segment.recording = {
+      id: recordingId,
+      segmentMode: args.segment ?? 'append',
+      privacy: args.privacy ?? 'standard',
+      screenshotPolicy,
+      complete:
+        !recording.capture?.drainTimedOut &&
+        !recording.capture?.pending &&
+        !recording.capture?.failed &&
+        !recording.capture?.cleanupErrors.length &&
+        stopReason !== 'size_limit' &&
+        stopReason !== 'target_closed',
+      capture: recording.capture,
+      stopReason,
+    };
+    const prefixed = frames.map((frame) => ({
+      ...frame,
+      screenshot: frame.screenshot ? `${relativeDir}/${frame.screenshot}` : '',
+    }));
+    const manifest = createRecordingManifest({
+      recordedAt: previous?.recordedAt ?? recording.recordedAt,
+      sessionId: session.id,
+      startUrl: previous?.session.startUrl ?? recording.startUrl,
+      endUrl,
+      targetId: page.targetId,
+      profile,
+      steps: [...(previous?.recipe.steps ?? []), ...recording.steps],
+      frames: [...base, ...prefixed],
+      traceEvents: [...(previous?.trace.events ?? []), ...(recording.traceEvents ?? [])],
+      notes: [...(previous?.notes ?? []), ...segment.notes],
+      executions: previous?.recipe.executions,
+    });
+    manifest.recording = segment.recording;
+    manifest.assertions = deriveAssertions(manifest);
+    nodeFs.writeFileSync(state.segmentPath, JSON.stringify(segment, null, 2), { mode: 0o600 });
+    nodeFs.writeFileSync(canonicalPath, JSON.stringify(manifest, null, 2), { mode: 0o600 });
+    if (outputPath !== canonicalPath) {
+      const exported = exportRecordingBundle(
+        manifest,
+        canonicalPath,
+        `${outputPath}.assets/${recordingId}`
+      );
+      const portable = canonicalizeRecordingArtifact(
+        JSON.parse(nodeFs.readFileSync(exported.manifest, 'utf8'))
+      );
+      for (const shot of portable.screenshots)
+        shot.file = relative(
+          dirname(outputPath),
+          join(dirname(exported.manifest), shot.file)
+        ).replaceAll('\\', '/');
+      nodeFs.mkdirSync(dirname(outputPath), { recursive: true, mode: 0o700 });
+      nodeFs.writeFileSync(outputPath, JSON.stringify(portable, null, 2), { mode: 0o600 });
+    }
+    state.status = 'complete';
+    state.events = frames.length;
+    writeRecordingState(state);
+    if (globalOptions.format === 'json')
+      output(
+        {
+          success: true,
+          ...buildSummary(manifest, outputPath),
+          locations: { canonicalPath, segmentPath: state.segmentPath, outputPath, screenshotDir },
+        },
+        'json'
+      );
+    else output({ success: true, ...buildSummary(manifest, outputPath) }, 'pretty');
+  } catch (error) {
+    if (state) {
+      state.status = 'failed';
+      state.error = error instanceof Error ? error.message : String(error);
+      writeRecordingState(state);
+    }
+    throw error;
+  } finally {
+    if (timer) clearInterval(timer);
+    if (signalHandler) {
+      process.off('SIGINT', signalHandler);
+      process.off('SIGTERM', signalHandler);
+    }
+    await recorder?.dispose();
+    if (page) {
+      const sid = page.cdpClient.sessionId;
+      page.dispose();
+      if (session.daemon && sid && sid !== session.daemon.cdpSessionId)
+        await page.cdpClient.send('daemon.detach', { sessionId: sid }, null).catch(() => {});
+    }
+    await browser.disconnect();
+    releaseReservation?.();
   }
-
-  await recorder.start();
-  console.log(`Recording... Press Ctrl+C to stop. Artifact: ${outputPath}`);
-  console.log(`Session: ${session.id}`);
-  console.log(`Profile: ${profile}`);
-  console.log(`URL: ${await page.url()}`);
 }
 
 async function runRecordInspect(
@@ -590,7 +835,11 @@ async function runRecordDerive(
   const steps = artifact.recipe.steps;
 
   nodeFs.mkdirSync(dirname(resolve(outputPath)), { recursive: true });
-  nodeFs.writeFileSync(outputPath, JSON.stringify(steps, null, 2));
+  nodeFs.writeFileSync(outputPath, JSON.stringify(steps, null, 2), { mode: 0o600 });
+  const readiness = recordingReadiness(artifact);
+  nodeFs.writeFileSync(`${outputPath}.readiness.json`, JSON.stringify(readiness, null, 2), {
+    mode: 0o600,
+  });
 
   output(
     {
@@ -598,6 +847,8 @@ async function runRecordDerive(
       output: outputPath,
       steps: steps.length,
       suggestedAssertions: deriveAssertions(artifact),
+      readiness: recordingReadiness(artifact),
+      readinessPath: `${outputPath}.readiness.json`,
     },
     globalOptions.format ?? 'pretty'
   );
@@ -622,6 +873,20 @@ async function runRecordExport(
     exportedAt: new Date().toISOString(),
     artifact,
     summary: buildSummary(artifact, path),
+    images: Object.fromEntries(
+      artifact.screenshots
+        .filter((shot) => shot.file)
+        .map((shot) => {
+          const bytes = nodeFs.readFileSync(resolveRecordingImage(artifact, path, shot.file));
+          return [
+            shot.file,
+            {
+              base64: bytes.toString('base64'),
+              sha256: createHash('sha256').update(bytes).digest('hex'),
+            },
+          ];
+        })
+    ),
   };
 
   nodeFs.mkdirSync(dirname(resolve(outputPath)), { recursive: true });
@@ -661,6 +926,85 @@ export async function recordCommand(
     return;
   }
 
+  if (command === 'status' || command === 'stop' || command === 'marker') {
+    const session = await resolveSession(globalOptions.session);
+    const current = readRecordingState(session.id);
+    if (command === 'status') {
+      output(
+        { active: activeRecording(current), ...(current ?? { status: 'none' }) },
+        globalOptions.format
+      );
+      return;
+    }
+    if (!current || !activeRecording(current))
+      throw new Error('No active recording for this session');
+    if (command === 'marker') {
+      if (current.status !== 'ready') throw new Error('Recording is not ready');
+      output(
+        {
+          recordingId: current.recordingId,
+          markerId: requestRecordingMarker(
+            current,
+            options.label ?? options.artifactPath ?? 'marker'
+          ),
+          status: 'requested',
+        },
+        globalOptions.format
+      );
+      return;
+    }
+    requestRecordingStop(current);
+    const deadline = Date.now() + 15000;
+    while (Date.now() < deadline) {
+      const next = readRecordingState(session.id);
+      if (next?.recordingId !== current.recordingId)
+        throw new Error('Recording identity changed while stopping');
+      if (next.status === 'complete' || next.status === 'failed') {
+        output({ active: false, ...next }, globalOptions.format);
+        return;
+      }
+      await new Promise((resolveWait) => setTimeout(resolveWait, 100));
+    }
+    throw new Error('Recording stop is still pending; inspect record status');
+  }
+  if (command === 'capture' && options.background) {
+    const session = await resolveSession(globalOptions.session);
+    if (activeRecording(readRecordingState(session.id)))
+      throw new Error('A recording is already active');
+    const id = randomUUID(),
+      log = recordingControlPaths(session.id).log;
+    nodeFs.mkdirSync(dirname(log), { recursive: true, mode: 0o700 });
+    const fd = nodeFs.openSync(log, 'a', 0o600);
+    const filtered = args.filter((arg) => arg !== '--background');
+    const child = spawn(
+      process.execPath,
+      [
+        resolve(process.argv[1]!),
+        ...['record', ...filtered, '-s', session.id, '--worker-id', id, '--json'],
+      ],
+      { detached: true, stdio: ['ignore', fd, fd], env: process.env }
+    );
+    nodeFs.closeSync(fd);
+    let spawnError: Error | undefined;
+    child.on('error', (error) => {
+      spawnError = error;
+    });
+    child.unref();
+    const deadline = Date.now() + 15000;
+    while (Date.now() < deadline) {
+      if (spawnError) throw spawnError;
+      const ready = readRecordingState(session.id);
+      if (ready?.recordingId === id) {
+        if (ready.status === 'failed') throw new Error(ready.error ?? 'Recording failed');
+        if (ready.status === 'ready' || ready.status === 'complete') {
+          output({ active: activeRecording(ready), ...ready }, globalOptions.format);
+          return;
+        }
+      }
+      await new Promise((resolveWait) => setTimeout(resolveWait, 100));
+    }
+    throw new Error(`Recording did not declare ready; inspect ${log}`);
+  }
   if (command === 'capture') {
     await runRecordCapture(options, globalOptions);
     return;
@@ -678,6 +1022,20 @@ export async function recordCommand(
     case 'derive':
       await runRecordDerive(pathHint, options.output, globalOptions);
       break;
+    case 'bundle': {
+      if (!options.output) throw new Error('record bundle requires -o <fresh-directory>');
+      const session = globalOptions.session
+        ? await loadSession(globalOptions.session)
+        : await getDefaultSession();
+      const loaded = await loadArtifact(
+        resolveArtifactPath(options.artifactPath, session ?? undefined)
+      );
+      output(
+        { success: true, ...exportRecordingBundle(loaded.artifact, loaded.path, options.output) },
+        globalOptions.format
+      );
+      break;
+    }
     case 'export':
       await runRecordExport(pathHint, options.output, globalOptions);
       break;

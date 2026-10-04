@@ -159,9 +159,7 @@ describe('Recording Integration', () => {
       // relying on a fixed sleep that races with faster navigation.
       await waitUntil(
         async () =>
-          (await page.evaluate(
-            () => (window as { __recorderInstalled?: boolean }).__recorderInstalled
-          )) === true,
+          Boolean(await page.evaluate(() => (window as { __bpRecorders?: unknown }).__bpRecorders)),
         {
           timeout: 2000,
           interval: 50,

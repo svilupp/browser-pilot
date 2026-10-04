@@ -1264,6 +1264,28 @@ export interface FulfillRequestOptions {
     status: number;
 }
 
+// Warning: (ae-forgotten-export) The symbol "RecordingOutput" needs to be exported by the entry point index.d.ts
+//
+// @public
+export interface FullRecordingOutput extends RecordingOutput {
+    // (undocumented)
+    capture?: RecorderCaptureStatus;
+    // Warning: (ae-forgotten-export) The symbol "NetworkRecording" needs to be exported by the entry point index.d.ts
+    //
+    // (undocumented)
+    network?: NetworkRecording;
+    // Warning: (ae-forgotten-export) The symbol "TimelineEntry" needs to be exported by the entry point index.d.ts
+    //
+    // (undocumented)
+    timeline?: TimelineEntry[];
+    // (undocumented)
+    traceEvents?: CanonicalTraceEvent[];
+    // Warning: (ae-forgotten-export) The symbol "WebSocketRecording" needs to be exported by the entry point index.d.ts
+    //
+    // (undocumented)
+    websockets?: WebSocketRecording;
+}
+
 // @public
 export interface FuzzyMatchOptions {
     maxResults?: number;
@@ -1841,6 +1863,25 @@ export function rankSelectorCandidates(el: InteractiveElement, options?: {
     score: number;
 }[];
 
+// @public
+export interface RawRecordedEvent {
+    checked?: boolean;
+    client?: {
+        x: number;
+        y: number;
+    };
+    // Warning: (ae-forgotten-export) The symbol "ElementSummary" needs to be exported by the entry point index.d.ts
+    element?: ElementSummary;
+    key?: string;
+    // Warning: (ae-forgotten-export) The symbol "RecordedEventKind" needs to be exported by the entry point index.d.ts
+    kind: RecordedEventKind;
+    // Warning: (ae-forgotten-export) The symbol "SelectorCandidate" needs to be exported by the entry point index.d.ts
+    selectors: SelectorCandidate[];
+    timestamp: number;
+    url: string;
+    value?: string;
+}
+
 // @public (undocumented)
 export interface ReadinessDiagnostics {
     // (undocumented)
@@ -1861,6 +1902,93 @@ export type ReadyCondition = string | {
     url?: string;
     predicate?: string | (() => unknown);
 };
+
+// @public
+export class Recorder {
+    constructor(cdp: CDPClient, options?: RecorderOptions);
+    // (undocumented)
+    readonly bindingName: string;
+    get byteCount(): number;
+    // (undocumented)
+    dispose(): Promise<void>;
+    getEvents(): RawRecordedEvent[];
+    // (undocumented)
+    heartbeat(): Promise<void>;
+    // (undocumented)
+    readonly id: string;
+    get isRecording(): boolean;
+    // (undocumented)
+    get limitReached(): boolean;
+    // (undocumented)
+    marker(label: string): RecorderMarker;
+    start(): Promise<void>;
+    // (undocumented)
+    get status(): string;
+    stop(): Promise<FullRecordingOutput>;
+}
+
+// @public (undocumented)
+export interface RecorderCaptureStatus {
+    // (undocumented)
+    cleanupErrors: string[];
+    // (undocumented)
+    completed: number;
+    // (undocumented)
+    drainTimedOut: boolean;
+    // (undocumented)
+    failed: number;
+    // (undocumented)
+    pending: number;
+    // (undocumented)
+    scheduled: number;
+    // (undocumented)
+    skipped: number;
+}
+
+// @public
+export interface RecorderEventContext {
+    // (undocumented)
+    sequence: number;
+    // (undocumented)
+    signal: AbortSignal;
+}
+
+// @public
+export interface RecorderListenOptions {
+    // (undocumented)
+    captureResponseBodies?: boolean;
+    // (undocumented)
+    match?: string;
+    // (undocumented)
+    maxPayload?: number;
+    // Warning: (ae-forgotten-export) The symbol "ListenMode" needs to be exported by the entry point index.d.ts
+    //
+    // (undocumented)
+    mode?: ListenMode;
+}
+
+// @public (undocumented)
+export interface RecorderMarker {
+    // (undocumented)
+    at: string;
+    // (undocumented)
+    elapsedMs: number;
+    // (undocumented)
+    label: string;
+    // (undocumented)
+    sequence: number;
+}
+
+// @public (undocumented)
+export interface RecorderOptions {
+    drainTimeoutMs?: number;
+    listen?: boolean | RecorderListenOptions;
+    maxBytes?: number;
+    maxIdleMs?: number;
+    navigation?: 'all' | 'current-document';
+    onEvent?: (event: RawRecordedEvent, context: RecorderEventContext) => void | Promise<void>;
+    privacy?: 'standard' | 'metadata';
+}
 
 // @public (undocumented)
 export interface RecordingAction {
@@ -2047,6 +2175,16 @@ export interface RecordingManifest {
     };
     // (undocumented)
     recordedAt: string;
+    // (undocumented)
+    recording?: {
+        id: string;
+        segmentMode: 'new' | 'append';
+        screenshotPolicy: 'off' | 'markers' | 'events';
+        privacy: 'standard' | 'metadata';
+        complete: boolean;
+        capture?: RecorderCaptureStatus;
+        stopReason?: string;
+    };
     // (undocumented)
     screenshots: RecordingScreenshot[];
     // (undocumented)
@@ -3119,7 +3257,7 @@ export interface WorkflowSummary {
 
 // Warnings were encountered during analysis:
 //
-// dist/index.d.ts:404:5 - (ae-forgotten-export) The symbol "CanonicalTraceEvent" needs to be exported by the entry point index.d.ts
+// dist/index.d.ts:390:5 - (ae-forgotten-export) The symbol "CanonicalTraceEvent" needs to be exported by the entry point index.d.ts
 // dist/page-CRESxuLk.d.ts:1437:9 - (ae-forgotten-export) The symbol "CoveringElement" needs to be exported by the entry point index.d.ts
 // dist/page-CRESxuLk.d.ts:1438:9 - (ae-forgotten-export) The symbol "HitElement" needs to be exported by the entry point index.d.ts
 // dist/page-CRESxuLk.d.ts:1439:9 - (ae-forgotten-export) The symbol "PointerEventsDiagnosis" needs to be exported by the entry point index.d.ts

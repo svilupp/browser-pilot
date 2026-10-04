@@ -309,6 +309,12 @@ export {
   assertRecordingManifestIntegrity,
   canonicalizeRecordingArtifact,
   createRecordingManifest,
+  Recorder,
+  type RecorderCaptureStatus,
+  type RecorderEventContext,
+  type RecorderListenOptions,
+  type RecorderMarker,
+  type RecorderOptions,
   type RecordingAction,
   type RecordingExecution,
   type RecordingFrame,
@@ -318,6 +324,7 @@ export {
   type RecordingScreenshot,
   validateRecordingManifest,
 } from './recording/index.ts';
+export type { FullRecordingOutput, RawRecordedEvent } from './recording/types.ts';
 // Runtime env override hook (e.g. Cloudflare Workers without process.env).
 export { clearEnvOverrides, setEnvOverrides, withEnv } from './runtime/env.ts';
 // Storage (Cookies)

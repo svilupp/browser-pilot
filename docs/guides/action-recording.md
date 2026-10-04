@@ -11,7 +11,7 @@ For simple, reusable, low-cost automation on top of browser-pilot, use the compa
 
 - `record` captures a human demonstration
 - `record summary` and `record inspect` explain the artifact without opening raw JSON
-- `record derive` turns the artifact into replayable workflow steps
+- `record derive` turns the artifact into candidate workflow steps and a readiness report
 - `trace summary` reads the same artifact to answer websocket, console, voice, permission, media, and session questions
 
 ## Canonical artifact
@@ -148,3 +148,94 @@ Redaction applies to:
 - Using `record` for replay proof when `exec --record` is the right tool
 - Reusing a noisy session when you wanted a clean capture
 - Deriving steps before checking the artifact's trace summary
+
+
+## Observing an existing tab (0.7.0)
+
+Use exact target IDs rather than URLs. Multiple tabs can share a URL, and their
+unsaved state differs. `use-target` explicitly changes the named owner's target;
+observation borrowing does not.
+
+```ts
+import { observeSession } from 'browser-pilot/adapters/node';
+const borrowed = await observeSession({ session: 'review', targetId });
+try {
+  // Read through borrowed.page; install only your own scoped instrumentation.
+} finally {
+  await borrowed.disconnect();
+}
+```
+
+This currently supports local generic CLI sessions. It skips environment replay
+and minimum viewport remediation, refuses target fallback, preserves the owner's
+session file, and releases only its own wrapper/transport and extra daemon
+attachment. It never closes the tab or stops the daemon. The returned Page still
+has automation methods: callers must enforce their own read-only policy.
+
+## Supervised capture
+
+```sh
+bp record -s review --observe --background --segment new \
+  --screenshots markers --timeout 300000 --max-mb 50 -f ./review.json --json
+bp record status -s review --json
+bp record marker -s review --label "before reproduction" --json
+bp record stop -s review --json
+```
+
+A unique recording ID fences stop/marker requests from subsequent runs. Status
+moves through starting, ready, stopping, then complete or failed. The background
+command returns only after instrumentation is ready; marker requests acknowledge
+queueing, and status lists processed markers with event sequence and monotonic
+elapsed time. One recorder can own a named session at a time. Progress diagnostics
+are on stderr; foreground JSON stdout contains the final result. Background
+worker diagnostics go to the private session log. SIGINT/SIGTERM also finalize.
+
+The default timeout is five minutes and the default retained data/image cap is
+50 MiB. `--drain-timeout` bounds asynchronous event capture (default five seconds).
+`recording.capture` reports scheduled/completed/failed/skipped/pending work,
+drain timeout and cleanup errors; `recording.complete` states evidence completeness,
+independently of whether the supervisor reached its terminal complete state.
+Actions remain in the recipe when screenshot capture fails. The cap bounds
+retained raw data/images, not total serialized JSON size or transport buffering.
+
+`--segment append` preserves the earlier recipe, trace and images in the session's
+latest canonical artifact. `--segment new` starts a fresh recipe. Both retain an
+individual segment under the unique recording directory. Append rejects a changed
+target. Appending less-sensitive evidence does not sanitize an earlier segment;
+use a new metadata segment when sensitive earlier evidence must be excluded.
+
+`--screenshots events` is the compatibility default; `markers` captures only
+processed markers; `off` retains action metadata without images. Screenshot
+capture uses the current viewport and never scrolls the page. `--navigation
+current-document` omits future-document injection; `all` follows navigation until
+stop. Stop removes the recorder's page hooks, CDP bindings and future scripts,
+without disabling networking or another trace collector.
+
+`--privacy metadata` requires response bodies and screenshots off and redacts
+input values, URL query/fragment/credentials, HTTP headers/bodies, console
+arguments and WebSocket payload content. Standard recording still redacts known
+sensitive fields and fields inside `[data-private]`, `[data-bp-private]` and
+`[data-revlet-private]`; images and arbitrary runtime messages may contain secrets.
+Private selectors and element labels are omitted from the DOM event channel.
+
+## Portable evidence and candidate replay
+
+```sh
+bp record bundle ./review.json -o ./fresh-bundle
+bp record summary ./fresh-bundle/recording.json --json
+bp record derive ./fresh-bundle/recording.json -o ./candidate.json --json
+```
+
+The fresh bundle directory includes canonical v2 JSON, copied screenshots with
+relative paths, and a SHA-256 inventory. It remains usable after moving it and
+removing the source. Missing images, traversal paths, escaping symlinks and images
+over 8 MiB fail export. `-f` capture output likewise receives copied images beside
+the requested artifact. `record export` writes a JSON triage envelope with embedded
+image bytes and hashes; summary/inspect/derive can read its canonical artifact.
+Use the directory form for tools that consume image files.
+
+Derive writes the existing workflow Step[] format plus `.readiness.json`. These
+are candidate steps: they cannot restore authentication, unsaved fields, scroll,
+or the exact starting UI. Redacted inputs need authorized replacements; selectors
+need current uniqueness checks; clicks/submits/keypresses can have side effects.
+No capture, derive, summary, bundle or export command automatically replays steps.
