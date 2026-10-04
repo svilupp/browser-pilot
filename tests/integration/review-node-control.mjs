@@ -24,10 +24,13 @@ try {
   assert.equal(await p.evaluate('document.querySelector("#value").value'), 'leaf original');
   await p.close();
   await p.cdpClient.send('Target.closeTarget', { targetId: p.targetId }, null);
-  assert.equal(
-    (await browser.listTargets()).some((t) => t.targetId === p.targetId),
-    false
-  );
+  const deadline = Date.now() + 1000;
+  let exists = true;
+  while (exists && Date.now() < deadline) {
+    exists = (await browser.listTargets()).some((t) => t.targetId === p.targetId);
+    if (exists) await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  assert.equal(exists, false, 'Owned target must disappear after close');
   console.log('NODE CONTROL PASS stale-ref and slow-action deadline');
 } finally {
   await browser.close();

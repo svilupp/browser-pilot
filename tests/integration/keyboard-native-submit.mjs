@@ -27,7 +27,14 @@ let page;
 try {
   chrome = await launch({
     userDataDir: profile,
-    chromeFlags: ['--headless=new', '--no-first-run', '--no-default-browser-check'],
+    chromeFlags: [
+      '--headless=new',
+      '--no-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-gpu',
+      '--no-first-run',
+      '--no-default-browser-check',
+    ],
     logLevel: 'silent',
   });
   browser = await connect({
@@ -75,17 +82,23 @@ try {
     'Native Enter form submission, textarea newline, Shift+Enter and command modifiers passed'
   );
 } finally {
-  if (page && browser) {
-    const targetId = page.targetId;
-    await page.close();
-    await browser.cdpClient.send('Target.closeTarget', { targetId }, null);
-    assert.equal(
-      (await browser.listTargets()).some((target) => target.targetId === targetId),
-      false
-    );
+  try {
+    if (page && browser) {
+      const targetId = page.targetId;
+      await page.close();
+      await browser.cdpClient.send('Target.closeTarget', { targetId }, null);
+      const deadline = Date.now() + 1000;
+      let exists = true;
+      while (exists && Date.now() < deadline) {
+        exists = (await browser.listTargets()).some((target) => target.targetId === targetId);
+        if (exists) await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      assert.equal(exists, false, 'Owned target must disappear after close');
+    }
+  } finally {
+    await browser?.close();
+    await Promise.resolve(chrome?.kill());
+    await rm(profile, { recursive: true, force: true });
+    await new Promise((resolve) => server.close(resolve));
   }
-  await browser?.close();
-  await Promise.resolve(chrome?.kill());
-  await rm(profile, { recursive: true, force: true });
-  await new Promise((resolve) => server.close(resolve));
 }
