@@ -62,6 +62,8 @@ function createMockCDPClient() {
 
       // Runtime operations
       if (method === 'Runtime.evaluate') {
+        if (params?.['expression'] === 'document')
+          return Promise.resolve({ result: { objectId: 'context-document' } });
         const expr = params?.['expression'] as string | undefined;
 
         // isElementVisible check — return true so findElement succeeds
@@ -85,6 +87,11 @@ function createMockCDPClient() {
         return Promise.resolve({ result: { value: null } });
       }
 
+      if (
+        method === 'Runtime.callFunctionOn' &&
+        String(params?.['functionDeclaration']).includes('this === document')
+      )
+        return Promise.resolve({ result: { value: true } });
       if (method === 'Runtime.callFunctionOn') {
         // Actionability checks
         return Promise.resolve({ result: { value: { actionable: true } } });
@@ -149,6 +156,18 @@ describe('iframe context safety', () => {
     // switchToFrame returns true (DOM access works), but frame is marked broken
     expect(result).toBe(true);
     expect(page.getCurrentFrame()).toBe('iframe#my-frame');
+  });
+
+  it('text propagates a dead renderer exception instead of returning empty content', async () => {
+    const cdp = createMockCDPClient();
+    cdp.send = mock(() =>
+      Promise.resolve({
+        result: { type: 'undefined' },
+        exceptionDetails: { text: 'PageScript.evaluate: session is dead' },
+      })
+    ) as CDPClient['send'];
+    const page = new Page(cdp, 'target-1');
+    await expect(page.text()).rejects.toThrow('session is dead');
   });
 
   it('evaluateInFrame throws explicitly when in broken frame context', async () => {

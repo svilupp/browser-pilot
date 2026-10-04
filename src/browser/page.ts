@@ -1,3 +1,5 @@
+import { CapabilityError } from '../core/ports.ts';
+import { verifyChildSession, verifyDocumentContext } from './frame-identity.ts';
 /**
  * Page class - provides high-level browser automation API
  */
@@ -36,6 +38,7 @@ import {
 } from '../wait/index.ts';
 import { ActionDispatch } from './action-dispatch.ts';
 import { ActionabilityError, ensureActionable } from './actionability.ts';
+import { CapabilityCache } from './capabilities.ts';
 import { computeDelta, type DeltaResult, extractPageState, type PageState } from './delta.ts';
 import { type DiagnoseOptions, type DiagnoseResult, diagnoseElement } from './diagnose.ts';
 import {
@@ -320,6 +323,9 @@ const EVENT_LISTENER_TRACKER_SCRIPT = `(() => {
  * these configure behaviour installed once at {@link Page.init}.
  */
 export interface PageInitOptions {
+  browserGeneration?: string;
+  engineRevision?: string;
+  recordingIo?: import('../actions/types.ts').RecordingIo;
   /**
    * Override `window.print` with a logging no-op on every document, preventing a
    * stray click on a "Print" control from freezing the renderer in a native
@@ -332,6 +338,8 @@ export interface PageInitOptions {
 }
 
 export class Page {
+  /** Disposable-fixture evidence; document entries expire on navigation or route changes. */
+  readonly capabilities: CapabilityCache;
   private cdp: CDPClient;
   private _targetId: string;
   private rootNodeId: number | null = null;
@@ -344,6 +352,12 @@ export class Page {
   private consoleEnabled = false;
   /** Map of ref (e.g., "e4") to backendNodeId for ref-based selectors */
   private refMap: Map<string, number> = new Map();
+  private refSemantics: Record<string, { role: string; name: string }> = {};
+  private _documentGeneration = 0;
+  /** Advances when the document or SPA route changes; refs require a fresh snapshot. */
+  get documentGeneration(): number {
+    return this._documentGeneration;
+  }
   /** Current frame context (null = main frame) */
   private currentFrame: string | null = null;
   /** Stored frame document node IDs for context switching */
@@ -448,8 +462,48 @@ export class Page {
 
   private readonly targetProvenance: TargetProvenance;
 
+  private actionDeadline?: number;
+  private readonly pageSubscriptions: Array<() => void> = [];
+  private frameIdentityError?: import('../core/ports.ts').CapabilityError;
+  private readonly recordingIo?: import('../actions/types.ts').RecordingIo;
   constructor(cdp: CDPClient, targetId: string, options: PageInitOptions = {}) {
-    this.cdp = cdp;
+    this.capabilities = new CapabilityCache(
+      options.browserGeneration ?? targetId,
+      options.engineRevision
+    );
+    this.recordingIo = options.recordingIo;
+    this.cdp = new Proxy(cdp, {
+      get: (client, property) => {
+        if (property === 'send') {
+          const send = client.send.bind(client);
+          return <T>(
+            method: string,
+            params?: Record<string, unknown>,
+            sessionId?: string | null,
+            sendOptions?: import('../cdp/client.ts').CDPSendOptions
+          ): Promise<T> => {
+            if (this.frameIdentityError && /^(Runtime|DOM|Input)\./.test(method))
+              return Promise.reject(this.frameIdentityError);
+            const remaining =
+              this.actionDeadline === undefined ? undefined : this.actionDeadline - Date.now();
+            if (remaining !== undefined && remaining <= 0)
+              return Promise.reject(
+                Object.assign(new Error('Action deadline exceeded before dispatch'), {
+                  dispatchState: 'not_dispatched',
+                })
+              );
+            return send<T>(method, params, sessionId, {
+              ...sendOptions,
+              ...(remaining === undefined
+                ? {}
+                : { timeout: Math.min(sendOptions?.timeout ?? remaining, remaining) }),
+            });
+          };
+        }
+        const value: unknown = Reflect.get(client, property);
+        return typeof value === 'function' ? value.bind(client) : value;
+      },
+    });
     this._targetId = targetId;
     this.blockNativePrint = options.blockNativePrint === true;
     this.targetProvenance = options.targetProvenance ?? { targetId, source: 'session' };
@@ -614,11 +668,27 @@ export class Page {
     this._lastStaleRecovery = undefined;
   }
 
-  private async withActionDispatch<T>(fn: (dispatch: ActionDispatch) => Promise<T>): Promise<T> {
+  private async withActionDispatch<T>(
+    options: { timeout?: number; optional?: boolean },
+    fn: (dispatch: ActionDispatch) => Promise<T>
+  ): Promise<T> {
+    if (this.actionDeadline !== undefined)
+      throw new Error('Another action is still active on this Page');
+    this.actionDeadline = Date.now() + (options.timeout ?? DEFAULT_TIMEOUT);
     const dispatch = new ActionDispatch();
     try {
       return await fn(dispatch);
+    } catch (error) {
+      if (
+        options.optional &&
+        !dispatch.hasPotentiallyDispatched &&
+        error instanceof Error &&
+        error.message === 'Action deadline exceeded before dispatch'
+      )
+        return false as T;
+      throw error;
     } finally {
+      this.actionDeadline = undefined;
       this._lastActionReceipt = {
         ...dispatch.toReceipt(),
         ...(this._lastStaleRecovery ? { staleRecovery: this._lastStaleRecovery } : {}),
@@ -629,9 +699,36 @@ export class Page {
   /**
    * Initialize the page (enable required CDP domains)
    */
+  private listen(event: string, handler: Parameters<CDPClient['on']>[1]): void {
+    this.cdp.on(event, handler);
+    this.pageSubscriptions.push(() => this.cdp.off(event, handler));
+  }
+
   async init(): Promise<void> {
+    const invalidateDocument = () => {
+      this._documentGeneration++;
+      this.capabilities.invalidateDocument();
+      this.refMap.clear();
+      this.lastSnapshot = undefined;
+      this.refSemantics = {};
+      this.rootNodeId = null;
+      this.frameContexts.clear();
+    };
+    this.listen('Page.navigatedWithinDocument', invalidateDocument);
+    this.listen('Page.frameNavigated', invalidateDocument);
+    this.listen('DOM.documentUpdated', invalidateDocument);
+    this.listen('Runtime.executionContextsCleared', () => {
+      invalidateDocument();
+      this.frameExecutionContexts.clear();
+      if (this.currentFrame !== null || this.currentFrameSession !== null) {
+        this.frameIdentityError = new CapabilityError(
+          'FRAME_CONTEXT_MISMATCH',
+          'Selected frame contexts were cleared; select the frame again'
+        );
+      }
+    });
     // Listen for execution contexts to track iframe contexts
-    this.cdp.on('Runtime.executionContextCreated', (params) => {
+    this.listen('Runtime.executionContextCreated', (params) => {
       const context = params['context'] as {
         id: number;
         auxData?: { frameId?: string; isDefault?: boolean };
@@ -642,7 +739,7 @@ export class Page {
     });
 
     // Clean up destroyed contexts
-    this.cdp.on('Runtime.executionContextDestroyed', (params) => {
+    this.listen('Runtime.executionContextDestroyed', (params) => {
       const contextId = params['executionContextId'] as number;
       for (const [frameId, ctxId] of this.frameExecutionContexts.entries()) {
         if (ctxId === contextId) {
@@ -650,6 +747,11 @@ export class Page {
           // Invalidate cached frame context so next action re-resolves it
           if (this.currentFrameContextId === contextId) {
             this.currentFrameContextId = null;
+            this.frameIdentityError = new CapabilityError(
+              'FRAME_CONTEXT_MISMATCH',
+              'Selected frame execution context was destroyed'
+            );
+            this.refMap.clear();
           }
           break;
         }
@@ -657,7 +759,7 @@ export class Page {
     });
 
     // Always listen for dialogs to prevent blocking - auto-dismiss by default
-    this.cdp.on('Page.javascriptDialogOpening', (params) => {
+    this.listen('Page.javascriptDialogOpening', (params) => {
       void this.handleDialogOpening(params);
     });
 
@@ -1127,7 +1229,9 @@ export class Page {
    * trigger native form submission — no JS dispatch needed.
    */
   async click(selector: string | string[], options: ActionOptions = {}): Promise<boolean> {
-    return this.withActionDispatch((dispatch) => this.clickInternal(selector, options, dispatch));
+    return this.withActionDispatch(options, (dispatch) =>
+      this.clickInternal(selector, options, dispatch)
+    );
   }
 
   private async clickInternal(
@@ -1146,7 +1250,7 @@ export class Page {
         if (!element) {
           if (options.optional) return false;
           const selectorList = Array.isArray(selector) ? selector : [selector];
-          const hints = await generateHints(this, selectorList, 'click');
+          const hints = await generateHints(this, selectorList, 'click').catch(() => []);
           throw new ElementNotFoundError(selector, hints);
         }
 
@@ -1349,12 +1453,12 @@ export class Page {
     // Cross-origin (OOPIF) frame active: focus + Input.insertText on the child
     // session (coordinate geometry / special-input handling is out of scope).
     if (this.currentFrameSession) {
-      return this.withActionDispatch((dispatch) =>
+      return this.withActionDispatch(options, (dispatch) =>
         this.fillInFrame(selector, value, options, dispatch)
       );
     }
 
-    return this.withActionDispatch((dispatch) =>
+    return this.withActionDispatch(options, (dispatch) =>
       this.withStaleNodeRetry(
         async () => {
           const element = await this.findElement(selector, options);
@@ -1362,7 +1466,7 @@ export class Page {
           if (!element) {
             if (options.optional) return false;
             const selectorList = Array.isArray(selector) ? selector : [selector];
-            const hints = await generateHints(this, selectorList, 'fill');
+            const hints = await generateHints(this, selectorList, 'fill').catch(() => []);
             throw new ElementNotFoundError(selector, hints);
           }
 
@@ -1508,11 +1612,11 @@ export class Page {
     // session (needed for checkout card entry). Routed before findElement so it
     // cannot silently resolve against the parent session.
     if (this.currentFrameSession) {
-      return this.withActionDispatch((dispatch) =>
+      return this.withActionDispatch(options, (dispatch) =>
         this.typeInFrame(selector, text, options, dispatch)
       );
     }
-    return this.withActionDispatch((dispatch) =>
+    return this.withActionDispatch(options, (dispatch) =>
       this.withStaleNodeRetry(
         async () => {
           const { delay = 50 } = options;
@@ -1615,14 +1719,14 @@ export class Page {
     const value = valueOrOptions as string | string[];
     const options = maybeOptions ?? {};
 
-    return this.withActionDispatch((dispatch) =>
+    return this.withActionDispatch(options, (dispatch) =>
       this.withStaleNodeRetry(
         async () => {
           const element = await this.findElement(selector, options);
           if (!element) {
             if (options.optional) return false;
             const selectorList = Array.isArray(selector) ? selector : [selector];
-            const hints = await generateHints(this, selectorList, 'select');
+            const hints = await generateHints(this, selectorList, 'select').catch(() => []);
             throw new ElementNotFoundError(selector, hints);
           }
 
@@ -1706,7 +1810,7 @@ export class Page {
   ): Promise<boolean> {
     const { trigger, option, value, match = 'text' } = config;
 
-    return this.withActionDispatch((dispatch) =>
+    return this.withActionDispatch(options, (dispatch) =>
       this.withStaleNodeRetry(
         async () => {
           // Click the trigger to open dropdown
@@ -1789,14 +1893,14 @@ export class Page {
    */
   async check(selector: string | string[], options: ActionOptions = {}): Promise<boolean> {
     this.assertOopifUnsupported('check');
-    return this.withActionDispatch((dispatch) =>
+    return this.withActionDispatch(options, (dispatch) =>
       this.withStaleNodeRetry(
         async () => {
           const element = await this.findElement(selector, options);
           if (!element) {
             if (options.optional) return false;
             const selectorList = Array.isArray(selector) ? selector : [selector];
-            const hints = await generateHints(this, selectorList, 'check');
+            const hints = await generateHints(this, selectorList, 'check').catch(() => []);
             throw new ElementNotFoundError(selector, hints);
           }
 
@@ -1875,14 +1979,14 @@ export class Page {
    */
   async uncheck(selector: string | string[], options: ActionOptions = {}): Promise<boolean> {
     this.assertOopifUnsupported('uncheck');
-    return this.withActionDispatch((dispatch) =>
+    return this.withActionDispatch(options, (dispatch) =>
       this.withStaleNodeRetry(
         async () => {
           const element = await this.findElement(selector, options);
           if (!element) {
             if (options.optional) return false;
             const selectorList = Array.isArray(selector) ? selector : [selector];
-            const hints = await generateHints(this, selectorList, 'uncheck');
+            const hints = await generateHints(this, selectorList, 'uncheck').catch(() => []);
             throw new ElementNotFoundError(selector, hints);
           }
 
@@ -1978,7 +2082,7 @@ export class Page {
    */
   async submit(selector: string | string[], options: SubmitOptions = {}): Promise<boolean> {
     this.assertOopifUnsupported('submit');
-    return this.withActionDispatch((dispatch) =>
+    return this.withActionDispatch(options, (dispatch) =>
       this.withStaleNodeRetry(
         async () => {
           const { method = 'enter+click', waitForNavigation: shouldWait = 'auto' } = options;
@@ -1987,7 +2091,7 @@ export class Page {
           if (!element) {
             if (options.optional) return false;
             const selectorList = Array.isArray(selector) ? selector : [selector];
-            const hints = await generateHints(this, selectorList, 'submit');
+            const hints = await generateHints(this, selectorList, 'submit').catch(() => []);
             throw new ElementNotFoundError(selector, hints);
           }
 
@@ -2111,9 +2215,9 @@ export class Page {
    */
   async press(
     key: string,
-    options?: { modifiers?: Array<'Control' | 'Shift' | 'Alt' | 'Meta'> }
+    options?: { modifiers?: Array<'Control' | 'Shift' | 'Alt' | 'Meta'>; timeout?: number }
   ): Promise<void> {
-    return this.withActionDispatch((dispatch) =>
+    return this.withActionDispatch(options ?? {}, (dispatch) =>
       this.pressInternal(key, options?.modifiers, dispatch)
     );
   }
@@ -2136,8 +2240,8 @@ export class Page {
   /**
    * Execute a keyboard shortcut (e.g. "Control+a", "Meta+Shift+z")
    */
-  async shortcut(combo: string): Promise<void> {
-    return this.withActionDispatch(async (dispatch) => {
+  async shortcut(combo: string, options: { timeout?: number } = {}): Promise<void> {
+    return this.withActionDispatch(options, async (dispatch) => {
       const { modifiers, key } = parseShortcut(combo);
       // Route to the active OOPIF child session when inside a cross-origin frame.
       const sessionId = this.currentFrameSession ?? undefined;
@@ -2168,7 +2272,7 @@ export class Page {
     if (!element) {
       if (options.optional) return false;
       const selectorList = Array.isArray(selector) ? selector : [selector];
-      const hints = await generateHints(this, selectorList, 'focus');
+      const hints = await generateHints(this, selectorList, 'focus').catch(() => []);
       throw new ElementNotFoundError(selector, hints);
     }
 
@@ -2189,7 +2293,7 @@ export class Page {
       if (!element) {
         if (options.optional) return false;
         const selectorList = Array.isArray(selector) ? selector : [selector];
-        const hints = await generateHints(this, selectorList, 'hover');
+        const hints = await generateHints(this, selectorList, 'hover').catch(() => []);
         throw new ElementNotFoundError(selector, hints);
       }
 
@@ -2451,6 +2555,9 @@ export class Page {
 
       if (contextId) {
         // Same-origin frame with a live execution context: behaviour unchanged.
+        await this.verifySelectedFrame(() =>
+          verifyDocumentContext(this.cdp, contentNodeId, contextId)
+        );
         this.currentFrameContextId = contextId;
         this.brokenFrame = null;
       } else {
@@ -2559,6 +2666,7 @@ export class Page {
    * Switch back to the main document from an iframe
    */
   async switchToMain(): Promise<void> {
+    this.frameIdentityError = undefined;
     this.currentFrame = null;
     this.rootNodeId = null; // Will be re-fetched on next query
     this.currentFrameContextId = null;
@@ -2585,6 +2693,7 @@ export class Page {
    * prunes stale OOPIF registry entries so it can't grow unboundedly (M5).
    */
   private resetFrameState(): void {
+    this.frameIdentityError = undefined;
     this.currentFrame = null;
     this.currentFrameContextId = null;
     this.frameContexts.clear();
@@ -2636,6 +2745,10 @@ export class Page {
       // Fall all the way back to the top-level document instead.
       this.rootNodeId = null;
       this.resetFrameState();
+      this.frameIdentityError = new CapabilityError(
+        'FRAME_CONTEXT_MISMATCH',
+        'Selected child session detached; select the main frame explicitly'
+      );
     }
   }
 
@@ -2764,6 +2877,23 @@ export class Page {
    * the auto-attached child session to appear, then routes subsequent frame
    * actions to it. Returns false when no child session materializes.
    */
+  private async verifySelectedFrame(verify: () => Promise<void>): Promise<void> {
+    try {
+      await verify();
+    } catch (error) {
+      this.frameIdentityError =
+        error instanceof CapabilityError
+          ? error
+          : new CapabilityError(
+              'FRAME_CONTEXT_MISMATCH',
+              'Selected frame identity could not be verified'
+            );
+      this.refMap.clear();
+      this.rootNodeId = null;
+      throw this.frameIdentityError;
+    }
+  }
+
   private async enterOopifFrame(
     frameKey: string,
     frameId: string,
@@ -2774,8 +2904,33 @@ export class Page {
     // The floor only widens a very short caller timeout so auto-attach (async) has
     // a fair chance to land.
     const timeout = Math.max(options.timeout ?? DEFAULT_TIMEOUT, OOPIF_ATTACH_MIN_TIMEOUT_MS);
+    // Hosted CDP endpoints may omit OOPIFs from Page.getFrameTree. This
+    // frameId was resolved from the selected iframe in our own document,
+    // so attaching it preserves page ownership without matching global URLs.
+    if (!this.hasLiveOopifSession(frameId)) {
+      try {
+        const { targetInfos } = await this.cdp.send<{
+          targetInfos: Array<{ targetId: string; type: string; url: string }>;
+        }>('Target.getTargets', undefined, null);
+        const info = targetInfos.find(
+          (target) => target.targetId === frameId && target.type === 'iframe'
+        );
+        if (info) {
+          const sessionId = await this.cdp.attachToTarget(frameId);
+          await this.handleTargetAttached({
+            sessionId,
+            targetInfo: info,
+            waitingForDebugger: false,
+            parentSessionId: this.cdp.sessionId,
+          });
+        }
+      } catch {
+        // A new iframe may race target discovery; keep the bounded wait.
+      }
+    }
     const record = await this.waitForOopifSession(frameId, timeout);
     if (!record) return false;
+    await this.verifySelectedFrame(() => verifyChildSession(this.cdp, frameId, record.sessionId));
 
     this.currentFrame = frameKey;
     this.currentFrameSession = record.sessionId;
@@ -3506,6 +3661,10 @@ export class Page {
       state,
       timeout,
       contextId: this.currentFrameContextId ?? undefined,
+    }).catch((error: unknown) => {
+      if (error instanceof Error && error.message === 'Action deadline exceeded before dispatch')
+        return { success: false, selector: undefined, waitedMs: timeout };
+      throw error;
     });
 
     if (!result.success && !options.optional) {
@@ -3700,9 +3859,14 @@ export class Page {
     }
 
     if (!selector) {
-      const result = await this.evaluateInFrame<{ result: RemoteObject }>(
-        'document.body.innerText'
-      );
+      const result = await this.evaluateInFrame<{
+        result: RemoteObject;
+        exceptionDetails?: ExceptionDetails;
+      }>('document.body.innerText');
+      // A dead renderer must not masquerade as an empty page.
+      if (result.exceptionDetails) {
+        throw new Error(this.formatEvaluationError(result.exceptionDetails));
+      }
       return (result.result.value as string) ?? '';
     }
 
@@ -4596,6 +4760,8 @@ export class Page {
 
     // Clear and repopulate the ref map for ref-based selectors
     this.refMap.clear();
+    this.refSemantics = {};
+    this.lastSnapshot = undefined;
 
     // Assign refs to nodes
     for (const node of nodes) {
@@ -4604,6 +4770,10 @@ export class Page {
       // Store mapping from ref to backendNodeId for ref-based selectors
       if (node.backendDOMNodeId !== undefined) {
         this.refMap.set(ref, node.backendDOMNodeId);
+        this.refSemantics[ref] = {
+          role: (node.role?.value ?? 'generic').toLowerCase(),
+          name: node.name?.value ?? '',
+        };
       }
     }
 
@@ -4862,6 +5032,28 @@ export class Page {
   /**
    * Export the current ref map for cross-exec reuse (CLI).
    */
+  async documentIdentity(): Promise<string> {
+    this.assertOopifUnsupported('documentIdentity');
+    const { root } = await this.cdp.send<{ root?: { backendNodeId?: number } }>('DOM.getDocument', {
+      depth: 0,
+    });
+    if (typeof root?.backendNodeId !== 'number')
+      throw new CapabilityError('PROTOCOL_RESULT_INVALID', 'Document has no backend identity');
+    return `${this.targetId}:${root.backendNodeId}`;
+  }
+
+  exportRefSemantics(): Record<string, { role: string; name: string }> {
+    const semantics = this.lastSnapshot
+      ? Object.fromEntries(
+          this.lastSnapshot.interactiveElements.map((element) => [
+            element.ref,
+            { role: element.role, name: element.name },
+          ])
+        )
+      : this.refSemantics;
+    return Object.fromEntries(Object.entries(semantics).filter(([ref]) => this.refMap.has(ref)));
+  }
+
   exportRefMap(): Record<string, number> {
     const map: Record<string, number> = {};
     for (const [ref, backendNodeId] of this.refMap.entries()) {
@@ -4873,7 +5065,11 @@ export class Page {
   /**
    * Import a ref map previously captured from a snapshot.
    */
-  importRefMap(refMap: Record<string, number>): void {
+  importRefMap(
+    refMap: Record<string, number>,
+    semantics: Record<string, { role: string; name: string }> = {}
+  ): void {
+    this.refSemantics = { ...semantics };
     this.refMap.clear();
     for (const [ref, backendNodeId] of Object.entries(refMap)) {
       if (typeof backendNodeId === 'number') {
@@ -4995,7 +5191,12 @@ export class Page {
    * Execute a batch of steps
    */
   async batch(steps: Step[], options?: BatchOptions): Promise<BatchResult> {
-    return this.batchExecutor.execute(steps, options);
+    return this.batchExecutor.execute(
+      steps,
+      options?.record
+        ? { ...options, record: { ...options.record, io: options.record.io ?? this.recordingIo } }
+        : options
+    );
   }
 
   // ============ Emulation ============
@@ -5379,8 +5580,8 @@ export class Page {
     if (this.consoleEnabled) return;
 
     // Subscribe to console events (dialog listener is bound in constructor)
-    this.cdp.on('Runtime.consoleAPICalled', this.handleConsoleMessage.bind(this));
-    this.cdp.on('Runtime.exceptionThrown', this.handleException.bind(this));
+    this.listen('Runtime.consoleAPICalled', this.handleConsoleMessage.bind(this));
+    this.listen('Runtime.exceptionThrown', this.handleException.bind(this));
 
     this.consoleEnabled = true;
   }
@@ -5564,6 +5765,7 @@ export class Page {
    * - Resets internal state
    */
   async reset(): Promise<void> {
+    this.frameIdentityError = undefined;
     // Reset internal state first
     this.rootNodeId = null;
     this.refMap.clear();
@@ -5611,6 +5813,7 @@ export class Page {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    for (const unsubscribe of this.pageSubscriptions.splice(0)) unsubscribe();
     if (this.oopifAnyHandler && typeof this.cdp.offAny === 'function') {
       this.cdp.offAny(this.oopifAnyHandler);
     }
@@ -5867,6 +6070,10 @@ export class Page {
       state: 'visible',
       timeout,
       contextId: this.currentFrameContextId ?? undefined,
+    }).catch((error: unknown) => {
+      if (error instanceof Error && error.message === 'Action deadline exceeded before dispatch')
+        return { success: false, selector: undefined, waitedMs: timeout };
+      throw error;
     });
 
     if (!result.success || !result.selector) {
@@ -5890,6 +6097,34 @@ export class Page {
     const backendNodeId = this.refMap.get(ref);
     if (!backendNodeId) {
       return null;
+    }
+
+    const expected =
+      this.refSemantics[ref] ??
+      this.lastSnapshot?.interactiveElements.find((element) => element.ref === ref);
+    if (expected) {
+      const { nodes } = await this.cdp.send<{
+        nodes?: Array<{
+          backendDOMNodeId?: number;
+          ignored?: boolean;
+          role?: { value?: string };
+          name?: { value?: string };
+        }>;
+      }>('Accessibility.getPartialAXTree', { backendNodeId, fetchRelatives: false });
+      if (!Array.isArray(nodes))
+        throw new CapabilityError('PROTOCOL_RESULT_INVALID', 'Ref identity returned no AX nodes');
+      const actual = nodes.find((node) => node.backendDOMNodeId === backendNodeId && !node.ignored);
+      if (
+        actual?.role?.value?.toLowerCase() !== expected.role ||
+        actual?.name?.value !== expected.name
+      ) {
+        // A live backend id can point to a control whose meaning changed in-place.
+        // Discard recovery evidence too: do not reinterpret that old intent.
+        this.refMap.clear();
+        this.lastSnapshot = undefined;
+        this.refSemantics = {};
+        throw new CapabilityError('STALE_REF', 'Ref meaning changed; take a fresh snapshot');
+      }
     }
 
     // Resolve backendNodeId to nodeId by pushing to frontend
@@ -6192,9 +6427,12 @@ export class Page {
         }
       }
 
-      // Frame is no longer available; fall back to the main document.
-      this.currentFrame = null;
-      this.currentFrameContextId = null;
+      this.frameIdentityError = new CapabilityError(
+        'FRAME_CONTEXT_MISMATCH',
+        'Selected frame is no longer available'
+      );
+      this.refMap.clear();
+      throw this.frameIdentityError;
     }
 
     const doc = await this.cdp.send<{ root: { nodeId: number } }>('DOM.getDocument', {

@@ -30,20 +30,30 @@ function decodeStdin(stdin: unknown): string {
  * declares `engines.node >= 18`, so this stays a manual combiner for
  * portability.
  */
-export function combineAbortSignals(signals: AbortSignal[]): AbortSignal {
+function signalScope(signals: AbortSignal[]): { signal: AbortSignal; dispose(): void } {
   const controller = new AbortController();
+  const subscriptions: Array<() => void> = [];
+  const dispose = () => {
+    for (const remove of subscriptions.splice(0)) remove();
+  };
   for (const signal of signals) {
     if (signal.aborted) {
       controller.abort(signal.reason);
       break;
     }
+    const abort = () => {
+      controller.abort(signal.reason);
+      dispose();
+    };
+    signal.addEventListener('abort', abort, { once: true });
+    subscriptions.push(() => signal.removeEventListener('abort', abort));
   }
-  if (!controller.signal.aborted) {
-    for (const signal of signals) {
-      signal.addEventListener('abort', () => controller.abort(signal.reason), { once: true });
-    }
-  }
-  return controller.signal;
+  if (controller.signal.aborted) dispose();
+  return { signal: controller.signal, dispose };
+}
+
+export function combineAbortSignals(signals: AbortSignal[]): AbortSignal {
+  return signalScope(signals).signal;
 }
 
 function makeIo(ctx: ResolvedCommandContext): BpIo {
@@ -66,6 +76,7 @@ export function registerBrowserPilotCommands(ports: BrowserPilotShellPorts): Com
       name: 'bp',
       trusted: true,
       async execute(args: string[], ctx: ResolvedCommandContext) {
+        const signalScopes: Array<() => void> = [];
         // Cooperative cancellation: combine the shell's signal with the host
         // context signal produced per invocation by ports.createContext().
         const hostPorts: BrowserPilotShellPorts = ctx.signal
@@ -74,14 +85,19 @@ export function registerBrowserPilotCommands(ports: BrowserPilotShellPorts): Com
               createContext: () => {
                 const inner = ports.createContext();
                 const shellSignal = ctx.signal;
-                return shellSignal
-                  ? { ...inner, signal: combineAbortSignals([inner.signal, shellSignal]) }
-                  : inner;
+                if (!shellSignal) return inner;
+                const scope = signalScope([inner.signal, shellSignal]);
+                signalScopes.push(scope.dispose);
+                return { ...inner, signal: scope.signal };
               },
             }
           : ports;
-        const result = await runBp(args, makeIo(ctx), hostPorts, connect);
-        return { ...result, stdoutKind: 'text' as const };
+        try {
+          const result = await runBp(args, makeIo(ctx), hostPorts, connect);
+          return { ...result, stdoutKind: 'text' as const };
+        } finally {
+          for (const dispose of signalScopes) dispose();
+        }
       },
     },
   ];
@@ -94,3 +110,6 @@ export function addBrowserPilotCommands(
 ): void {
   for (const command of registerBrowserPilotCommands(ports)) bash.registerCommand(command);
 }
+
+/** Convenience name for registering owner-backed browser commands. */
+export const commandsForJustBash = registerBrowserPilotCommands;

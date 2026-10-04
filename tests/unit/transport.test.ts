@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { createBunTransportFactory } from '../../src/adapters/bun/index.ts';
 import { createTransport } from '../../src/cdp/transport.ts';
 
 const RealWebSocket = globalThis.WebSocket;
@@ -14,10 +15,12 @@ class MockWebSocket {
   static autoOpen = true;
   static lastInstance: MockWebSocket;
   closeCalls = 0;
+  options?: { headers: Record<string, string> };
   readyState = MockWebSocket.CONNECTING;
   private listeners = new Map<string, Set<Listener>>();
 
-  constructor(_url: string) {
+  constructor(_url: string, options?: { headers: Record<string, string> }) {
+    this.options = options;
     MockWebSocket.lastInstance = this;
     if (!MockWebSocket.autoOpen) return;
     queueMicrotask(() => {
@@ -70,6 +73,16 @@ describe('CDP transport', () => {
         WebSocket: typeof WebSocket;
       }
     ).WebSocket = RealWebSocket;
+  });
+
+  test('passes authenticated handshake headers to Bun WebSocket', async () => {
+    const transport = await createBunTransportFactory()('wss://example.test', {
+      headers: { Authorization: 'Bearer test-token' },
+    });
+    expect(MockWebSocket.lastInstance.options).toEqual({
+      headers: { Authorization: 'Bearer test-token' },
+    });
+    await transport.close();
   });
 
   test('connection timeout closes the pending socket and rejects late opens', async () => {

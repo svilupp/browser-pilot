@@ -31,6 +31,7 @@ import {
   saveSession,
   sessionExists,
 } from './session.ts';
+import { resolveWsHeaders } from './ws-auth.ts';
 
 export interface AutoSessionResult {
   browser: Awaited<ReturnType<typeof connect>>;
@@ -41,6 +42,9 @@ export interface AutoSessionResult {
 
 export interface CreateLocalSessionOptions {
   wsUrl: string;
+  cloudflareRequest?: SessionData['cloudflareRequest'];
+  wsBearerTokenEnv?: string;
+  connectionBound?: boolean;
   trace?: boolean;
   name?: string;
   noDaemon?: boolean;
@@ -73,8 +77,14 @@ function daemonInfoFromDescriptor(descriptor: {
 export async function createLocalSession(
   options: CreateLocalSessionOptions
 ): Promise<AutoSessionResult> {
+  const wsHeaders = resolveWsHeaders(options.wsBearerTokenEnv);
   const daemonDisabled = isDaemonDisabledByEnv();
   const useDaemon = !options.noDaemon && !daemonDisabled;
+  if (options.connectionBound && !useDaemon) {
+    throw new Error(
+      'Connection-bound endpoints require daemon mode; reconnecting would lose browser state'
+    );
+  }
   const sessionId = options.name ?? generateSessionId();
   if (await sessionExists(sessionId)) {
     throw new Error(`Session already exists: ${sessionId}. Use --resume or close it first.`);
@@ -99,6 +109,7 @@ export async function createLocalSession(
     const browser = await connect({
       provider: 'generic' as ProviderType,
       wsUrl: options.wsUrl,
+      wsHeaders,
       debug: options.trace,
     });
     try {
@@ -115,6 +126,8 @@ export async function createLocalSession(
         id: sessionId,
         provider: 'generic',
         wsUrl: browser.wsUrl,
+        wsBearerTokenEnv: options.wsBearerTokenEnv,
+        connectionBound: options.connectionBound,
         createdAt: now,
         lastActivity: now,
         currentUrl,
@@ -135,8 +148,12 @@ export async function createLocalSession(
 
   const provisional: SessionData = {
     id: sessionId,
-    provider: 'generic',
+    provider: options.cloudflareRequest ? 'cloudflare' : 'generic',
+    cloudflareRequest: options.cloudflareRequest,
+    bootstrapState: options.cloudflareRequest ? 'queued' : undefined,
     wsUrl: options.wsUrl,
+    wsBearerTokenEnv: options.wsBearerTokenEnv,
+    connectionBound: options.connectionBound,
     createdAt: now,
     lastActivity: now,
     currentUrl: 'about:blank',
@@ -166,9 +183,16 @@ export async function createLocalSession(
         const spawned = spawnDaemon(sessionId, idleTimeoutMs);
         daemonSpawned = true;
         spawnedDaemonPid = spawned.pid;
-        const ready = await waitForDaemonReady(getSessionFilePath(sessionId), spawned.pid);
+        const readinessBudget = options.cloudflareRequest ? 65000 : 3000;
+        const ready = await waitForDaemonReady(
+          getSessionFilePath(sessionId),
+          spawned.pid,
+          readinessBudget
+        );
         if (!ready) {
-          throw new Error(`Daemon did not become ready within 3000ms (pid ${spawned.pid})`);
+          throw new Error(
+            `Daemon did not become ready within ${readinessBudget}ms (pid ${spawned.pid})`
+          );
         }
         daemonSession = await loadSession(sessionId);
         if (!daemonSession.daemon) {
@@ -178,7 +202,7 @@ export async function createLocalSession(
           schemaVersion: 1,
           id: daemonId,
           connectionKey,
-          endpointFingerprint: endpointFingerprint(options.wsUrl),
+          endpointFingerprint: endpointFingerprint(daemonSession.wsUrl),
           pid: daemonSession.daemon.pid,
           socketPath: daemonSession.daemon.socketPath,
           startedAt: daemonSession.daemon.startedAt,
@@ -231,11 +255,17 @@ export async function createLocalSession(
       : daemonSession.daemon;
     const finalSession: SessionData = {
       ...provisional,
-      wsUrl: browser.wsUrl,
+      ...attached.session,
+      wsUrl: options.cloudflareRequest ? attached.session.wsUrl : browser.wsUrl,
       targetId: page.targetId,
       currentUrl,
       daemon: finalDaemon,
-      metadata: { ...browser.metadata, ...metadata, ...options.metadata },
+      metadata: {
+        ...attached.session.metadata,
+        ...browser.metadata,
+        ...metadata,
+        ...options.metadata,
+      },
     };
     await saveSession(finalSession);
     return { browser, page, session: finalSession, isNewSession: true };
@@ -245,7 +275,7 @@ export async function createLocalSession(
       const pid = spawnedDaemonPid;
       if (pid && isDaemonAlive(pid)) await stopDaemon(pid).catch(() => false);
     }
-    await deleteSession(sessionId).catch(() => {});
+    if (!options.cloudflareRequest) await deleteSession(sessionId).catch(() => {});
     throw new Error(
       `Could not create local browser session: ${error instanceof Error ? error.message : String(error)}`
     );

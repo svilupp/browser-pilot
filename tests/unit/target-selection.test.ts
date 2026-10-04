@@ -4,6 +4,7 @@
 
 import { describe, expect, test } from 'bun:test';
 import type { Browser } from '../../src/browser/browser.ts';
+import { CapabilityCache } from '../../src/browser/capabilities.ts';
 import { TargetNotFoundError } from '../../src/browser/types.ts';
 import type { TargetInfo } from '../../src/cdp/protocol.ts';
 
@@ -142,6 +143,7 @@ async function createBrowserWithTargets(
   type BrowserHarness = Pick<Browser, 'page' | 'newPage'> & {
     cdp: ReturnType<typeof createMockCDPClient>;
     pages: Map<string, unknown>;
+    capabilities: CapabilityCache;
     providerSession: {
       wsUrl: string;
       metadata: Record<string, unknown>;
@@ -151,6 +153,7 @@ async function createBrowserWithTargets(
   const browser = Object.create(Browser.prototype) as BrowserHarness;
   browser.cdp = cdp;
   browser.pages = new Map();
+  browser.capabilities = new CapabilityCache('fixture');
   browser.providerSession = {
     wsUrl: 'ws://test',
     metadata: {},

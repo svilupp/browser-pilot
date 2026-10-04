@@ -185,6 +185,8 @@ export async function diagnoseCommand(
           url: snapshot.url,
           savedAt: new Date().toISOString(),
           refMap: page.exportRefMap(),
+          documentIdentity: await page.documentIdentity(),
+          semantics: page.exportRefSemantics(),
         },
       },
     });

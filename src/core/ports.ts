@@ -26,11 +26,7 @@ export interface SessionHandle {
 }
 
 /** Inputs for opening a session through a {@link SessionOwner}. */
-export type SessionOpenOptions = {
-  provider: 'browserbase' | 'browserless' | 'browser-use' | 'generic';
-  wsUrl?: string;
-  session?: import('../providers/types.ts').CreateSessionOptions;
-};
+export type SessionOpenOptions = import('../providers/types.ts').ConnectOptions;
 
 /**
  * Owns provider sessions for hosts that need serializable handles.

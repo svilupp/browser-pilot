@@ -1,5 +1,47 @@
 # Changelog
 
+## [0.7.0] - 2026-10-04
+
+### Added
+
+- First-party Cloudflare Browser Run providers: Chromium allocation, exact-session
+  resume and release; experimental, explicit connection-bound Kitesurf launch.
+- Authenticated Node WebSockets through the optional `ws` peer, native Bun and
+  Workers transport adapters, and host-injected Workers browser bindings.
+- Host-owned connection sessions with serialized borrower leases, cancellation,
+  deadlines, document/frame identity checks and scoped capability evidence.
+- Shared package/CLI/just-bash/Flightplan conformance fixtures and runtime
+  validation commands.
+
+### Changed
+
+- Cloudflare CLI sessions retain a daemon owner and environment credential
+  references; borrowed commands preserve the allocation and uncertain cleanup
+  remains available for reconciliation.
+- Updated provider, runtime, CLI, API and automation-skill documentation with
+  verified support boundaries. Live Cloudflare/Kitesurf and real-payment gates
+  remain separate from local fixture passes.
+
+### Fixed
+
+- Chromium allocations accept Cloudflare's exact legacy `browser-rendering`
+  WebSocket path while retaining account, allocation and host validation.
+- CI runs lint and type checks on the full checkout without applying the local
+  branch-protection hook.
+- Borrowed target teardown no longer leaves future workers paused; Workers
+  binding setup releases owned allocations after deadline or connection failure.
+- Fresh snapshots replace imported ref meanings, and live validation fails when
+  final cleanup is unconfirmed.
+- Native Enter form submission and textarea newlines, including modifier handling.
+- Pending-command lease fencing, helper/caller cancellation, exact-target health
+  checks and stale CDP attachment repair without allocating a replacement.
+- Daemon loss/recovery and forced local cleanup no longer release resumable
+  Cloudflare allocations unintentionally.
+- Cross-origin frame attachment and Runtime exception propagation now retain
+  selected-document identity and renderer failure evidence.
+- Daemon commands reject ignored owner arguments, missing values and invalid log
+  counts before selecting or stopping a default owner.
+
 ## [0.6.0] - 2026-09-16
 
 ### Fixed

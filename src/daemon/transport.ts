@@ -71,11 +71,13 @@ export function createDaemonTransport(
       });
 
       const transport: Transport = {
-        send(message: string) {
+        send(message: string, budget?: { timeoutMs: number }) {
           if (!socket.writable) {
             throw new Error('Daemon socket is not writable');
           }
-          socket.write(`${message}\n`);
+          const request = JSON.parse(message) as Record<string, unknown>;
+          if (budget) request['ipcBudget'] = { timeoutMs: budget.timeoutMs, sentAt: Date.now() };
+          socket.write(`${JSON.stringify(request)}\n`);
         },
 
         async close() {

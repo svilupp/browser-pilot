@@ -14,8 +14,9 @@ import { webmcpCall, webmcpList } from '../webmcp/client.ts';
 import type { ExecutionContext } from './ports.ts';
 import type { BpBrowser, BpPage, BpPageOptions } from './types.ts';
 
-function wrapPage(page: Page): BpPage {
+export function wrapPage(page: Page): BpPage {
   return {
+    batch: (steps) => page.batch(steps),
     get targetId() {
       return page.targetId;
     },
@@ -134,5 +135,19 @@ export async function defaultConnect(wsUrl: string, ctx: ExecutionContext): Prom
         .filter((t) => t.type === 'page')
         .map((t) => ({ targetId: t.targetId, type: t.type, url: t.url, title: t.title })),
     disconnect: () => browser.disconnect(),
+  };
+}
+
+export function projectBorrowedBrowser(
+  browser: import('../core/sessions/owner.ts').BorrowedBrowser,
+  detach: () => Promise<void>
+): BpBrowser {
+  return {
+    page: async (options) => wrapPage(await browser.page(undefined, options)),
+    listTargets: async () =>
+      (await browser.listTargets())
+        .filter((t) => t.type === 'page')
+        .map((t) => ({ targetId: t.targetId, type: t.type, url: t.url, title: t.title })),
+    disconnect: detach,
   };
 }

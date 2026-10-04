@@ -10,6 +10,14 @@ interface HelpEntry {
 }
 
 const HELP_ENTRIES: Record<string, HelpEntry> = {
+  run: {
+    usage: 'bp run <handle-json|--handle-file FILE> [JSON|--input JSON|-] [--target ID]',
+    capability: 'action',
+    summary:
+      'Run page/frame action steps under one lease; requires read, action and evaluate capabilities.',
+    detail:
+      'Use screenshot separately for binary artifacts. Detaching this command preserves the owner connection.',
+  },
   'session open': {
     usage:
       'bp session open [--provider browserbase|browserless|browser-use|generic] [--width N] [--height N]',
@@ -92,7 +100,7 @@ const HELP_ENTRIES: Record<string, HelpEntry> = {
 };
 
 const NATIVE_ONLY =
-  'Native-only (use the bp CLI, not this shell): daemon/attach, record, run/actions batches, ' +
+  'Native-only (use the bp CLI, not this shell): daemon/attach, record, ' +
   'audio & voice, listen/trace, forms, review, env auth, local Chrome discovery.';
 
 const EXIT_CODES =

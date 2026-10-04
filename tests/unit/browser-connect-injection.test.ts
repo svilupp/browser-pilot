@@ -69,9 +69,17 @@ class MockWebSocket {
     // Reply to Target.setDiscoverTargets (issued during Browser construction)
     // so `targetDiscoveryReady` resolves.
     const parsed = JSON.parse(message) as { id: number; method: string };
-    if (parsed.method === 'Target.setDiscoverTargets') {
+    if (parsed.method === 'Browser.getVersion' || parsed.method === 'Target.setDiscoverTargets') {
       queueMicrotask(() => {
-        this.emit('message', { data: JSON.stringify({ id: parsed.id, result: {} }) });
+        this.emit('message', {
+          data: JSON.stringify({
+            id: parsed.id,
+            result:
+              parsed.method === 'Browser.getVersion'
+                ? { product: 'Chrome/140.0', revision: 'chromium-revision' }
+                : {},
+          }),
+        });
       });
     }
   }
@@ -122,7 +130,11 @@ describe('Browser.connect() provider session wiring', () => {
 
     const result = await browser.close();
     expect(closeMock).toHaveBeenCalledTimes(1);
-    expect(result).toEqual({ status: 'released', sessionId: 'injected-session' });
+    expect(result).toEqual({
+      status: 'released',
+      sessionId: 'injected-session',
+      localTerminated: true,
+    });
   });
 
   test('releases an injected session if opening the socket fails', async () => {
@@ -139,6 +151,22 @@ describe('Browser.connect() provider session wiring', () => {
       })
     ).rejects.toThrow('socket refused');
     expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  test('explicit engine selection rejects incompatible injected Cloudflare sessions', async () => {
+    const close = mock(async () => ({ status: 'released' as const, sessionId: 'injected' }));
+    await expect(
+      Browser.connect({
+        provider: 'cloudflare:kitesurf',
+        providerSession: {
+          wsUrl: 'wss://example.test/injected',
+          metadata: { provider: 'cloudflare', requestedEngine: 'chromium' },
+          close,
+        },
+      })
+    ).rejects.toMatchObject({ capability: 'ENGINE_MISMATCH' });
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(globalThis.fetch).not.toHaveBeenCalled();
   });
 
   test('reports cleanup_pending when an injected connection cannot be opened', async () => {
@@ -180,6 +208,31 @@ describe('Browser.connect() provider session wiring', () => {
         session: { sessionId: 'existing-session' },
       })
     ).rejects.toThrow('socket refused');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  test('provider inspection during resume shares the total connect deadline', async () => {
+    const fetchMock = mock(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      return Response.json({
+        id: 'existing-session',
+        projectId: 'existing-project',
+        status: 'RUNNING',
+        connectUrl: 'wss://example.test',
+      });
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    const started = Date.now();
+    await expect(
+      Browser.connect({
+        provider: 'browserbase',
+        apiKey: 'fake-key',
+        session: { sessionId: 'existing-session' },
+        timeout: 20,
+      })
+    ).rejects.toMatchObject({ capability: 'deadline' });
+    expect(Date.now() - started).toBeLessThan(100);
+    await new Promise((resolve) => setTimeout(resolve, 120));
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 

@@ -15,7 +15,7 @@ for (const mode of ['all', 'age', 'size', 'dry-run', 'missing-key', 'daemon', 's
       const lifecycle = await import('./src/daemon/lifecycle.ts');
       let stops = 0;
       mock.module('./src/daemon/lifecycle.ts', () => ({ ...lifecycle, stopDaemon: async () => { stops++; return true; } }));
-      mock.module('./src/daemon/control.ts', () => ({ daemonControlMatches: async () => true }));
+      mock.module('./src/daemon/control.ts', () => ({ daemonControlMatches: async () => true, stopDaemonForRecovery: async () => { stops++; } }));
       const { cleanCommand } = await import('./src/cli/commands/clean.ts');
       const { createSession, sessionExists } = await import('./src/cli/session.ts');
       const { writeDaemonDescriptor, readDaemonDescriptor } = await import('./src/daemon/registry.ts');

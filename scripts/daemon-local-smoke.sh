@@ -22,6 +22,7 @@ bun test tests/cli/env-trace-regression.test.ts \
 # Browser-scoped ownership: reuse after logical close, concurrent crash
 # recovery, explicit stop, endpoint discovery, and direct opt-out.
 bun test tests/daemon-e2e --timeout 90000
+bun test tests/cli/review-target-switch.test.ts --timeout 90000
 bun test tests/integration/local-discovery.test.ts --timeout 90000
 
 echo 'local daemon smoke passed'

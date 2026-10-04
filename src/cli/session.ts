@@ -11,7 +11,7 @@ import type { ChromeChannel, ResolvedBrowserSource } from '../providers/local-di
 import { acquireFileLock } from '../runtime/file-lock.ts';
 import type { SetCookieOptions } from '../storage/types.ts';
 
-export type ProviderType = 'browserbase' | 'browserless' | 'browser-use' | 'generic';
+export type ProviderType = import('../providers/types.ts').ProviderId;
 
 export interface SessionData {
   /** Logical session schema; legacy records without this field are migrated on save. */
@@ -22,6 +22,16 @@ export interface SessionData {
   provider: ProviderType;
   /** WebSocket URL for reconnection */
   wsUrl: string;
+  /** Environment variable containing a WebSocket bearer token; never the token itself. */
+  wsBearerTokenEnv?: string;
+  /** Credential-free request; allocation is performed inside the daemon owner. */
+  cloudflareRequest?: {
+    provider: 'cloudflare' | 'cloudflare:chromium' | 'cloudflare:kitesurf';
+    cloudflare?: import('../providers/types.ts').CloudflareChromiumOptions;
+  };
+  bootstrapState?: 'queued' | 'allocation_started' | 'ready';
+  /** Launch endpoints cannot recover a lost connection without losing browser state. */
+  connectionBound?: boolean;
   /** Provider-specific session ID (for resumption) */
   providerSessionId?: string;
   /** CDP target ID of the page we're controlling */
@@ -48,6 +58,8 @@ export interface RefCache {
   url: string;
   savedAt: string;
   refMap: Record<string, number>;
+  documentIdentity?: string;
+  semantics?: Record<string, { role: string; name: string }>;
 }
 
 export interface LogStats {

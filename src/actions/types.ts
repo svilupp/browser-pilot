@@ -340,7 +340,20 @@ export interface Step {
   headers?: Record<string, string>;
 }
 
+export interface RecordingIo {
+  readFileSync(path: string, encoding: 'utf-8'): string;
+  mkdirSync(path: string, options: { recursive: true }): unknown;
+  writeFileSync(path: string, data: string | Uint8Array): void;
+  renameSync(from: string, to: string): void;
+  existsSync(path: string): boolean;
+  statSync(path: string): { size: number };
+  join(...parts: string[]): string;
+  cwd(): string;
+}
+
 export interface RecordOptions {
+  /** Explicit host filesystem capability; Node root connections supply this automatically. */
+  io?: RecordingIo;
   /** Base directory for screenshots and recording.json. */
   outputDir?: string;
   /** Session identifier stored in the manifest. CLI fills this automatically. */

@@ -11,13 +11,16 @@ import { CapabilityError, type SecretsPort } from '../core/ports.ts';
 import { BrowserUseProvider } from './browser-use.ts';
 import { BrowserBaseProvider } from './browserbase.ts';
 import { BrowserlessProvider } from './browserless.ts';
+import { CloudflareProvider, resolveCloudflareOptions } from './cloudflare.ts';
 import { GenericProvider } from './generic.ts';
+import { normalizeProviderSelector } from './selector.ts';
 import type { ConnectOptions, Provider } from './types.ts';
 
 /** Ports the provider factory may use. */
 export interface ProviderFactoryPorts {
   /** Secret source for provider API keys (e.g. env-backed in Node). */
   secrets?: SecretsPort;
+  idGenerator?: () => string;
 }
 
 function resolveApiKey(
@@ -41,7 +44,13 @@ function resolveApiKey(
  * `CapabilityError('secrets')` is thrown.
  */
 export function createProvider(options: ConnectOptions, ports?: ProviderFactoryPorts): Provider {
-  switch (options.provider) {
+  const normalized = normalizeProviderSelector(options.provider);
+  switch (normalized.provider) {
+    case 'cloudflare':
+      return new CloudflareProvider({
+        ...resolveCloudflareOptions(options, ports?.secrets),
+        idGenerator: ports?.idGenerator,
+      });
     case 'browserbase': {
       const apiKey = resolveApiKey(
         options,

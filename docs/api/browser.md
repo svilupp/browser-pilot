@@ -20,40 +20,37 @@ const browser = await connect({
 **Options:**
 
 ```typescript
-interface ConnectOptions {
-  // Required
-  provider: 'browserbase' | 'browserless' | 'browser-use' | 'generic';
+import type { BrowserOptions } from 'browser-pilot';
 
-  // Provider-specific
-  apiKey?: string;        // For browser-use, browserbase, browserless
-  projectId?: string;     // For browserbase
-  providerSession?: ProviderSession; // Trusted in-process injection; URL may contain credentials.
-  wsUrl?: string;         // Direct endpoint for generic provider
-  channel?: 'stable' | 'beta' | 'dev' | 'canary'; // Local Chrome channel
-  userDataDir?: string;   // Local Chrome profile directory
-
-  // Session options
-  session?: {
-    width?: number;       // Viewport width
-    height?: number;      // Viewport height
-    recording?: boolean;  // Enable recording (browserbase)
-    proxy?: {
-      server: string;
-      username?: string;
-      password?: string;
-    };
-  };
-
-  // Connection options
-  timeout?: number;       // Connection timeout in ms
-  debug?: boolean;        // Enable debug logging
-
-  // Browser Use options
-  proxyCountryCode?: string | null;  // Proxy country (default: 'uk')
-  profileId?: string;                // Saved browser profile
-  cloudTimeout?: number;             // Session timeout in minutes
-}
+const options: BrowserOptions = {
+  provider: 'cloudflare:chromium',
+  apiKey: process.env.CLOUDFLARE_API_TOKEN,
+  cloudflare: {
+    accountId: process.env.CLOUDFLARE_ACCOUNT_ID,
+    keepAliveMs: 60_000,
+    // providerSessionId: savedAllocationId, // Attach: borrowed by default.
+    // takeOwnership: true,                 // Explicit responsibility for release.
+  },
+  timeout: 20_000,
+  signal: new AbortController().signal,
+};
 ```
+
+`provider` accepts `browserbase`, `browserless`, `browser-use`, `generic`,
+`cloudflare`, `cloudflare:chromium` and `cloudflare:kitesurf`. Bare `cloudflare`
+defaults to Chromium for new allocation. Kitesurf rejects keep-alive, lab,
+recording and existing-allocation options before I/O.
+
+`BrowserOptions` combines the provider selection union with connection options:
+`wsUrl`, `wsHeaders`, `apiKey`, `projectId`, `session`, `timeout`, `signal` and
+`debug`. Native discovery accepts `channel` and `userDataDir`; Browser Use accepts
+`proxyCountryCode`, `profileId` and `cloudTimeout`. Trusted hosts can inject
+`providerSession`, `secrets`, `transportFactory`, `idGenerator`, `recordingIo` or
+`localEndpointResolver`. `transportFactory` supplies the host CDP transport;
+`signal` cancels setup within its total connection budget. Node authenticated
+sockets use the optional `ws` peer; imported Node use requires no Bun or daemon.
+See the [types reference](types.md), [provider contracts](../providers.md#cloudflare-browser-run)
+and [runtime/live validation](../cloudflare-validation.md).
 
 **Returns:** `Promise<Browser>`
 
@@ -142,6 +139,7 @@ Close the CDP connection and release the provider session.
 const cleanup = await browser.close();
 // Promise<ProviderReleaseResult | undefined>
 // Browserbase and Browser Use: released | cleanup_pending | already_released.
+// Cloudflare also reports detached (borrowed) or terminated (connection-bound).
 // Providers without a release result return undefined.
 ```
 

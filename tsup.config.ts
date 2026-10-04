@@ -51,6 +51,8 @@ export default defineConfig([
       actions: 'src/actions/index.ts',
       'core/index': 'src/core/index.ts',
       'adapters/node/index': 'src/adapters/node/index.ts',
+      'adapters/bun/index': 'src/adapters/bun/index.ts',
+      'adapters/workers/index': 'src/adapters/workers/index.ts',
       'adapters/memory/index': 'src/adapters/memory/index.ts',
       // Keep the shell core and just-bash bridge in the same split graph as
       // core so their CapabilityError value is shared with the root/core
@@ -64,7 +66,7 @@ export default defineConfig([
     dts: true,
     target: 'node18',
     define: provenanceDefine,
-    external: ['just-bash'],
+    external: ['just-bash', 'ws'],
     outExtension({ format }) {
       return {
         js: format === 'esm' ? '.mjs' : '.cjs',

@@ -42,7 +42,14 @@ export class ActionDispatch {
       this.record(eventName, effectful, false);
       return result;
     } catch (error) {
-      if (effectful) {
+      if (
+        effectful &&
+        !(
+          error instanceof Error &&
+          'dispatchState' in error &&
+          error.dispatchState === 'not_dispatched'
+        )
+      ) {
         this.record(eventName, true, true);
       }
       throw error;

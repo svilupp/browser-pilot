@@ -22,7 +22,9 @@ jobs:
         with:
           bun-version: latest
       - run: bun install
-      - run: bun run harden:quick
+      - run: bun run lint
+      - run: bun run lint:type
+      - run: bun run typecheck
 
   unit:
     name: Unit & Fitness Tests

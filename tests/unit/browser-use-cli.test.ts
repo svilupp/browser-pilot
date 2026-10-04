@@ -12,9 +12,11 @@ describe('browser-use CLI args', () => {
   test('provider validation accepts browser-use', async () => {
     const content = await Bun.file('src/cli/commands/connect.ts').text();
     // The validation line should include browser-use
-    expect(content).toContain("'browser-use'");
+    expect(content).toContain('normalizeProviderSelector');
+    const { normalizeProviderSelector } = await import('../../src/providers/selector.ts');
+    expect(normalizeProviderSelector('browser-use').provider).toBe('browser-use');
     // Error message should list browser-use
-    expect(content).toContain('browser-use, generic');
+    expect(() => normalizeProviderSelector('invalid')).toThrow('browser-use');
   });
 
   test('proxy-country null parses as null (not string)', async () => {

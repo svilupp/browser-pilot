@@ -343,27 +343,6 @@ function normalizeArtifactPath(artifactDir: string, screenshotDir: string, file:
   return `${root}/${alreadyScoped ? relative : `${dir}/${relative}`}`;
 }
 
-function nodeFileSize(path: string): number | undefined {
-  // Avoid importing a Node-only module into the library entry point, which is
-  // also used by browser/worker consumers. Node 22 exposes built-ins through
-  // process.getBuiltinModule; older runtimes simply skip this optional probe.
-  const processLike = (
-    globalThis as {
-      process?: { getBuiltinModule?: (name: string) => unknown };
-    }
-  ).process;
-  const getBuiltinModule = processLike?.getBuiltinModule;
-  if (typeof getBuiltinModule !== 'function') return undefined;
-  try {
-    const fs = getBuiltinModule('node:fs') as {
-      statSync: (filePath: string) => { size: number };
-    };
-    return fs.statSync(path).size;
-  } catch {
-    return 0;
-  }
-}
-
 /** Validate action/screenshot identity and, when supplied, evidence files. */
 export function validateRecordingManifest(
   manifest: RecordingManifest,
@@ -389,7 +368,7 @@ export function validateRecordingManifest(
         manifest.artifacts.screenshotDir,
         screenshot.file
       );
-      const size = (options.fileSize ?? nodeFileSize)(path);
+      const size = options.fileSize?.(path);
       if (size !== undefined && size <= 0) {
         errors.push(`Screenshot file is missing or empty: ${screenshot.file}`);
       }

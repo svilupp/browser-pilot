@@ -5,7 +5,7 @@
 import * as fs from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
-import { daemonControlMatches } from '../../daemon/control.ts';
+import { daemonControlMatches, stopDaemonForRecovery } from '../../daemon/control.ts';
 import { isDaemonAlive, stopDaemon } from '../../daemon/lifecycle.ts';
 import {
   cleanStaleDaemonLocks,
@@ -192,7 +192,16 @@ async function deleteSessionWithDaemonStop(
       endpointFingerprint: descriptor?.endpointFingerprint ?? endpointFingerprint(session.wsUrl),
     }));
   if (!shared && ownerAlive && identityMatches) {
-    await stopDaemon(ownedPid).catch(() => {});
+    if (force && session.provider === 'cloudflare') {
+      await stopDaemonForRecovery({
+        pid: ownedPid,
+        socketPath: descriptor?.socketPath ?? session.daemon!.socketPath,
+        ...(session.transport?.mode === 'daemon' && session.transport.daemonId
+          ? { daemonId: session.transport.daemonId }
+          : {}),
+        endpointFingerprint: descriptor?.endpointFingerprint ?? endpointFingerprint(session.wsUrl),
+      });
+    } else await stopDaemon(ownedPid).catch(() => {});
   }
   if (!shared && session.transport?.mode === 'daemon' && session.transport.daemonId) {
     await removeDaemonDescriptor(session.transport.daemonId, descriptor?.pid);
@@ -228,9 +237,9 @@ async function cleanSelectedSessions(
         retained.push({ sessionId: session.id, providerRelease });
       } else {
         cleaned.push(session.id);
-        if (force && session.provider === 'browserbase') {
+        if (force && (session.provider === 'browserbase' || session.provider === 'cloudflare')) {
           warnings.push(
-            `Browserbase session was not released for ${session.id}; only the local record was removed (--force).`
+            `${session.provider === 'browserbase' ? 'Browserbase' : 'Cloudflare'} session was not released for ${session.id}; only the local record was removed (--force).`
           );
         }
       }
@@ -255,7 +264,9 @@ async function cleanupRegisteredDaemons(
   const providerOwnedDaemons = new Set(
     (await listSessions())
       .filter(
-        (session) => session.provider === 'browserbase' && session.transport?.mode === 'daemon'
+        (session) =>
+          (session.provider === 'browserbase' || session.provider === 'cloudflare') &&
+          session.transport?.mode === 'daemon'
       )
       .map((session) =>
         session.transport?.mode === 'daemon' ? session.transport.daemonId : undefined

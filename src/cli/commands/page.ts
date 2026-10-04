@@ -133,6 +133,8 @@ export async function pageCommand(
           url,
           savedAt: new Date().toISOString(),
           refMap: page.exportRefMap(),
+          documentIdentity: await page.documentIdentity(),
+          semantics: page.exportRefSemantics(),
         },
       },
     });

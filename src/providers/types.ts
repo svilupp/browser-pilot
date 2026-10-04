@@ -12,6 +12,10 @@ export type ChromeChannel = 'stable' | 'beta' | 'dev' | 'canary';
 export interface ProviderSession {
   /** WebSocket URL to connect to CDP */
   wsUrl: string;
+  /** Ephemeral transport descriptor; never serialize headers or openers. */
+  connection?: ProviderConnection;
+  /** Lifecycle policy independent of engine identity. */
+  lifecycle?: { reconnectable: boolean; ownership: 'owned' | 'borrowed' };
   /** Provider-specific session ID (for resumption) */
   sessionId?: string;
   /** Additional metadata from the provider */
@@ -28,9 +32,13 @@ export interface ProviderReleaseResult {
    * `cleanup_pending` — release was requested/attempted but terminal state was not
    *   confirmed within the deadline, or the request failed (see `error`).
    */
-  status: 'released' | 'cleanup_pending' | 'already_released';
+  status: 'released' | 'cleanup_pending' | 'already_released' | 'detached' | 'terminated';
   /** Provider-specific session ID this result pertains to. */
   sessionId: string;
+  /** Evidence that this host terminated its connection. */
+  localTerminated?: boolean;
+  /** Remote allocation identity, when present. */
+  allocationId?: string;
   /** Raw provider-reported status at the time of the last check, if known. */
   providerStatus?: string;
   /** Error detail when the release could not be confirmed. */
@@ -65,15 +73,17 @@ export interface ProxyConfig {
   password?: string;
 }
 
-export interface ConnectOptions {
+export interface ConnectOptionsBase {
   /** Provider type */
-  provider: 'browserbase' | 'browserless' | 'browser-use' | 'generic';
+  provider: ProviderSelector;
   /** API key for hosted providers */
   apiKey?: string;
   /** Project ID (for BrowserBase) */
   projectId?: string;
   /** Direct WebSocket URL (for generic provider) */
   wsUrl?: string;
+  /** WebSocket handshake headers (Bun only; use signed URLs in other runtimes). */
+  wsHeaders?: Record<string, string>;
   /** Preferred local Chrome channel for auto-discovery (generic provider) */
   channel?: ChromeChannel;
   /** Explicit local Chrome user data dir for auto-discovery (generic provider) */
@@ -97,3 +107,37 @@ export interface ConnectOptions {
    */
   providerSession?: ProviderSession;
 }
+
+/** Canonical provider identity, independent of engine selection. */
+export type ProviderId = 'browserbase' | 'browserless' | 'browser-use' | 'generic' | 'cloudflare';
+export type CloudflareEngine = 'chromium' | 'kitesurf';
+export type ProviderSelector = ProviderId | 'cloudflare:chromium' | 'cloudflare:kitesurf';
+export interface CloudflareChromiumOptions {
+  accountId?: string;
+  keepAliveMs?: number;
+  lab?: boolean;
+  recording?: boolean;
+  providerSessionId?: string;
+  /** Explicitly take responsibility for releasing an attached allocation. */
+  takeOwnership?: boolean;
+}
+export interface CloudflareKitesurfOptions {
+  accountId?: string;
+  keepAliveMs?: never;
+  lab?: never;
+  recording?: never;
+  providerSessionId?: never;
+  takeOwnership?: never;
+}
+/** Shared selection contract for direct connections and session owners. */
+export type ProviderSelection =
+  | { provider: 'cloudflare:kitesurf'; cloudflare?: CloudflareKitesurfOptions }
+  | {
+      provider: Exclude<ProviderSelector, 'cloudflare:kitesurf'>;
+      cloudflare?: CloudflareChromiumOptions;
+    };
+export type ConnectOptions = Omit<ConnectOptionsBase, 'provider'> & ProviderSelection;
+
+export type ProviderConnection =
+  | { kind: 'url'; url: string; headers?: Record<string, string> }
+  | { kind: 'opener'; open: import('../cdp/transport.ts').TransportFactory };

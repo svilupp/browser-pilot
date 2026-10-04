@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><title>Cloudflare conformance v1</title>
+<style>body{font:18px sans-serif;margin:40px}input,button{padding:10px;margin:10px}iframe{width:600px;height:220px}</style>
+<h1 id="identity">Parent fixture v1</h1>
+<label>Parent value <input id="value" value="parent"></label>
+<button type="button" id="click">Increment</button><output id="count">0</output>
+<button type="button" id="route">Delayed SPA transition</button><main id="main">Initial content</main>
+<output id="child-result">pending</output><iframe id="child" title="Child fixture"></iframe>
+<script>
+window.events=[];
+const value=document.querySelector('#value'), click=document.querySelector('#click'), route=document.querySelector('#route'), main=document.querySelector('#main'), child=document.querySelector('#child');
+value.addEventListener('input',event=>window.events.push({type:event.type,trusted:event.isTrusted,value:value.value}));
+let count=0;
+click.addEventListener('click',event=>{document.querySelector('#count').textContent=String(++count);window.events.push({type:'click',trusted:event.isTrusted});});
+route.addEventListener('click',()=>{const next=new URL(location.href);next.searchParams.set('route','next');history.pushState({},'',next);setTimeout(()=>{main.innerHTML='<h2 id="spa-ready">Next content v1</h2>';},150);});
+const childOrigin=new URL(location.href).searchParams.get('childOrigin');
+if(childOrigin) child.src=new URL('/cloudflare-conformance-child.html', childOrigin).href;
+addEventListener('message',event=>{if(event.origin===childOrigin&&event.source===child.contentWindow)document.querySelector('#child-result').textContent=event.data.value;});
+</script></html>
