@@ -70,14 +70,27 @@ function parseDaemonArgs(args: string[]): {
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]!;
     if (arg === '-n' || arg === '--lines') {
-      options.lines = parseInt(args[++i] ?? '50', 10);
+      const value = args[++i];
+      if (
+        !value ||
+        !/^\d+$/.test(value) ||
+        !Number.isSafeInteger(Number(value)) ||
+        Number(value) < 1
+      )
+        throw new Error(`${arg} requires a positive integer`);
+      options.lines = Number(value);
     } else if (arg === '--daemon-id') {
       options.daemonId = args[++i];
-      if (!options.daemonId) throw new Error('--daemon-id requires a value');
+      if (!options.daemonId || options.daemonId.startsWith('-'))
+        throw new Error('--daemon-id requires a value');
     } else if (arg === '--force') {
       options.force = true;
     } else if (!arg.startsWith('-') && !subcommand) {
       subcommand = arg;
+    } else {
+      throw new Error(
+        `Unexpected daemon argument: ${arg}. Use -s <session> or --daemon-id <id> to select an owner.`
+      );
     }
   }
 

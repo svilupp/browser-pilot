@@ -22,6 +22,10 @@ export interface BrowserPilotLimits {
 
 /** Page operations and WebMCP helpers used by the bridge. */
 export interface BpPage {
+  /** Execute a frame/action sequence under one owner lease. Optional for legacy projections. */
+  batch?(
+    steps: import('../actions/types.ts').Step[]
+  ): Promise<import('../actions/types.ts').BatchResult>;
   /** The target selected for this page connection, when exposed by the host. */
   readonly targetId?: string;
   goto(url: string, options?: ActionOptions): Promise<void>;
@@ -79,7 +83,7 @@ export type ConnectFn = (wsUrl: string, ctx: ExecutionContext) => Promise<BpBrow
 
 export interface BrowserPilotShellPorts {
   /** Required — trusted host owns credentials. */
-  sessionOwner: SessionOwner;
+  sessionOwner: SessionOwner | import('../core/sessions/owner.ts').SessionOwnerV2;
   /** Required for screenshot/download; otherwise those commands fail with a capability error. */
   artifacts?: ArtifactSink;
   clock: Clock;

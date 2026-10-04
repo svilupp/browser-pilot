@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { BatchExecutor } from '../../src/actions/executor.ts';
 import type { StepResult } from '../../src/actions/types.ts';
+import { nodeRecordingIo } from '../../src/adapters/node/recording.ts';
 import { getHighlightLabel, stepToHighlightKind } from '../../src/browser/action-highlight.ts';
 import type { Page } from '../../src/browser/page.ts';
 import type { RecordingManifest } from '../../src/recording/manifest.ts';
@@ -188,10 +189,7 @@ describe('recording artifacts', () => {
     const result = await executor.execute(
       [{ action: 'fill', selector: '#password', value: 'supersecret123' }],
       {
-        record: {
-          outputDir: tempDir,
-          sessionId: 'sess-redacted',
-        },
+        record: { io: nodeRecordingIo, outputDir: tempDir, sessionId: 'sess-redacted' },
       }
     );
 
@@ -223,10 +221,7 @@ describe('recording artifacts', () => {
     const executor = new BatchExecutor(page as unknown as Page);
 
     const result = await executor.execute([{ action: 'click', selector: '#submit' }], {
-      record: {
-        outputDir: tempDir,
-        sessionId: 'sess-failure',
-      },
+      record: { io: nodeRecordingIo, outputDir: tempDir, sessionId: 'sess-failure' },
     });
 
     expect(result.success).toBe(false);
@@ -250,7 +245,7 @@ describe('recording artifacts', () => {
 
     // First execution: one click
     const result1 = await executor.execute([{ action: 'click', selector: '#btn1' }], {
-      record: { outputDir: tempDir, sessionId: 'sess-accum' },
+      record: { io: nodeRecordingIo, outputDir: tempDir, sessionId: 'sess-accum' },
     });
     expect(result1.success).toBe(true);
 
@@ -261,7 +256,7 @@ describe('recording artifacts', () => {
 
     // Second execution: another click — frames should accumulate
     const result2 = await executor.execute([{ action: 'click', selector: '#btn2' }], {
-      record: { outputDir: tempDir, sessionId: 'sess-accum' },
+      record: { io: nodeRecordingIo, outputDir: tempDir, sessionId: 'sess-accum' },
     });
     expect(result2.success).toBe(true);
 

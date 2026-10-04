@@ -17,6 +17,10 @@ bun run harden              # Full hardening (prek hooks + knip + ast-grep)
 bun run api:check           # API Extractor: public API surface
 ```
 
+CI pins Bun 1.4.2 and Node 22.23.3; real-browser gates also passed with Bun 1.3.10. Use
+`npx --yes bun@1.4.2 run test:release` when the host has an older Bun;
+Bun 1.2.16 has known native WebSocket disconnects in these tests.
+
 Git hooks: `bun install` then `bun run setup:hooks` (prek; pre-commit ≤15s, pre-push ≤90s).
 
 ## Architecture
@@ -82,7 +86,7 @@ Entry: `src/index.ts`. Public API report: `etc/browser-pilot.api.md`.
 - `docs/guides/` — batch actions, snapshots, multi-selector, recording, tracing, realtime debugging, voice-agent testing, Cloudflare Workers, release checklist
 - `docs/guides/webmcp.md` - current Chrome API contract, security gates, and CLI usage
 - `docs/automating-browsers/` — agent skill + REFERENCE.md + voice agent testing
-- `PLAN.md` — improvement plan (all 8 phases implemented)
+- `docs/cloudflare-validation.md` — Cloudflare runtime checks and verified support limits
 - `CHANGELOG.md`
 
 ## Conventions

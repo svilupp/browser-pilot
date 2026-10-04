@@ -1,3 +1,7 @@
+import { randomUUID } from 'node:crypto';
+import { CapabilityError } from '../core/ports.ts';
+import { validateCloudflareOptions } from '../providers/cloudflare.ts';
+import { normalizeProviderSelector } from '../providers/selector.ts';
 /**
  * Node-flavored connect entry.
  *
@@ -6,8 +10,13 @@
  * NOT part of the portable `browser-pilot/core` graph.
  */
 
+import { createBunTransportFactory } from '../adapters/bun/index.ts';
+import { nodeRecordingIo } from '../adapters/node/recording.ts';
+import { createNodeTransportFactory } from '../adapters/node/transport.ts';
+import type { CDPClient } from '../cdp/client.ts';
 import type { SecretsPort } from '../core/ports.ts';
 import { resolveBrowserEndpoint } from '../providers/local-discovery.ts';
+import type { Provider, ProviderSession } from '../providers/types.ts';
 import { getEnv } from '../runtime/env.ts';
 import {
   type BrowserOptions,
@@ -37,6 +46,17 @@ async function resolveLocalEndpoint(request: LocalEndpointRequest): Promise<{ ws
  * without mutating shared module state or changing the portable class.
  */
 export class Browser extends PortableBrowser {
+  protected constructor(
+    cdp: CDPClient,
+    provider: Provider,
+    session: ProviderSession,
+    options: BrowserOptions
+  ) {
+    super(cdp, provider, session, {
+      ...options,
+      recordingIo: options.recordingIo ?? nodeRecordingIo,
+    });
+  }
   static override fromCDP(
     cdp: Parameters<typeof PortableBrowser.fromCDP>[0],
     sessionInfo: Parameters<typeof PortableBrowser.fromCDP>[1]
@@ -48,8 +68,24 @@ export class Browser extends PortableBrowser {
 
   static override async connect(options: BrowserOptions): Promise<Browser> {
     // `super` preserves the subclass as the polymorphic static constructor.
-    // biome-ignore lint/complexity/noThisInStatic: required for polymorphic static construction
+    const selection = normalizeProviderSelector(options.provider);
+    if (selection.provider === 'cloudflare')
+      validateCloudflareOptions(options.cloudflare ?? {}, selection.engine);
+    if (options.signal?.aborted)
+      throw new CapabilityError('cancelled', 'Connect cancelled before allocation');
+    const transportFactory =
+      options.transportFactory ??
+      (typeof globalThis.Bun !== 'undefined'
+        ? createBunTransportFactory()
+        : options.provider.startsWith('cloudflare') ||
+            options.wsHeaders ||
+            typeof globalThis.WebSocket === 'undefined'
+          ? await createNodeTransportFactory()
+          : undefined);
+    // biome-ignore lint/complexity/noThisInStatic: super must preserve the concrete static constructor
     return super.connect({
+      transportFactory,
+      idGenerator: options.idGenerator ?? randomUUID,
       ...options,
       secrets: options.secrets ?? envSecrets,
       localEndpointResolver: options.localEndpointResolver ?? resolveLocalEndpoint,

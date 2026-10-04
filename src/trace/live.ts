@@ -1,8 +1,10 @@
 import type { CDPClient } from '../cdp/client.ts';
+import { PageScript } from '../cdp/page-script.ts';
+import { createExecutionId } from '../runtime/id.ts';
 import { formatConsoleArg, globToRegex, readString, readStringOr } from '../utils/strings.ts';
 import type { CanonicalTraceEvent } from './model.ts';
 import { createTraceId, normalizeTraceEvent } from './model.ts';
-import { TRACE_BINDING_NAME, TRACE_SCRIPT } from './script.ts';
+import { createTraceScript, traceCleanupScript } from './script.ts';
 
 export type ListenMode = 'ws' | 'http' | 'all';
 
@@ -20,6 +22,9 @@ type EventHandler = (params: Record<string, unknown>) => void;
 export { globToRegex };
 
 export class LiveTraceCollector {
+  private readonly ownerId = createExecutionId('trace');
+  private readonly bindingName = `__bpTrace_${this.ownerId.replace(/[^a-zA-Z0-9_]/g, '_')}`;
+  private script?: PageScript;
   private readonly cdp: CDPClient;
   private readonly options: LiveTraceCollectorOptions;
   private readonly handlers: Array<{ event: string; handler: EventHandler }> = [];
@@ -48,9 +53,13 @@ export class LiveTraceCollector {
     await this.cdp.send('Runtime.enable');
     await this.cdp.send('Page.enable');
     await this.cdp.send('Network.enable');
-    await this.cdp.send('Runtime.addBinding', { name: TRACE_BINDING_NAME });
-    await this.cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: TRACE_SCRIPT });
-    await this.cdp.send('Runtime.evaluate', { expression: TRACE_SCRIPT, awaitPromise: false });
+    this.script = new PageScript(
+      this.cdp,
+      this.bindingName,
+      createTraceScript(this.bindingName, this.ownerId),
+      traceCleanupScript(this.ownerId)
+    );
+    await this.script.install();
 
     if ((this.options.mode ?? 'all') !== 'http') {
       this.subscribe('Network.webSocketCreated', (params) => {
@@ -282,7 +291,7 @@ export class LiveTraceCollector {
     });
 
     this.subscribe('Runtime.bindingCalled', (params) => {
-      if (params['name'] !== TRACE_BINDING_NAME) {
+      if (params['name'] !== this.bindingName) {
         return;
       }
 
@@ -317,6 +326,8 @@ export class LiveTraceCollector {
       this.cdp.off(event, handler);
     }
     this.handlers.length = 0;
+    await this.script?.dispose();
+    this.script = undefined;
     return [...this.events];
   }
 

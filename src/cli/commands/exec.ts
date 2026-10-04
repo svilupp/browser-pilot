@@ -402,6 +402,8 @@ export async function execCommand(
             url: currentUrl,
             savedAt: new Date().toISOString(),
             refMap: page.exportRefMap(),
+            documentIdentity: await page.documentIdentity(),
+            semantics: page.exportRefSemantics(),
           },
         },
       });

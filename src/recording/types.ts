@@ -47,6 +47,8 @@ export interface SelectorCandidate {
  * part of the replay logic.
  */
 export interface ElementSummary {
+  autocomplete?: string;
+  private?: boolean;
   /** HTML tag name (lowercase) */
   tag: string;
   /** Element ID attribute, if present */
@@ -355,6 +357,7 @@ export interface WebSocketRecording {
 
 /** Extended recording output that includes network capture data. */
 export interface FullRecordingOutput extends RecordingOutput {
+  capture?: import('./recorder.ts').RecorderCaptureStatus;
   network?: NetworkRecording;
   websockets?: WebSocketRecording;
   timeline?: TimelineEntry[];

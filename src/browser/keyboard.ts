@@ -117,8 +117,11 @@ export const US_KEYBOARD: Record<string, KeyDefinition> = {
   '?': { key: '?', code: 'Slash', keyCode: 191, text: '?' },
   '~': { key: '~', code: 'Backquote', keyCode: 192, text: '~' },
 
-  // Special keys (non-text: use rawKeyDown, no text field)
-  Enter: { key: 'Enter', code: 'Enter', keyCode: 13 },
+  // Enter needs a carriage-return character event for native form submission
+  // and textarea newlines; rawKeyDown alone only triggers keydown handlers.
+  Enter: { key: 'Enter', code: 'Enter', keyCode: 13, text: '\r' },
+
+  // Other special keys (non-text: use rawKeyDown, no text field)
   Tab: { key: 'Tab', code: 'Tab', keyCode: 9 },
   Backspace: { key: 'Backspace', code: 'Backspace', keyCode: 8 },
   Delete: { key: 'Delete', code: 'Delete', keyCode: 46 },

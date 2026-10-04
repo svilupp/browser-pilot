@@ -1,3 +1,7 @@
+import { createProvider } from '../../providers/index.ts';
+import { assertProviderConstraint, normalizeProviderSelector } from '../../providers/selector.ts';
+import type { ProviderSelector } from '../../providers/types.ts';
+import { resolveWsHeaders } from '../ws-auth.ts';
 /**
  * Connect command - Create or resume a browser session
  *
@@ -61,8 +65,10 @@ Usage:
   bp connect [options]
 
 Local options:
-  -p, --provider <type>   Provider: generic | browserbase | browser-use (default: generic)
+  -p, --provider <type>   Provider: generic | browserbase | browser-use | cloudflare[:chromium|:kitesurf] (default: generic)
   --browser-url <ws-url>  Explicit browser WebSocket URL (preferred)
+  --ws-bearer-env <name>  WebSocket Authorization bearer token env name (Bun)
+  --connection-bound     Fail if the daemon dies; never relaunch browser state
   --page-url <url>        Page URL to open in the attached tab/new tab (preferred)
   --url <value>           Compatibility shorthand; browser URL, or page URL with --new-tab
   --channel <name>        Local Chrome channel: stable | beta | dev | canary
@@ -83,6 +89,11 @@ Local options:
                           See docs/guides/auth-cookies.md.
   --api-key <key>         API key for cloud providers. Falls back to
                           BROWSERBASE_API_KEY / BROWSER_USE_API_KEY depending on --provider
+  --account-id <id>      Cloudflare account (env: CLOUDFLARE_ACCOUNT_ID / CF_ACCOUNT_ID)
+  --keep-alive-ms <ms>    Chromium lifetime, 10000–1200000 ms
+  --provider-session-id <id>  Borrow an existing Chromium allocation
+  --lab                  Chromium experimental pool
+  --provider-recording   Chromium provider recording
   --project-id <id>       Project ID for BrowserBase provider (optional;
                           falls back to BROWSERBASE_PROJECT_ID, and is
                           auto-resolved from the API key when omitted)
@@ -141,9 +152,16 @@ Likely next commands:
 `.trimEnd();
 
 interface ConnectOptions {
-  provider?: ProviderType;
+  provider?: ProviderSelector;
+  accountId?: string;
+  keepAliveMs?: number;
+  providerSessionId?: string;
+  lab?: boolean;
+  providerRecording?: boolean;
   url?: string;
   browserUrl?: string;
+  wsBearerTokenEnv?: string;
+  connectionBound?: boolean;
   channel?: BrowserOptions['channel'];
   userDataDir?: string;
   pageUrl?: string;
@@ -205,16 +223,28 @@ function parseConnectArgs(args: string[]): ConnectOptions {
 
     if (arg === '--provider' || arg === '-p') {
       const p = args[++i];
-      if (p !== 'browserbase' && p !== 'browserless' && p !== 'browser-use' && p !== 'generic') {
-        throw new Error(
-          `Invalid provider: ${p}. Must be one of: browserbase, browserless, browser-use, generic`
-        );
-      }
-      options.provider = p;
+      normalizeProviderSelector(p ?? '');
+      options.provider = p as ProviderSelector;
+    } else if (arg === '--account-id') {
+      options.accountId = args[++i];
+    } else if (arg === '--keep-alive-ms') {
+      options.keepAliveMs = Number(args[++i]);
+    } else if (arg === '--provider-session-id') {
+      options.providerSessionId = args[++i];
+    } else if (arg === '--lab') {
+      options.lab = true;
+    } else if (arg === '--provider-recording') {
+      options.providerRecording = true;
     } else if (arg === '--url') {
       options.url = args[++i];
     } else if (arg === '--browser-url') {
       options.browserUrl = args[++i];
+    } else if (arg === '--ws-bearer-env') {
+      options.wsBearerTokenEnv = args[++i];
+      if (!options.wsBearerTokenEnv)
+        throw new Error('--ws-bearer-env requires an environment variable name');
+    } else if (arg === '--connection-bound') {
+      options.connectionBound = true;
     } else if (arg === '--channel') {
       const channel = args[++i];
       if (channel !== 'stable' && channel !== 'beta' && channel !== 'dev' && channel !== 'canary') {
@@ -288,6 +318,8 @@ function parseConnectArgs(args: string[]): ConnectOptions {
         throw new Error('--cf-access-mode must be "headers" or "cookie"');
       }
       options.cfAccessMode = mode;
+    } else {
+      throw new Error(`Unknown connect argument: ${arg}`);
     }
   }
 
@@ -318,6 +350,14 @@ export async function connectCommand(
   if (options.resume || globalOptions.session) {
     const sessionId = options.resume || globalOptions.session!;
     let session = await loadSession(sessionId);
+    if (options.provider)
+      assertProviderConstraint(
+        options.provider,
+        session.provider,
+        session.metadata?.['detectedEngine'] as
+          | import('../../providers/types.ts').CloudflareEngine
+          | undefined
+      );
 
     if (session.transport?.mode === 'daemon') {
       // Resume through the same attachment path as every other stored-session
@@ -357,7 +397,15 @@ export async function connectCommand(
   }
 
   // Determine provider and connection details
-  const provider: ProviderType = options.provider ?? 'generic';
+  const selector = options.provider ?? 'generic';
+  const selection = normalizeProviderSelector(selector);
+  const provider: ProviderType = selection.provider;
+  if (provider === 'cloudflare' && (options.browserUrl || options.url || options.wsBearerTokenEnv))
+    throw new Error('Cloudflare provider conflicts with browser URL or handshake-header modes');
+  if (provider === 'cloudflare' && options.apiKey)
+    throw new Error(
+      'CLI Cloudflare authentication requires CLOUDFLARE_API_TOKEN or CF_API_KEY so the daemon can resolve a secret reference'
+    );
   if (provider === 'browserless') {
     throw new Error(
       'CLI sessions cannot reconnect Browserless launch URLs. Use the direct browser library, or a generic endpoint whose reconnection lifecycle is managed by your host.'
@@ -452,9 +500,10 @@ export async function connectCommand(
 
   // Build connection options
   const connectOptions: BrowserOptions = {
-    provider,
+    provider: selector,
     debug: globalOptions.trace,
     wsUrl,
+    wsHeaders: resolveWsHeaders(options.wsBearerTokenEnv),
     channel: options.channel,
     userDataDir: options.userDataDir,
     apiKey: options.apiKey,
@@ -462,15 +511,37 @@ export async function connectCommand(
     proxyCountryCode: options.proxyCountry,
     profileId: options.profileId,
     cloudTimeout: options.cloudTimeout,
+    ...(provider === 'cloudflare'
+      ? {
+          cloudflare: {
+            accountId: options.accountId,
+            keepAliveMs: options.keepAliveMs,
+            providerSessionId: options.providerSessionId,
+            lab: options.lab,
+            recording: options.providerRecording,
+          },
+        }
+      : {}),
     // Both direct commands and the cloud daemon handoff reconnect to this session.
     ...(provider === 'browserbase' ? { session: { keepAlive: true } } : {}),
-  };
+  } as BrowserOptions;
+  if (provider === 'cloudflare') createProvider(connectOptions);
 
   // Generic/local sessions can be daemon-first because discovery already gave
   // us a browser-level WebSocket URL. Cloud providers still need their normal
   // provider handshake before a daemon can be started.
   const daemonDisabledByEnv = isDaemonDisabledByEnv();
-  const useDaemon = !options.noDaemon && !daemonDisabledByEnv && provider === 'generic' && !!wsUrl;
+  const useDaemon =
+    !options.noDaemon &&
+    !daemonDisabledByEnv &&
+    ((provider === 'generic' && !!wsUrl) || provider === 'cloudflare');
+  if (provider === 'cloudflare' && !useDaemon)
+    throw new Error(
+      'Cloudflare CLI sessions require the daemon owner; use the direct package for daemon-free access'
+    );
+  if (options.connectionBound && !useDaemon) {
+    throw new Error('--connection-bound requires a generic endpoint with daemon mode enabled');
+  }
   let daemonSession: SessionData | undefined;
   let sessionDaemonId: string | undefined;
   let browser!: Awaited<ReturnType<typeof connect>>;
@@ -480,7 +551,17 @@ export async function connectCommand(
     if (useDaemon) {
       try {
         const created = await createLocalSession({
-          wsUrl: wsUrl!,
+          wsUrl:
+            provider === 'cloudflare' ? `wss://cloudflare.invalid/${crypto.randomUUID()}` : wsUrl!,
+          cloudflareRequest:
+            provider === 'cloudflare'
+              ? {
+                  provider: selector as NonNullable<SessionData['cloudflareRequest']>['provider'],
+                  cloudflare: connectOptions.cloudflare,
+                }
+              : undefined,
+          wsBearerTokenEnv: options.wsBearerTokenEnv,
+          connectionBound: options.connectionBound || selection.engine === 'kitesurf',
           trace: globalOptions.trace,
           name: sessionId,
           newTab: options.newTab,
@@ -694,8 +775,12 @@ export async function connectCommand(
     const session: SessionData = {
       id: sessionId,
       provider,
-      wsUrl: browser.wsUrl,
-      providerSessionId: browser.sessionId,
+      wsUrl: daemonSession?.wsUrl ?? browser.wsUrl,
+      cloudflareRequest: daemonSession?.cloudflareRequest,
+      bootstrapState: daemonSession?.bootstrapState,
+      wsBearerTokenEnv: options.wsBearerTokenEnv,
+      connectionBound: options.connectionBound || selection.engine === 'kitesurf',
+      providerSessionId: daemonSession?.providerSessionId ?? browser.sessionId,
       targetId: page.targetId,
       exportLog: options.exportLog,
       createdAt: new Date().toISOString(),
@@ -709,6 +794,7 @@ export async function connectCommand(
             reason: options.noDaemon ? 'flag' : daemonDisabledByEnv ? 'environment' : 'legacy',
           },
       metadata: {
+        ...daemonSession?.metadata,
         ...browser.metadata,
         ...(connectionSource ? { connectionSource } : {}),
         ...(resolvedChannel ? { resolvedChannel } : {}),

@@ -10,7 +10,7 @@ metadata:
 Route the task before choosing commands.
 
 Use [Flightplan](https://github.com/svilupp/flightplan) for simple, reusable, low-cost automation
-on top of browser-pilot when it is released. Use this skill when you need direct browser control,
+on top of browser-pilot for TOML workflows with effects, assertions and proof artifacts. Use this skill when you need direct browser control,
 inspection, recording, tracing, voice testing, or browser-state controls.
 
 For local Chrome on Chrome 144+, try plain `bp connect` first after enabling remote debugging in `chrome://inspect/#remote-debugging`. Only narrow with `--channel` or `--user-data-dir` if auto-discovery is ambiguous.
@@ -288,3 +288,27 @@ needs to be explicit.
 - Active voice control: `bp audio`
 - Browser conditions: `bp env`
 - Page-provided tools: `bp webmcp`
+
+## Hosted providers and borrowed workflows
+
+Use `bp connect --provider cloudflare:chromium --name <name>` with environment
+credential references; `cloudflare:kitesurf` is an explicit connection-bound
+engine. Provider authentication differs from page Cloudflare Access auth.
+Node header handshakes use the optional `ws` peer; Bun native transport has an
+unresolved compressed-socket diagnostic failure. See the repository's
+`docs/cloudflare-validation.md` before claiming engine support.
+
+Reusable workflows belong in Flightplan. `[config.connect] mode = "hosted"`
+acquires an owned Cloudflare browser; `mode = "session"` needs a host acquirer,
+`session_ref` and explicit target policy. Borrowed teardown preserves the owner;
+provider release can report `cleanup_pending` and requires exact-allocation
+reconciliation. Never replay an ambiguous mutation or allocate a replacement
+as a cleanup retry.
+
+`Page.close()` disposes the wrapper. Close an owned fixture target explicitly
+with `Browser.closePage(cachedPageName)` and verify target removal using
+`Browser.listTargets()`. This method takes a cached page name, not a target ID. Daemon stop requires
+`-s <session>` or `--daemon-id <id>`; a positional owner name is rejected.
+The Flightplan SauceDemo example is a public demo checkout, not an Adyen/card or
+live Cloudflare conformance fixture. Read its examples README for the tested isolated-profile setup and
+verify the order-complete state rather than accepting click receipts.

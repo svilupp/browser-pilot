@@ -3,7 +3,7 @@
 The `bp` CLI is organized around jobs, not alphabetical commands.
 
 browser-pilot is the lower-level browser interface. For simple, reusable, low-cost automation,
-use the companion [Flightplan](https://github.com/svilupp/flightplan) package when released:
+use the companion [Flightplan](https://github.com/svilupp/flightplan) package:
 `bunx flightplan --help`.
 
 For local Chrome on Chrome 144+, try plain `bp connect` first after enabling remote debugging in `chrome://inspect/#remote-debugging`. Only add `--channel` or `--user-data-dir` when auto-discovery finds multiple eligible profiles.
@@ -65,6 +65,56 @@ Session transport:
   browser-scoped daemon remains available until Chrome exits (or it is stopped
   explicitly). Use `bp daemon list`, then `bp daemon stop --daemon-id <id>`
   when no logical session remains.
+
+## First-party Cloudflare sessions
+
+```sh
+# Set CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN in the trusted host.
+bp connect --provider cloudflare --name cf-shop
+bp exec -s cf-shop '{"action":"goto","url":"https://example.com"}'
+bp connect --resume cf-shop
+bp close -s cf-shop --json
+```
+
+`cloudflare` defaults to Chromium for a new allocation; `cloudflare:chromium`
+constrains the engine explicitly. `cloudflare:kitesurf` is experimental and
+connection-bound. A fresh named connect allocates once and rejects an occupied
+name. Resume uses the stored identity, never allocates a replacement, and checks
+an explicit provider/engine constraint. Bare `cloudflare` accepts the stored
+Cloudflare engine on resume. Chromium owner loss can resume the same allocation;
+Kitesurf owner loss requires an explicit new session.
+
+Use `CLOUDFLARE_ACCOUNT_ID` / `CLOUDFLARE_API_TOKEN` in the trusted host,
+with `CF_ACCOUNT_ID` / `CF_API_KEY` as fallback aliases. `--account-id` overrides
+the account ID. Keep the token in the daemon's inherited environment; Cloudflare
+CLI `--api-key` literals are rejected before allocation. Provider authentication is separate from website Cloudflare Access headers/cookies.
+
+Cloudflare connect options:
+
+- `--account-id <id>`: override the host account ID.
+- `--keep-alive-ms <ms>`: Chromium lifetime, integer 10000–1200000 milliseconds.
+- `--provider-session-id <id>`: borrow an existing Chromium allocation.
+- `--lab` and `--provider-recording`: Chromium-only provider options.
+
+Kitesurf rejects keep-alive, existing-allocation, lab and provider-recording
+options before launch. Existing allocation attachment is borrowed: closing its CLI record does not release the
+external allocation. Ownership transfer is a library option
+(`cloudflare.takeOwnership`), not a CLI flag. First-party Cloudflare CLI sessions
+require the daemon; `--no-daemon` and `BROWSER_PILOT_NO_DAEMON=1` are rejected.
+Direct imported Node use needs the optional `ws` peer and no Bun or daemon.
+Do not combine first-party provider selection with a generic browser URL.
+
+`close` and `clean` release owned Cloudflare Chromium allocations by exact ID.
+`cleanup_pending` exits nonzero and retains the record for retry; a disconnected
+socket alone is not release confirmation. `--force` removes only local records
+and warns that remote allocation release was skipped. Kitesurf ends with its
+owner connection. A stale target attachment can be repaired on the same daemon
+only after verifying the exact pinned target still exists.
+
+Runtime checks and local Chromium journeys do not establish live Cloudflare or
+payment support. See the [provider guide](providers.md#cloudflare-browser-run),
+[Workers host guide](guides/cloudflare-workers.md) and
+[validation report](cloudflare-validation.md) for evidence and open gates.
 
 ## Command chooser
 
@@ -511,3 +561,23 @@ signal it without that identity proof.
 - Need browser-state manipulation: `env`
 - Need page-provided tools: `webmcp`
 - Need structured business state: `review`
+
+### Authenticated and connection-bound CDP endpoints
+
+`bp connect --browser-url <endpoint> --ws-bearer-env <ENV_NAME>` sends
+`Authorization: Bearer <resolved value>` during the WebSocket handshake. This
+uses Bun native WebSocket or the optional Node `ws` peer. The daemon receives
+the token through its inherited environment;
+session files retain the variable name rather than the token value.
+
+Add `--connection-bound` for launch endpoints that allocate a new browser per
+WebSocket connection (such as Kitesurf). It requires a generic endpoint in daemon
+mode and refuses to recreate a lost daemon automatically. Use the same named
+session for all subsequent commands. This flag cannot prevent a remote engine
+from expiring or crashing its page isolate.
+
+For first-party Cloudflare sessions, each attached command holds a browser-wide
+daemon lease until its local client disconnects. Another concurrent command
+fails with `session_busy` before browser dispatch. Detaching a command preserves
+the daemon's provider connection. A long-running command also holds this lease;
+finish or detach it before starting another browser command on that session.

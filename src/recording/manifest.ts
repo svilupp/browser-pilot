@@ -104,6 +104,15 @@ export interface RecordingExecution {
 }
 
 export interface RecordingManifest {
+  recording?: {
+    id: string;
+    segmentMode: 'new' | 'append';
+    screenshotPolicy: 'off' | 'markers' | 'events';
+    privacy: 'standard' | 'metadata';
+    complete: boolean;
+    capture?: import('./recorder.ts').RecorderCaptureStatus;
+    stopReason?: string;
+  };
   version: 2;
   recordedAt: string;
   session: {
@@ -212,23 +221,25 @@ export function createRecordingManifest(input: {
     };
   });
 
-  const screenshots = normalizedFrames.map<RecordingScreenshot>((frame, index) => ({
-    id: `shot-${index + 1}`,
-    stepIndex: frame.stepIndex ?? Math.max(0, frame.seq - 1),
-    actionId: frame.actionId!,
-    file: frame.screenshot,
-    ts: new Date(frame.timestamp).toISOString(),
-    success: frame.success,
-    pageUrl: frame.pageUrl,
-    pageTitle: frame.pageTitle,
-    coordinates: frame.coordinates,
-    boundingBox: frame.boundingBox,
-    executionId: frame.executionId ?? executionId,
-    attempt: frame.attempt,
-    targetId: frame.targetId,
-    effect: frame.effect,
-    anchor: frame.anchor,
-  }));
+  const screenshots = normalizedFrames
+    .filter((frame) => Boolean(frame.screenshot))
+    .map<RecordingScreenshot>((frame, index) => ({
+      id: `shot-${index + 1}`,
+      stepIndex: frame.stepIndex ?? Math.max(0, frame.seq - 1),
+      actionId: frame.actionId!,
+      file: frame.screenshot,
+      ts: new Date(frame.timestamp).toISOString(),
+      success: frame.success,
+      pageUrl: frame.pageUrl,
+      pageTitle: frame.pageTitle,
+      coordinates: frame.coordinates,
+      boundingBox: frame.boundingBox,
+      executionId: frame.executionId ?? executionId,
+      attempt: frame.attempt,
+      targetId: frame.targetId,
+      effect: frame.effect,
+      anchor: frame.anchor,
+    }));
 
   const executions = [
     ...(input.executions ?? []),
@@ -343,27 +354,6 @@ function normalizeArtifactPath(artifactDir: string, screenshotDir: string, file:
   return `${root}/${alreadyScoped ? relative : `${dir}/${relative}`}`;
 }
 
-function nodeFileSize(path: string): number | undefined {
-  // Avoid importing a Node-only module into the library entry point, which is
-  // also used by browser/worker consumers. Node 22 exposes built-ins through
-  // process.getBuiltinModule; older runtimes simply skip this optional probe.
-  const processLike = (
-    globalThis as {
-      process?: { getBuiltinModule?: (name: string) => unknown };
-    }
-  ).process;
-  const getBuiltinModule = processLike?.getBuiltinModule;
-  if (typeof getBuiltinModule !== 'function') return undefined;
-  try {
-    const fs = getBuiltinModule('node:fs') as {
-      statSync: (filePath: string) => { size: number };
-    };
-    return fs.statSync(path).size;
-  } catch {
-    return 0;
-  }
-}
-
 /** Validate action/screenshot identity and, when supplied, evidence files. */
 export function validateRecordingManifest(
   manifest: RecordingManifest,
@@ -389,7 +379,7 @@ export function validateRecordingManifest(
         manifest.artifacts.screenshotDir,
         screenshot.file
       );
-      const size = (options.fileSize ?? nodeFileSize)(path);
+      const size = options.fileSize?.(path);
       if (size !== undefined && size <= 0) {
         errors.push(`Screenshot file is missing or empty: ${screenshot.file}`);
       }

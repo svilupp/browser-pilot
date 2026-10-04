@@ -156,6 +156,13 @@ export async function snapshotCommand(
           url: snapshot.url,
           savedAt: new Date().toISOString(),
           refMap: page.exportRefMap(),
+          documentIdentity: await page.documentIdentity(),
+          semantics: Object.fromEntries(
+            snapshot.interactiveElements.map((element) => [
+              element.ref,
+              { role: element.role, name: element.name },
+            ])
+          ),
         },
       },
     });

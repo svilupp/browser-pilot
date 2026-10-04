@@ -53,3 +53,19 @@ export function redactValueForRecording(
   if (value === undefined) return undefined;
   return isSensitiveFieldMetadata(metadata) ? REDACTED_VALUE : value;
 }
+
+/** Metadata recordings omit credentials and all query/fragment data before persistence. */
+export function redactRecordingURL(raw: string): string {
+  try {
+    const url = new URL(raw);
+    if (!['http:', 'https:', 'ws:', 'wss:', 'about:'].includes(url.protocol))
+      return '[URL omitted]';
+    url.username = '';
+    url.password = '';
+    url.search = '';
+    url.hash = '';
+    return url.href;
+  } catch {
+    return '[URL omitted]';
+  }
+}

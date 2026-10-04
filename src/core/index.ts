@@ -36,6 +36,12 @@ export {
   type NewPageOptions,
   type PageOptions,
 } from '../browser/browser.ts';
+export {
+  CapabilityCache,
+  type CapabilityEvidence,
+  type CapabilityReport,
+  type CapabilityState,
+} from '../browser/capabilities.ts';
 export { Page, type PageInitOptions } from '../browser/page.ts';
 export {
   ActionDispatchUncertainError,
@@ -74,3 +80,29 @@ export function connectCore(options: BrowserOptions): Promise<Browser> {
 
 /** Compatibility type alias; core connection options are plain Browser options. */
 export type ConnectCoreOptions = BrowserOptions;
+
+export { captureStateSignature } from '../actions/conditions.ts';
+export type { Step } from '../actions/types.ts';
+export type { EmitWsOptions } from '../browser/emit.ts';
+export { captureStructureSignature } from '../browser/signature.ts';
+export type { Dialog, ExpectNewPageOptions, PageSnapshot } from '../browser/types.ts';
+export { CloudflareProvider, type CloudflareProviderOptions } from '../providers/cloudflare.ts';
+export {
+  assertProviderConstraint,
+  type NormalizedProviderSelector,
+  normalizeProviderSelector,
+} from '../providers/selector.ts';
+export { getBuildProvenance } from '../runtime/provenance.ts';
+export { webmcpCall, webmcpList } from '../webmcp/client.ts';
+export {
+  LegacyReconnectAdapter,
+  type LegacyReconnectAdapterOptions,
+} from './sessions/legacy-adapter.ts';
+export {
+  type BorrowedBrowser,
+  type BrowserLease,
+  ConnectionSessionOwner,
+  type ConnectionSessionOwnerOptions,
+  type SessionOwnerV2,
+  type SessionStatus,
+} from './sessions/owner.ts';

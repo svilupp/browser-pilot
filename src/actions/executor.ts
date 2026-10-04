@@ -63,62 +63,7 @@ const DEFAULT_RECORDING_SKIP_ACTIONS: ActionType[] = [
   'screenshot',
 ];
 
-/** Minimal filesystem/path surface needed for recording evidence writes. */
-interface RecordingIo {
-  readFileSync(path: string, encoding: 'utf-8'): string;
-  mkdirSync(path: string, options: { recursive: true }): unknown;
-  writeFileSync(path: string, data: string | Uint8Array): void;
-  renameSync(from: string, to: string): void;
-  existsSync(path: string): boolean;
-  statSync(path: string): { size: number };
-  join(...parts: string[]): string;
-  cwd(): string;
-}
-
-let recordingIoPromise: Promise<RecordingIo> | null = null;
-
-/**
- * Recording evidence is written with Node's filesystem. To keep this module
- * inside the portable core import graph (no static `node:*` imports), the
- * built-ins are loaded lazily — and only when a batch actually requests
- * `record`. The specifiers are computed so bundlers targeting non-Node
- * runtimes never try to resolve them; in such runtimes recording fails with
- * a `CapabilityError('recording')` instead.
- */
-function loadRecordingIo(): Promise<RecordingIo> {
-  recordingIoPromise ??= (async () => {
-    try {
-      const fsSpecifier = ['node', 'fs'].join(':');
-      const pathSpecifier = ['node', 'path'].join(':');
-      const [fsModule, pathModule] = (await Promise.all([
-        import(fsSpecifier),
-        import(pathSpecifier),
-      ])) as [Omit<RecordingIo, 'join' | 'cwd'>, { join: (...parts: string[]) => string }];
-      return {
-        readFileSync: fsModule.readFileSync.bind(fsModule),
-        mkdirSync: fsModule.mkdirSync.bind(fsModule),
-        writeFileSync: fsModule.writeFileSync.bind(fsModule),
-        renameSync: fsModule.renameSync.bind(fsModule),
-        existsSync: fsModule.existsSync.bind(fsModule),
-        statSync: fsModule.statSync.bind(fsModule),
-        join: pathModule.join,
-        cwd: () => {
-          const processLike = (globalThis as { process?: { cwd?: () => string } }).process;
-          return processLike?.cwd?.() ?? '.';
-        },
-      };
-    } catch (error) {
-      recordingIoPromise = null;
-      throw new CapabilityError(
-        'recording',
-        `Recording requires Node filesystem access (node:fs), which this runtime does not provide: ${
-          error instanceof Error ? error.message : String(error)
-        }`
-      );
-    }
-  })();
-  return recordingIoPromise;
-}
+import type { RecordingIo } from './types.ts';
 
 interface RecordingContext {
   io: RecordingIo;
@@ -928,7 +873,12 @@ export class BatchExecutor {
     record: RecordOptions,
     executionId: string
   ): Promise<RecordingContext> {
-    const io = await loadRecordingIo();
+    const io = record.io;
+    if (!io)
+      throw new CapabilityError(
+        'recording',
+        'Filesystem recording requires an explicit RecordingIo host adapter'
+      );
     const baseDir = record.outputDir ?? io.join(io.cwd(), '.browser-pilot');
     const screenshotDir = io.join(baseDir, 'screenshots');
     const manifestPath = io.join(baseDir, 'recording.json');
@@ -995,7 +945,7 @@ export class BatchExecutor {
         format: recording.format,
         quality: recording.quality,
       });
-      const buffer = Buffer.from(base64, 'base64');
+      const buffer = Uint8Array.from(atob(base64), (char) => char.charCodeAt(0));
       recording.io.writeFileSync(filepath, buffer);
       stepResult.screenshotPath = filepath;
 

@@ -1,14 +1,24 @@
 export const TRACE_BINDING_NAME = '__bpTraceBinding';
 
-export const TRACE_SCRIPT = `
+export function createTraceScript(bindingName: string, ownerId: string): string {
+  return `
 (() => {
-  if (window.__bpTraceInstalled) return;
-  window.__bpTraceInstalled = true;
-
-  const binding = globalThis.${TRACE_BINDING_NAME};
+  const owner = ${JSON.stringify(ownerId)};
+  const binding = globalThis[${JSON.stringify(bindingName)}];
   if (typeof binding !== 'function') return;
+  if (window.__bpTraceHub) { window.__bpTraceHub.sinks.set(owner,binding); return; }
+  const sinks = new Map([[owner,binding]]), cleanup = [];
+  let active = true;
+  const listen = (target,event,callback) => { if(!active)return; target.addEventListener(event,callback);cleanup.push(()=>target.removeEventListener(event,callback)); };
+  const hub = {sinks,release(id) {
+    sinks.delete(id); if(sinks.size)return;
+    active=false;for(const dispose of cleanup.splice(0).reverse())try{dispose();}catch{}
+    if(window.__bpTraceHub===hub){delete window.__bpTraceHub;delete window.__bpTraceInstalled;delete window.__bpTraceWebSocketInstalled;delete window.__bpTraceRecentEvents;}
+  }};
+  window.__bpTraceHub=hub;window.__bpTraceInstalled=true;
 
   const emit = (event, data = {}, severity = 'info', summary) => {
+    if(!active)return;
     try {
       globalThis.__bpTraceRecentEvents = globalThis.__bpTraceRecentEvents || [];
       const payload = {
@@ -22,7 +32,7 @@ export const TRACE_SCRIPT = `
       if (globalThis.__bpTraceRecentEvents.length > 200) {
         globalThis.__bpTraceRecentEvents.splice(0, globalThis.__bpTraceRecentEvents.length - 200);
       }
-      binding(JSON.stringify(payload));
+      for(const sink of sinks.values())try{sink(JSON.stringify(payload));}catch{}
     } catch {}
   };
 
@@ -49,7 +59,7 @@ export const TRACE_SCRIPT = `
       );
 
       const originalSend = socket.send;
-      socket.send = function(data) {
+      const tracedSend = function(data) {
         const payload =
           typeof data === 'string'
             ? data
@@ -70,7 +80,8 @@ export const TRACE_SCRIPT = `
         return originalSend.call(this, data);
       };
 
-      socket.addEventListener('message', (event) => {
+      socket.send=tracedSend;cleanup.push(()=>{if(socket.send===tracedSend)socket.send=originalSend;delete socket.__bpTracePatched;delete socket.__bpTraceId;delete socket.__bpTraceUrl;delete socket.__bpTraceClosed;globalThis.__bpTrackedWebSockets?.delete(socket);});
+      listen(socket,'message', (event) => {
         if (socket.__bpOfflineNotified || socket.__bpTraceClosed) {
           return;
         }
@@ -94,7 +105,7 @@ export const TRACE_SCRIPT = `
         );
       });
 
-      socket.addEventListener('close', (event) => {
+      listen(socket,'close', (event) => {
         if (socket.__bpTraceClosed) {
           return;
         }
@@ -125,10 +136,10 @@ export const TRACE_SCRIPT = `
     };
     TracedWebSocket.prototype = NativeWebSocket.prototype;
     Object.setPrototypeOf(TracedWebSocket, NativeWebSocket);
-    window.WebSocket = TracedWebSocket;
+    window.WebSocket = TracedWebSocket;cleanup.push(()=>{if(window.WebSocket===TracedWebSocket)window.WebSocket=NativeWebSocket;});
   };
 
-  window.addEventListener('error', (errorEvent) => {
+  listen(window,'error', (errorEvent) => {
     emit(
       'runtime.exception',
       {
@@ -142,7 +153,7 @@ export const TRACE_SCRIPT = `
     );
   });
 
-  window.addEventListener('unhandledrejection', (event) => {
+  listen(window,'unhandledrejection', (event) => {
     const reason = event && 'reason' in event ? String(event.reason) : 'Unhandled rejection';
     emit('runtime.unhandledRejection', { reason }, 'error', reason);
   });
@@ -160,7 +171,7 @@ export const TRACE_SCRIPT = `
           status.state === 'denied' ? 'warn' : 'info',
           name + ': ' + status.state
         );
-        status.addEventListener('change', () => {
+        listen(status,'change', () => {
           emit(
             'permission.changed',
             { name, state: status.state },
@@ -173,10 +184,10 @@ export const TRACE_SCRIPT = `
   };
 
   const patchMediaElement = (element) => {
-    if (!element || element.__bpTracePatched) return;
-    element.__bpTracePatched = true;
+    if (!active || !element || element.__bpTracePatched) return;
+    element.__bpTracePatched = true;cleanup.push(()=>{delete element.__bpTracePatched;});
 
-    element.addEventListener('play', () => {
+    listen(element,'play', () => {
       emit(
         'media.playback.started',
         { tag: element.tagName.toLowerCase(), src: element.currentSrc || element.src || null },
@@ -194,8 +205,8 @@ export const TRACE_SCRIPT = `
       );
     };
 
-    element.addEventListener('pause', onStop);
-    element.addEventListener('ended', onStop);
+    listen(element,'pause', onStop);
+    listen(element,'ended', onStop);
   };
 
   const patchMediaElements = () => {
@@ -209,15 +220,16 @@ export const TRACE_SCRIPT = `
     const observer = new MutationObserver(() => {
       patchMediaElements();
     });
+    cleanup.push(()=>observer.disconnect());
     observer.observe(document.documentElement, { childList: true, subtree: true });
   }
 
   if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-    const original = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
-    navigator.mediaDevices.getUserMedia = async (...args) => {
+    const original = navigator.mediaDevices.getUserMedia;
+    const tracedGetUserMedia = async (...args) => {
       emit('voice.capture.started', { constraints: args[0] || null }, 'info', 'Voice capture started');
       try {
-        const stream = await original(...args);
+        const stream = await original.apply(navigator.mediaDevices,args);
         const tracks = stream.getTracks();
 
         for (const track of tracks) {
@@ -227,7 +239,7 @@ export const TRACE_SCRIPT = `
             'info',
             track.kind + ' track started'
           );
-          track.addEventListener('ended', () => {
+          listen(track,'ended', () => {
             emit(
               'media.track.ended',
               { kind: track.kind, label: track.label, readyState: track.readyState },
@@ -261,9 +273,10 @@ export const TRACE_SCRIPT = `
         throw error;
       }
     };
+    navigator.mediaDevices.getUserMedia=tracedGetUserMedia;cleanup.push(()=>{if(navigator.mediaDevices.getUserMedia===tracedGetUserMedia)navigator.mediaDevices.getUserMedia=original;});
   }
 
-  document.addEventListener('visibilitychange', () => {
+  listen(document,'visibilitychange', () => {
     emit(
       'dom.state.changed',
       { visibilityState: document.visibilityState },
@@ -276,3 +289,9 @@ export const TRACE_SCRIPT = `
   emit('voice.pipeline.ready', { url: location.href }, 'info', 'Trace hooks ready');
 })();
 `;
+}
+
+export const TRACE_SCRIPT = createTraceScript(TRACE_BINDING_NAME, 'legacy');
+export function traceCleanupScript(ownerId: string): string {
+  return `window.__bpTraceHub?.release(${JSON.stringify(ownerId)})`;
+}

@@ -1,4 +1,8 @@
 #!/usr/bin/env bun
+import type { Browser } from '../browser/browser.ts';
+import { connect as connectBrowser } from '../browser/connect.ts';
+import type { SessionData } from '../cli/session.ts';
+import { resolveWsHeaders } from '../cli/ws-auth.ts';
 
 /**
  * Daemon entry point — spawned as a detached subprocess by `bp connect`.
@@ -14,11 +18,12 @@
  * 6. Runs until idle timeout, Chrome disconnection, or SIGTERM
  */
 
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createBunTransportFactory } from '../adapters/bun/index.ts';
 import { createCDPClient } from '../cdp/client.ts';
 import { acquireFileLock } from '../runtime/file-lock.ts';
 import { isRecord } from '../utils/json.ts';
@@ -129,6 +134,10 @@ function readSessionData(filePath: string): {
   wsUrl: string;
   targetId?: string;
   daemonId?: string;
+  wsBearerTokenEnv?: string;
+  cloudflareRequest?: SessionData['cloudflareRequest'];
+  providerSessionId?: string;
+  bootstrapState?: SessionData['bootstrapState'];
 } {
   const raw = fs.readFileSync(filePath, 'utf-8');
   const session = parseSessionRecord(raw);
@@ -139,7 +148,16 @@ function readSessionData(filePath: string): {
   const transport = isRecord(session['transport']) ? session['transport'] : undefined;
   const daemonId =
     transport && typeof transport['daemonId'] === 'string' ? transport['daemonId'] : undefined;
-  return { wsUrl: session['wsUrl'], targetId, daemonId };
+  return {
+    wsUrl: session['wsUrl'],
+    cloudflareRequest: session['cloudflareRequest'] as SessionData['cloudflareRequest'],
+    providerSessionId: session['providerSessionId'] as string | undefined,
+    bootstrapState: session['bootstrapState'] as SessionData['bootstrapState'],
+    targetId,
+    daemonId,
+    wsBearerTokenEnv:
+      typeof session['wsBearerTokenEnv'] === 'string' ? session['wsBearerTokenEnv'] : undefined,
+  };
 }
 
 async function main(): Promise<void> {
@@ -158,7 +176,17 @@ async function main(): Promise<void> {
 
   const sessionDir = join(SESSION_DIR, sessionId);
   const sessionFilePath = join(SESSION_DIR, `${sessionId}.json`);
-  const socketPath = join(sessionDir, 'daemon.sock');
+  const sessionSocketPath = join(sessionDir, 'daemon.sock');
+  // macOS sockaddr_un paths are limited to 104 bytes. A host's HOME can
+  // exceed that already (isolated test homes and managed workspaces do).
+  // tmpdir is per-user on macOS; keep the session/registry as the authority.
+  const socketPath =
+    Buffer.byteLength(sessionSocketPath) < 104
+      ? sessionSocketPath
+      : join(
+          tmpdir(),
+          `bp-${createHash('sha256').update(sessionDir).digest('hex').slice(0, 16)}.sock`
+        );
 
   // Initialize logging first so all subsequent ops are logged
   initDaemonLog(sessionDir);
@@ -172,7 +200,7 @@ async function main(): Promise<void> {
   }
 
   // Read session data
-  let sessionData: { wsUrl: string; targetId?: string; daemonId?: string };
+  let sessionData: ReturnType<typeof readSessionData>;
   try {
     sessionData = readSessionData(sessionFilePath);
     daemonLog(
@@ -194,7 +222,60 @@ async function main(): Promise<void> {
   const orphanTimer = checkSessionFileExists(sessionFilePath, 5000, descriptorPath);
 
   // Connect to Chrome via persistent WebSocket
-  const cdp = await createCDPClient(sessionData.wsUrl, { timeout: 30000 }).catch((err) => {
+  let ownedBrowser: Browser | undefined;
+  const cdp = await (async () => {
+    if (!sessionData.cloudflareRequest)
+      return createCDPClient(sessionData.wsUrl, {
+        transportFactory: createBunTransportFactory(),
+        timeout: 30000,
+        headers: resolveWsHeaders(sessionData.wsBearerTokenEnv),
+      });
+    if (!sessionData.providerSessionId && sessionData.bootstrapState !== 'queued')
+      throw new Error('SESSION_LOST: allocation outcome unknown; refusing to allocate again');
+    const raw = parseSessionRecord(fs.readFileSync(sessionFilePath, 'utf-8'))!;
+    raw['bootstrapState'] = 'allocation_started';
+    writeSessionRecord(sessionFilePath, raw);
+    const request = sessionData.cloudflareRequest;
+    ownedBrowser = await connectBrowser({
+      ...request,
+      cloudflare: {
+        ...request.cloudflare,
+        ...(sessionData.providerSessionId
+          ? {
+              providerSessionId: sessionData.providerSessionId,
+              takeOwnership:
+                raw['metadata'] &&
+                (raw['metadata'] as Record<string, unknown>)['ownership'] === 'owned',
+            }
+          : {}),
+      },
+    } as Parameters<typeof connectBrowser>[0]);
+    sessionData.wsUrl = ownedBrowser.wsUrl;
+    sessionData.providerSessionId = ownedBrowser.sessionId;
+    raw['wsUrl'] = ownedBrowser.wsUrl;
+    raw['providerSessionId'] = ownedBrowser.sessionId;
+    raw['metadata'] = {
+      ...(isRecord(raw['metadata']) ? raw['metadata'] : {}),
+      ...ownedBrowser.metadata,
+    };
+    raw['bootstrapState'] = 'ready';
+    writeSessionRecord(sessionFilePath, raw);
+    return ownedBrowser.cdpClient;
+  })().catch((err) => {
+    if (
+      err instanceof Error &&
+      'providerCleanup' in err &&
+      isRecord(err.providerCleanup) &&
+      typeof err.providerCleanup['sessionId'] === 'string'
+    ) {
+      const record = parseSessionRecord(fs.readFileSync(sessionFilePath, 'utf-8'));
+      if (record) {
+        record['providerSessionId'] = err.providerCleanup['sessionId'];
+        record['providerCleanup'] = err.providerCleanup;
+        record['metadata'] = { ownership: 'owned' };
+        writeSessionRecord(sessionFilePath, record);
+      }
+    }
     daemonLog('error', `Failed to connect to Chrome: ${err}`);
     closeDaemonLog();
     process.exit(1);
@@ -228,7 +309,7 @@ async function main(): Promise<void> {
 
   // Shutdown procedure (defined early so it can be referenced)
   let isShuttingDown = false;
-  let requestShutdown: (() => void) | undefined;
+  let requestShutdown: ((reason?: 'recovery') => void) | undefined;
 
   // Start the Unix socket server
   const idleTimer = idleTimeoutMs
@@ -243,10 +324,11 @@ async function main(): Promise<void> {
     () => {
       idleTimer.reset();
     },
-    () => requestShutdown?.(),
+    (reason) => requestShutdown?.(reason),
     {
       ...(sessionData.daemonId ? { daemonId: sessionData.daemonId } : {}),
       endpointFingerprint: endpointFingerprint(sessionData.wsUrl),
+      requireLease: sessionData.cloudflareRequest !== undefined,
     }
   ).catch((err) => {
     daemonLog('error', `Failed to start Unix socket server: ${err}`);
@@ -288,18 +370,18 @@ async function main(): Promise<void> {
   // Handle Chrome WebSocket disconnection
   cdp.on('Inspector.detached', () => {
     daemonLog('warn', 'Chrome inspector detached');
-    void shutdown();
+    void shutdown('connection_lost');
   });
 
   // Watch for CDP connection loss
   const connectionCheckInterval = setInterval(() => {
     if (!cdp.isConnected) {
       daemonLog('warn', 'CDP connection lost, shutting down');
-      void shutdown();
+      void shutdown('connection_lost');
     }
   }, 5000);
 
-  async function shutdown(): Promise<void> {
+  async function shutdown(reason?: 'connection_lost' | 'recovery'): Promise<void> {
     if (isShuttingDown) return;
     isShuttingDown = true;
 
@@ -317,7 +399,17 @@ async function main(): Promise<void> {
     }
 
     try {
-      await cdp.close();
+      if (ownedBrowser) {
+        if (reason && ownedBrowser.metadata?.['detectedEngine'] === 'chromium') {
+          // Connection loss and owner replacement retain the authoritative
+          // allocation ID so the next daemon can resume the same browser.
+          await ownedBrowser.disconnect();
+        } else {
+          const cleanup = await ownedBrowser.close();
+          if (cleanup?.status === 'cleanup_pending')
+            daemonLog('warn', 'Provider cleanup pending; retain session record for bp close');
+        }
+      } else await cdp.close();
       daemonLog('info', 'CDP connection closed');
     } catch (err) {
       daemonLog('error', `Error closing CDP: ${String(err)}`);
@@ -358,12 +450,12 @@ async function main(): Promise<void> {
     process.exit(0);
   }
 
-  requestShutdown = () => {
-    void shutdown();
+  requestShutdown = (reason) => {
+    void shutdown(reason);
   };
 
   // Install signal handlers
-  installSignalHandlers(shutdown);
+  installSignalHandlers(() => shutdown());
 
   daemonLog(
     'info',

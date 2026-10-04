@@ -12,6 +12,7 @@ import {
   type CDPResponse,
   type TargetInfo,
 } from './protocol.ts';
+import { decodeRuntimeResult } from './runtime-result.ts';
 import { createTransport, type TransportOptions } from './transport.ts';
 
 /**
@@ -30,12 +31,16 @@ export interface TargetAttachedInfo {
 }
 
 export interface CDPClientOptions extends TransportOptions {
+  transportFactory?: import('./transport.ts').TransportFactory;
+  /** Default command budget after the connection handshake (defaults to timeout). */
+  commandTimeout?: number;
   /** Enable debug logging */
   debug?: boolean;
 }
 
 /** Per-call options for {@link CDPClient.send}. */
 export interface CDPSendOptions {
+  signal?: AbortSignal;
   /**
    * Override the client-wide timeout (ms) for THIS call only. Use a short value
    * for probes that must not hang if the renderer is blocked (e.g. a frozen
@@ -146,6 +151,7 @@ export interface CDPClient {
 }
 
 interface PendingRequest {
+  cleanup?: () => void;
   resolve: (result: unknown) => void;
   reject: (error: Error) => void;
   method: string;
@@ -296,7 +302,11 @@ export async function createCDPClient(
 ): Promise<CDPClient> {
   const { timeout = 30000 } = options;
 
-  const transport = await createTransport(wsUrl, { timeout });
+  const transport = await (options.transportFactory ?? createTransport)(wsUrl, {
+    timeout,
+    headers: options.headers,
+    signal: options.signal,
+  });
   return buildCDPClient(transport, options);
 }
 
@@ -307,7 +317,8 @@ function buildCDPClient(
   transport: import('./transport.ts').Transport,
   options: CDPClientOptions = {}
 ): CDPClient {
-  const { debug = false, timeout = 30000 } = options;
+  const { debug = false } = options;
+  const timeout = options.commandTimeout ?? options.timeout ?? 30000;
 
   let messageId = 0;
   let currentSessionId: string | undefined;
@@ -362,6 +373,7 @@ function buildCDPClient(
       if (request) {
         pending.delete(response.id);
         clearTimeout(request.timer);
+        request.cleanup?.();
 
         if (response.error) {
           const error: CDPErrorData =
@@ -370,6 +382,17 @@ function buildCDPClient(
               : response.error;
           request.reject(new CDPError(error));
         } else {
+          if (
+            request.method === 'Runtime.evaluate' ||
+            request.method === 'Runtime.callFunctionOn'
+          ) {
+            try {
+              decodeRuntimeResult(response.result);
+            } catch (error) {
+              request.reject(error as Error);
+              return;
+            }
+          }
           request.resolve(response.result);
         }
       }
@@ -467,6 +490,7 @@ function buildCDPClient(
     // Reject all pending requests
     for (const [id, request] of pending) {
       clearTimeout(request.timer);
+      request.cleanup?.();
       request.reject(new Error('WebSocket connection closed'));
       pending.delete(id);
     }
@@ -474,6 +498,14 @@ function buildCDPClient(
 
   transport.onError((error: Error) => {
     if (debug) console.error('[CDP] Transport error:', error);
+    connected = false;
+    for (const [id, request] of pending) {
+      clearTimeout(request.timer);
+      request.cleanup?.();
+      request.reject(error);
+      pending.delete(id);
+    }
+    void transport.close().catch(() => {});
   });
 
   const client: CDPClient = {
@@ -507,10 +539,34 @@ function buildCDPClient(
         console.log('[CDP] -->', JSON.stringify(redacted).slice(0, 500));
       }
 
+      if (options?.signal?.aborted || effectiveTimeout <= 0)
+        throw Object.assign(
+          new Error('CDP command cancelled or deadline exceeded before dispatch'),
+          { dispatchState: 'not_dispatched' }
+        );
       return new Promise<T>((resolve, reject) => {
+        const cleanup = () => options?.signal?.removeEventListener('abort', onAbort);
+        const onAbort = () => {
+          pending.delete(id);
+          clearTimeout(timer);
+          cleanup();
+          reject(
+            Object.assign(new Error('CDP command cancelled after dispatch; outcome unknown'), {
+              dispatchState: 'unknown',
+            })
+          );
+        };
         const timer = setTimeout(() => {
           pending.delete(id);
-          reject(new Error(`CDP command ${method} timed out after ${effectiveTimeout}ms`));
+          cleanup();
+          reject(
+            Object.assign(
+              new Error(
+                `CDP command ${method} timed out after ${effectiveTimeout}ms; outcome unknown`
+              ),
+              { dispatchState: 'unknown' }
+            )
+          );
         }, effectiveTimeout);
 
         pending.set(id, {
@@ -518,13 +574,16 @@ function buildCDPClient(
           reject,
           method,
           timer,
+          cleanup,
         });
+        options?.signal?.addEventListener('abort', onAbort, { once: true });
 
         try {
-          transport.send(message);
+          transport.send(message, { timeoutMs: effectiveTimeout });
         } catch (e) {
           pending.delete(id);
           clearTimeout(timer);
+          cleanup();
           reject(e);
         }
       });

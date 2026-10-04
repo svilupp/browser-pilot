@@ -54,6 +54,8 @@ function createMockCDPClient(seed: Seed) {
       if (method === 'Page.addScriptToEvaluateOnNewDocument') {
         return Promise.resolve({ identifier: '1' });
       }
+      if (method === 'Page.getFrameTree')
+        return Promise.resolve({ frameTree: { frame: { id: frameId } } });
       if (method === 'DOM.getDocument') {
         return Promise.resolve({ root: { nodeId: 1 } });
       }
@@ -75,6 +77,8 @@ function createMockCDPClient(seed: Seed) {
         return Promise.resolve({ object: { objectId: 'obj-1' } });
       }
       if (method === 'Runtime.evaluate') {
+        if (params?.['expression'] === 'document')
+          return Promise.resolve({ result: { objectId: 'context-document' } });
         const expr = params?.['expression'] as string | undefined;
         // findElement visibility probe.
         if (expr?.includes('deepQuery') && expr?.includes('getBoundingClientRect')) {
@@ -128,6 +132,35 @@ function currentFrameSession(page: Page): string | null {
 }
 
 describe('OOPIF switchToFrame classification (silent mis-resolution race)', () => {
+  it('attaches the selected iframe when the host omits it from Page.getFrameTree', async () => {
+    const { client, frameId } = createMockCDPClient({ contentDocumentPresent: false });
+    const originalSend = client.send.bind(client);
+    client.send = mock((method, params, sessionId) => {
+      if (method === 'Target.getTargets') {
+        return Promise.resolve({
+          targetInfos: [
+            { targetId: frameId, type: 'iframe', url: 'https://card.example' },
+            { targetId: 'foreign-frame', type: 'iframe', url: 'https://other.example' },
+          ],
+        });
+      }
+      if (method === 'Page.getFrameTree') {
+        return Promise.resolve({ frameTree: { frame: { id: sessionId ? frameId : 'top-only' } } });
+      }
+      return originalSend(method, params, sessionId);
+    }) as CDPClient['send'];
+    client.attachToTarget = mock(async (id: string) => {
+      (client.sessions as Set<string>).add(`child-${id}`);
+      return `child-${id}`;
+    });
+    const page = new Page(client, 'target-1');
+    await page.init();
+    expect(await page.switchToFrame('iframe', { timeout: 300 })).toBe(true);
+    expect(currentFrameSession(page)).toBe(`child-${frameId}`);
+    expect(client.attachToTarget).toHaveBeenCalledWith(frameId);
+    expect(client.attachToTarget).not.toHaveBeenCalledWith('foreign-frame');
+  });
+
   it('takes the OOPIF path AUTHORITATIVELY when a child session is attached, even though describeNode.contentDocument was transiently NON-NULL', async () => {
     // The exact race state: a genuine OOPIF whose child session HAS attached, but
     // describeNode still transiently reports a non-null contentDocument.

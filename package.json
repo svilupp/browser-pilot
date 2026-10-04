@@ -1,6 +1,6 @@
 {
   "name": "browser-pilot",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Lightweight CDP-based browser automation for Node.js, Bun, and Cloudflare Workers",
   "type": "module",
   "repository": {
@@ -69,6 +69,16 @@
     "./cli": {
       "types": "./dist/cli.d.ts",
       "import": "./dist/cli.mjs"
+    },
+    "./adapters/bun": {
+      "types": "./dist/adapters/bun/index.d.ts",
+      "import": "./dist/adapters/bun/index.mjs",
+      "require": "./dist/adapters/bun/index.cjs"
+    },
+    "./adapters/workers": {
+      "types": "./dist/adapters/workers/index.d.ts",
+      "import": "./dist/adapters/workers/index.mjs",
+      "require": "./dist/adapters/workers/index.cjs"
     }
   },
   "bin": {
@@ -109,7 +119,12 @@
     "bp": "bun ./src/cli/index.ts",
     "dev:bp": "bun ./src/cli/index.ts",
     "browser-pilot": "bun ./src/cli/index.ts",
-    "fixtures:serve": "bun tests/fixtures/server.ts"
+    "fixtures:serve": "bun tests/fixtures/server.ts",
+    "test:runtime:node": "node scripts/node-runtime-smoke.mjs",
+    "test:runtime:workers": "node scripts/workers-smoke.mjs",
+    "test:cloudflare:live": "node scripts/cloudflare-live.mjs",
+    "test:runtime:flightplan": "node scripts/workers-smoke.mjs --flightplan",
+    "test:conformance:local": "bun scripts/cross-consumer-local.ts"
   },
   "devDependencies": {
     "@ast-grep/cli": "^0.41.1",
@@ -117,17 +132,25 @@
     "@j178/prek": "^0.3.5",
     "@microsoft/api-extractor": "^7.57.7",
     "@types/bun": "latest",
+    "@types/ws": "8.18.1",
     "chrome-launcher": "^1.2.1",
+    "esbuild": "0.25.12",
     "just-bash": "^3.4.2",
+    "miniflare": "4.20260730.0",
     "oxlint": "^1.51.0",
     "oxlint-tsgolint": "^0.16.0",
-    "tsup": "^8.0.0"
+    "tsup": "^8.0.0",
+    "ws": "8.18.3"
   },
   "peerDependencies": {
-    "just-bash": ">=3.4.0"
+    "just-bash": ">=3.4.0",
+    "ws": "^8.18.3"
   },
   "peerDependenciesMeta": {
     "just-bash": {
+      "optional": true
+    },
+    "ws": {
       "optional": true
     }
   },

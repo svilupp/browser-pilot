@@ -1,428 +1,128 @@
-# Cloudflare Workers Guide
+# Cloudflare Workers guide
 
-Workers cannot run Chrome. Connect to a hosted browser provider instead, and
-import from `browser-pilot/core`, the Node-free entry point.
+Use `browser-pilot/core` and `browser-pilot/adapters/workers` in Workers. These
+entries use web platform APIs and explicit host ports. The native root entry
+provides Node/Bun environment, filesystem and local-browser defaults.
 
-## Requirements
+## Browser binding
 
-1. A Cloudflare Workers account
-2. A browser provider that supports external connections:
-   - [Browser Use](https://browser-use.com) (recommended: CAPTCHA solving, anti-detect, residential proxies)
-   - [BrowserBase](https://browserbase.com)
-   - [Browserless](https://browserless.io)
+```ts
+import { connect, type BrowserBinding } from 'browser-pilot/adapters/workers';
 
-**Note:** You cannot run Chrome in Workers directly. You must connect to an external browser service.
-
-## Basic Setup
-
-### 1. Create Worker Project
-
-```bash
-npm create cloudflare@latest my-browser-worker
-cd my-browser-worker
-npm install browser-pilot
-```
-
-### 2. Configure Environment
-
-Add your API keys to `wrangler.toml`:
-
-```toml
-name = "my-browser-worker"
-main = "src/index.ts"
-compatibility_date = "2024-01-01"
-
-[vars]
-# Non-sensitive config here
-
-# Add secrets via wrangler
-# wrangler secret put BROWSER_USE_API_KEY
-```
-
-Set secrets:
-
-```bash
-wrangler secret put BROWSER_USE_API_KEY
-```
-
-### 3. Write Your Worker
-
-```typescript
-// src/index.ts
-import { connectCore } from 'browser-pilot/core';
-
-interface Env {
-  BROWSER_USE_API_KEY: string;
-}
+interface Env { BROWSER: BrowserBinding }
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
-    const url = new URL(request.url);
-
-    if (url.pathname === '/scrape') {
-      return handleScrape(request, env);
-    }
-
-    return new Response('Browser Worker', { status: 200 });
-  },
-};
-
-async function handleScrape(request: Request, env: Env): Promise<Response> {
-  const { targetUrl } = await request.json();
-
-  const browser = await connectCore({
-    provider: 'browser-use',
-    apiKey: env.BROWSER_USE_API_KEY,
-  });
-
-  try {
-    const page = await browser.page();
-    await page.goto(targetUrl);
-
-    const snapshot = await page.snapshot();
-
-    return Response.json({
-      url: snapshot.url,
-      title: snapshot.title,
-      elements: snapshot.interactiveElements.length,
+  async fetch(_request: Request, env: Env): Promise<Response> {
+    const browser = await connect({
+      provider: 'cloudflare',
+      cloudflare: { binding: env.BROWSER, keepAliveMs: 60_000 },
+      timeout: 20_000,
     });
-  } finally {
-    await browser.close();
-  }
-}
-```
-
-### 4. Deploy
-
-```bash
-wrangler deploy
-```
-
-## Examples
-
-### Form Submission
-
-```typescript
-async function submitForm(env: Env, formData: Record<string, string>): Promise<Response> {
-  const browser = await connectCore({
-    provider: 'browser-use',
-    apiKey: env.BROWSER_USE_API_KEY,
-  });
-
-  try {
-    const page = await browser.page();
-
-    const result = await page.batch([
-      { action: 'goto', url: 'https://example.com/form' },
-      { action: 'fill', selector: '#name', value: formData.name },
-      { action: 'fill', selector: '#email', value: formData.email },
-      { action: 'fill', selector: '#message', value: formData.message },
-      { action: 'submit', selector: 'form' },
-      { action: 'wait', waitFor: 'navigation' },
-      { action: 'snapshot' },
-    ]);
-
-    const snapshot = result.steps[6].result as PageSnapshot;
-
-    return Response.json({
-      success: result.success,
-      confirmationPage: snapshot.title,
-    });
-  } finally {
-    await browser.close();
-  }
-}
-```
-
-### Scheduled Scraping
-
-```typescript
-// wrangler.toml
-// [triggers]
-// crons = ["0 */6 * * *"]  # Every 6 hours
-
-export default {
-  async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
-    ctx.waitUntil(scrapeAndStore(env));
-  },
-
-  async fetch(request: Request, env: Env): Promise<Response> {
-    // ... HTTP handler
-  },
-};
-
-async function scrapeAndStore(env: Env): Promise<void> {
-  const browser = await connectCore({
-    provider: 'browser-use',
-    apiKey: env.BROWSER_USE_API_KEY,
-  });
-
-  try {
-    const page = await browser.page();
-    await page.goto('https://news.example.com');
-
-    const snapshot = await page.snapshot();
-
-    // Store in KV, D1, or R2
-    await env.MY_KV.put('latest-news', JSON.stringify({
-      timestamp: new Date().toISOString(),
-      title: snapshot.title,
-      content: snapshot.text,
-    }));
-  } finally {
-    await browser.close();
-  }
-}
-```
-
-### AI Agent Endpoint
-
-```typescript
-interface AgentRequest {
-  sessionId?: string;
-  actions: Step[];
-}
-
-export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
-    if (request.method !== 'POST') {
-      return new Response('Method not allowed', { status: 405 });
-    }
-
-    const { sessionId, actions } = await request.json() as AgentRequest;
-
-    // Get or create session
-    const providerSessionId = sessionId ? await env.SESSIONS.get(sessionId) : null;
-
-    const browser = await connectCore({
-      provider: 'browser-use',
-      apiKey: env.BROWSER_USE_API_KEY,
-      session: providerSessionId ? { sessionId: providerSessionId } : undefined,
-    });
-
     try {
       const page = await browser.page();
-      const result = await page.batch(actions);
-
-      // Save session for reuse
-      const newSessionId = sessionId ?? crypto.randomUUID();
-      await env.SESSIONS.put(newSessionId, browser.sessionId!, {
-        expirationTtl: 3600, // 1 hour
-      });
-
-      return Response.json({
-        sessionId: newSessionId,
-        result,
-      });
+      await page.goto('https://example.com', { timeout: 10_000 });
+      return Response.json({ title: await page.title() });
     } finally {
-      await browser.disconnect(); // Keep session alive
+      const cleanup = await browser.close();
+      // Retain the allocation ID for retry when cleanup.status is cleanup_pending.
     }
   },
 };
 ```
 
-## Best Practices
+Configure `[browser] binding = "BROWSER"` in Wrangler. The adapter uses
+`acquire()`, `connectSession()`, a session-pinned upgrade Fetcher,
+`closeSession()` and `getSession()`. It translates `keepAliveMs` to the binding's
+`keepAlive`, as specified by the [binding API](https://developers.cloudflare.com/browser-run/reference/browser-binding-api/).
+Binding mode supports Chromium; it rejects Kitesurf, token/account mixing and
+undocumented `lab` selection before allocation. No provider credential is stored
+in a session handle. Existing allocations are borrowed unless `takeOwnership`
+is explicitly true.
 
-### 1. Always Close Browsers
+## Explicit token mode
 
-Use try/finally to ensure cleanup:
+```ts
+import { connect } from 'browser-pilot/adapters/workers';
 
-```typescript
-const browser = await connectCore({ ... });
-try {
-  // Your code
-} finally {
-  await browser.close();
-}
-```
-
-### 2. Use Timeouts
-
-Workers have a 30-second limit (or longer on paid plans):
-
-```typescript
-const browser = await connectCore({
-  provider: 'browser-use',
-  apiKey: env.BROWSER_USE_API_KEY,
-  timeout: 25000, // Leave buffer for cleanup
+const browser = await connect({
+  provider: 'cloudflare',
+  apiKey: env.CLOUDFLARE_API_TOKEN,
+  cloudflare: { accountId: env.CLOUDFLARE_ACCOUNT_ID },
+  timeout: 20_000,
 });
-
-await page.goto(url, { timeout: 20000 });
 ```
 
-### 3. Handle Errors
+Store the token as a Worker secret; supply it from the trusted host, not flow
+JSON or shell arguments. Token mode can explicitly select `cloudflare:kitesurf`.
+The adapter upgrades through `fetch`, calls `accept()`, decodes binary messages
+and closes failed or late upgrades. It does not use the constructor WebSocket
+API for authenticated upgrades. Other providers can use `connectCore()` with
+`transportFactory: createWorkersTransportFactory()`.
 
-```typescript
-import { ElementNotFoundError, TimeoutError } from 'browser-pilot/core';
+## Reusing one physical connection
 
-try {
-  const browser = await connectCore({ ... });
-  // ...
-} catch (error) {
-  if (error instanceof TimeoutError) {
-    return Response.json({ error: 'Request timed out' }, { status: 504 });
-  }
-  if (error instanceof ElementNotFoundError) {
-    return Response.json({ error: 'Element not found' }, { status: 422 });
-  }
-  throw error;
-}
-```
+Use `ConnectionSessionOwner` from `browser-pilot/core`, supplying the Workers
+`connect` function. Open a session once, then acquire and detach a lease for each
+command or workflow. Detach disposes borrower listeners; release closes the
+owner's socket and performs provider cleanup. The host must keep the owner alive
+for the intended event scope. This is an in-process coordinator, not a durable
+broker across Worker instances.
 
-### 4. Session Reuse
+```ts
+import { ConnectionSessionOwner } from 'browser-pilot/core';
+import { connect } from 'browser-pilot/adapters/workers';
 
-For multi-step workflows, reuse sessions:
-
-```typescript
-// Store session in KV
-await env.SESSIONS.put(userId, browser.sessionId!, {
-  expirationTtl: 1800, // 30 minutes
-});
-
-// Later: resume
-const sessionId = await env.SESSIONS.get(userId);
-if (sessionId) {
-  const browser = await connectCore({
-    provider: 'browser-use',
-    apiKey: env.BROWSER_USE_API_KEY,
-    session: { sessionId },
-  });
-}
-```
-
-### 5. Minimize Browser Time
-
-Do heavy processing after closing the browser:
-
-```typescript
-const browser = await connectCore({ ... });
-let snapshot;
-
-try {
-  const page = await browser.page();
-  await page.goto(url);
-  snapshot = await page.snapshot();
-} finally {
-  await browser.close();
-}
-
-// Process after browser is closed
-const processed = processSnapshot(snapshot);
-return Response.json(processed);
-```
-
-## Limitations
-
-1. **No local Chrome** - Must use external browser service
-2. **Connection latency** - WebSocket connection adds ~100-300ms
-3. **CPU limits** - Workers have CPU time limits
-4. **Memory limits** - 128MB default, 512MB on paid plans
-
-## Cost Optimization
-
-1. **Reuse sessions** - Avoid creating new browser sessions for each request
-2. **Batch actions** - One batch call vs multiple individual calls
-3. **Close promptly** - Don't leave browser sessions idle
-4. **Use snapshots** - More efficient than screenshots for text content
-
-## Debugging
-
-### Local Development
-
-```bash
-wrangler dev
-```
-
-### Connection Diagnostics
-
-Set `debug: true` on `connectCore()` for connection diagnostics. Native trace-file
-helpers require Node/Bun and are not part of the portable entry.
-
-### View Live Viewer URL
-
-```typescript
-const browser = await connectCore({ provider: 'browser-use', apiKey });
-console.log('Live viewer:', browser.metadata?.['liveUrl']);
-```
-
-## Using BrowserBase
-
-BrowserBase works the same way as the other providers. Store the API key as a
-Worker secret, never in `wrangler.toml`:
-
-```bash
-wrangler secret put BROWSERBASE_API_KEY
-# Optional for accounts with exactly one project.
-wrangler secret put BROWSERBASE_PROJECT_ID
-```
-
-Pass the key directly to `connectCore()`:
-
-```typescript
-import { connectCore } from 'browser-pilot/core';
-
-interface Env {
-  BROWSERBASE_API_KEY: string;
-  BROWSERBASE_PROJECT_ID?: string;
-}
-
-export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
-    const browser = await connectCore({
-      provider: 'browserbase',
-      apiKey: env.BROWSERBASE_API_KEY,
-      projectId: env.BROWSERBASE_PROJECT_ID,
-    });
-
-    try {
-      const page = await browser.page();
-      // ...
-      return new Response('ok');
-    } finally {
-      const result = await browser.close();
-      if (result?.status === 'cleanup_pending') {
-        // Session may still be billing; consider a follow-up reconciliation
-        // job (e.g. via a queue or cron trigger) that re-checks release status.
-      }
-    }
-  },
+const owner = new ConnectionSessionOwner({ connect });
+const ctx = {
+  generation: 'request-identity',
+  signal: request.signal,
+  deadline: Date.now() + 20_000,
+  clock: { now: Date.now, sleep: (ms: number) => new Promise<void>(r => setTimeout(r, ms)) },
 };
+const handle = await owner.open({
+  provider: 'cloudflare',
+  apiKey: env.CLOUDFLARE_API_TOKEN,
+  cloudflare: { accountId: env.CLOUDFLARE_ACCOUNT_ID },
+}, ctx);
+const lease = await owner.acquire(handle, ctx);
+try { await (await lease.browser.page()).title(); }
+finally { await lease.detach(); }
+await owner.release(handle, ctx);
 ```
 
-Pass credentials per connection, or inject a pre-created provider session below.
-The portable entry does not read environment overrides. Avoid module-global
-credentials in hosts that serve multiple tenants.
+Use the same host generation across commands. Concurrent borrows on one browser
+are conservatively rejected with `session_busy`. Pass an `ArtifactSink` for PNG
+bytes; text-only filesystem output is rejected. Flightplan Worker hosts inject
+an acquirer through `DriverFactory` and detach the lease at run teardown.
 
-### Embedding boundaries
+## Validation and limits
 
-`providerSession` is a trusted in-process injection API. Its `wsUrl` may contain
-credentials and grants direct browser access; its `close()` callback is not
-serializable. Keep both in the trusted host. Passing this object into an untrusted
-shell does not establish credential isolation or restrict browser operations.
+`bun run test:runtime:workers` installs the packed candidate and runs real local
+workerd with simulated CDP responses, WebSocketPair upgrades, binding doubles,
+byte-safe shell artifacts and cancellation. Its compatibility date is
+`2026-07-30`; it uses no `nodejs_compat`. `bun run test:runtime:flightplan` adds the
+packed sibling companion and two borrowed driver lifecycles.
 
-```typescript
-// All of this code runs in the trusted host.
-import { BrowserBaseProvider, connectCore } from 'browser-pilot/core';
+These tests establish local runtime compatibility. They do not establish live
+Cloudflare browser behavior or payment support. The binding path has documented
+contracts and local validation; live service validation remains a separate gate.
+See [validation evidence](../cloudflare-validation.md).
 
-const provider = new BrowserBaseProvider({ apiKey: env.BROWSERBASE_API_KEY });
-const providerSession = await provider.createSession({ timeout: 300 });
-const browser = await connectCore({ provider: 'browserbase', providerSession });
-try {
-  const page = await browser.page();
-  await page.goto('https://example.com');
-} finally {
-  const cleanup = await browser.close();
-  // Retain cleanup.sessionId and reconcile if cleanup.status is cleanup_pending.
-}
-```
+Set explicit operation budgets and allow time for cleanup. Worker CPU, request
+lifetime and memory limits depend on execution context and plan; consult the
+[Workers limits](https://developers.cloudflare.com/workers/platform/limits/)
+for the host configuration. Do not infer a universal 30-second request limit.
+No deployment is required by the local portability tests.
 
-An untrusted shell needs an owner-mediated operation protocol with authorization,
-bounded payloads, session handles, cancellation, and host-side cleanup. Keep raw
-connection URLs and provider credentials out of shell arguments, environment,
-files, and responses. `Browser.fromCDP()` and injected provider sessions alone do
-not enforce that boundary; use a host adapter with explicit authorization and
-lifecycle contracts.
+## Frame/action sequences through shell leases
 
-The native CLI uses Node filesystem and process adapters. Validate portable
-entrypoints from packed artifacts in the target Worker runtime; a native CLI
-build or an in-process injection test does not establish Worker compatibility.
+Use `bp run <handle-json> '<steps-json>'` to keep frame selection and its actions
+inside one lease. It requires read, action and evaluate capabilities. Use
+`bp screenshot` separately so PNG bytes go through the host ArtifactSink.
+Detaching each command leaves the owner connection open. A whole-browser lease
+rejects simultaneous acquisition with `session_busy`.
+
+Document capability probes belong on disposable fixtures. Record observed
+results through `page.capabilities.record(name, evidence, page.documentGeneration)`;
+absent evidence remains unknown. Route/document changes invalidate these entries.
+See [validation status](../cloudflare-validation.md) for the runtime and live gates.

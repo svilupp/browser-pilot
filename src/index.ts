@@ -42,6 +42,8 @@ export {
   type ValidationResult,
   validateSteps,
 } from './actions/index.ts';
+export type { RecordingIo } from './actions/types.ts';
+export { ConnectionSessionOwner } from './adapters/node/session-owner.ts';
 // Audio I/O
 export {
   type AudioChunk,
@@ -84,7 +86,14 @@ export {
   type SerializedCookie,
   serializeCookieState,
 } from './auth/index.ts';
+export { Browser as PortableBrowser } from './browser/browser.ts';
 // Browser & Page
+export {
+  CapabilityCache,
+  type CapabilityEvidence,
+  type CapabilityReport,
+  type CapabilityState,
+} from './browser/capabilities.ts';
 // Includes the Phase 7 resolution / diagnostics / fuzzy-matching / structural-signature
 // APIs (rankCandidates, rankSelectorCandidates, diagnoseElement, scoreElement,
 // captureStructureSignature, ...). Page.resolveAll / Page.diagnose are methods on the
@@ -216,6 +225,7 @@ export {
   CDPError,
   createCDPClient,
 } from './cdp/index.ts';
+export type { Transport, TransportFactory, TransportOptions } from './cdp/transport.ts';
 // Optional host integration contracts.
 export {
   type ArtifactPutOptions,
@@ -230,6 +240,13 @@ export {
   type SessionOpenOptions,
   type SessionOwner,
 } from './core/ports.ts';
+export type {
+  BorrowedBrowser,
+  BrowserLease,
+  ConnectionSessionOwnerOptions,
+  SessionOwnerV2,
+  SessionStatus,
+} from './core/sessions/owner.ts';
 // Emulation
 export { type DeviceDescriptor, type DeviceName, devices } from './emulation/index.ts';
 // Network Interception
@@ -249,6 +266,7 @@ export {
 export { type BuildProvenance, getBuildProvenance } from './provenance.ts';
 // Providers
 export {
+  assertProviderConstraint,
   BrowserBaseProvider,
   BrowserEndpointResolutionError,
   BrowserlessProvider,
@@ -256,6 +274,8 @@ export {
   BrowserUseProvider,
   buildLocalBrowserScanTargets,
   type ChromeChannel,
+  CloudflareProvider,
+  type CloudflareProviderOptions,
   type ConnectOptions,
   type CreateSessionOptions,
   createProvider,
@@ -263,6 +283,8 @@ export {
   discoverTargets,
   GenericProvider,
   getBrowserWebSocketUrl,
+  type NormalizedProviderSelector,
+  normalizeProviderSelector,
   type Provider,
   type ProviderFactoryPorts,
   type ProviderReleaseResult,
@@ -273,11 +295,26 @@ export {
   resolveBrowserEndpoint,
   resolveChromeUserDataDirs,
 } from './providers/index.ts';
+export type {
+  CloudflareChromiumOptions,
+  CloudflareEngine,
+  CloudflareKitesurfOptions,
+  ProviderConnection,
+  ProviderId,
+  ProviderSelection,
+  ProviderSelector,
+} from './providers/types.ts';
 // Recording/evidence artifacts.
 export {
   assertRecordingManifestIntegrity,
   canonicalizeRecordingArtifact,
   createRecordingManifest,
+  Recorder,
+  type RecorderCaptureStatus,
+  type RecorderEventContext,
+  type RecorderListenOptions,
+  type RecorderMarker,
+  type RecorderOptions,
   type RecordingAction,
   type RecordingExecution,
   type RecordingFrame,
@@ -287,6 +324,7 @@ export {
   type RecordingScreenshot,
   validateRecordingManifest,
 } from './recording/index.ts';
+export type { FullRecordingOutput, RawRecordedEvent } from './recording/types.ts';
 // Runtime env override hook (e.g. Cloudflare Workers without process.env).
 export { clearEnvOverrides, setEnvOverrides, withEnv } from './runtime/env.ts';
 // Storage (Cookies)

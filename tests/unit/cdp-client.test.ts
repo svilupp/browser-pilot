@@ -211,7 +211,7 @@ describe('CDPClient per-call timeout override', () => {
     const transport = createFakeTransport();
     const client = createCDPClientFromTransport(transport, { timeout: 30000 });
 
-    const p = client.send<{ ok: boolean }>('Runtime.evaluate', {}, undefined, { timeout: 500 });
+    const p = client.send<{ ok: boolean }>('Browser.getVersion', {}, undefined, { timeout: 500 });
     // Reply to the just-sent message id before the short timeout elapses.
     const sent = transport.sent.at(-1);
     if (!sent) throw new Error('no frame sent');

@@ -1,3 +1,5 @@
+import { stopDaemonForRecovery } from '../daemon/control.ts';
+import { resolveWsHeaders } from './ws-auth.ts';
 /**
  * Shared session attach helper for CLI commands.
  *
@@ -11,6 +13,7 @@ import type { BatchOptions, BatchResult, Step } from '../actions/types.ts';
 import type { Browser } from '../browser/browser.ts';
 import type { Page } from '../browser/page.ts';
 import { TargetNotFoundError } from '../browser/types.ts';
+import { CDPError } from '../cdp/client.ts';
 import { clearDaemonFromSession, isDaemonAlive, stopDaemon } from '../daemon/lifecycle.ts';
 import {
   acquireDaemonLock,
@@ -42,6 +45,16 @@ import {
   saveSession,
   updateSessionDaemon,
 } from './session.ts';
+
+export interface AttachOptions {
+  trace?: boolean;
+  /** Observe preserves existing viewport/auth/permissions/network/visibility. */
+  policy?: 'automation' | 'observe';
+  /** Explicit switching selects this target before attaching any old target. */
+  targetId?: string;
+  /** Borrowers never update the logical owner's current target or CDP binding. */
+  persistBinding?: boolean;
+}
 
 export interface AttachResult {
   session: SessionData;
@@ -283,11 +296,11 @@ async function cleanupStaleDaemon(session: SessionData, reason: string): Promise
 /** Recover a daemon-owned session once, without ever downgrading it to direct mode. */
 async function recoverDaemonAttachment(
   session: SessionData,
-  options: { trace?: boolean },
+  options: AttachOptions,
   allowRecovery: boolean,
   reason: string
 ): Promise<AttachResult> {
-  if (!allowRecovery) {
+  if (!allowRecovery || session.connectionBound) {
     throw new Error(
       `Daemon for session "${session.id}" is unavailable (${reason}). ` +
         `Daemon log: ${session.daemon?.socketPath ? join(dirname(session.daemon.socketPath), 'daemon.log') : 'unavailable'}. ` +
@@ -330,7 +343,12 @@ async function recoverDaemonAttachment(
         : {}),
       providerSessionId: resolvedSession.providerSessionId,
     });
-    const expectedDaemonId = daemonIdForConnection(connectionKey);
+    const expectedDaemonId =
+      resolvedSession.provider === 'cloudflare' &&
+      resolvedSession.transport?.mode === 'daemon' &&
+      resolvedSession.transport.daemonId
+        ? resolvedSession.transport.daemonId
+        : daemonIdForConnection(connectionKey);
     const releaseLock = await acquireDaemonLock(expectedDaemonId);
     try {
       // Another command may have recovered this browser while we waited for
@@ -377,7 +395,14 @@ async function recoverDaemonAttachment(
               );
             }
             if (descriptorAlive) {
-              await stopDaemon(descriptor.pid).catch(() => false);
+              if (candidate.provider === 'cloudflare') {
+                await stopDaemonForRecovery({
+                  pid: descriptor.pid,
+                  socketPath: descriptor.socketPath,
+                  daemonId: expectedDaemonId,
+                  endpointFingerprint: descriptor.endpointFingerprint,
+                });
+              } else await stopDaemon(descriptor.pid).catch(() => false);
             }
             const fsPromises = await import('node:fs/promises');
             await fsPromises.unlink(descriptor.socketPath).catch(() => {});
@@ -394,13 +419,17 @@ async function recoverDaemonAttachment(
           await saveSession(recoverySession);
           const spawned = spawnDaemon(recoverySession.id);
           recoveryPid = spawned.pid;
+          const readinessBudget = recoverySession.provider === 'cloudflare' ? 65000 : 3000;
           const ready = await waitForDaemonReady(
             getSessionFilePath(recoverySession.id),
-            spawned.pid
+            spawned.pid,
+            readinessBudget
           );
           if (!ready) {
             await stopDaemon(spawned.pid).catch(() => false);
-            throw new Error(`Daemon did not become ready within 3000ms (pid ${spawned.pid})`);
+            throw new Error(
+              `Daemon did not become ready within ${readinessBudget}ms (pid ${spawned.pid})`
+            );
           }
 
           recovered = await loadSession(recoverySession.id);
@@ -441,10 +470,25 @@ async function recoverDaemonAttachment(
  * without a transport policy) open a direct browser WebSocket.
  */
 export async function attachSession(
-  session: SessionData,
-  options: { trace?: boolean } = {},
+  savedSession: SessionData,
+  options: AttachOptions = {},
   allowRecovery = true
 ): Promise<AttachResult> {
+  let session = savedSession;
+  if (options.targetId && options.targetId !== session.targetId) {
+    session = {
+      ...session,
+      targetId: options.targetId,
+      daemon: session.daemon ? { ...session.daemon, cdpSessionId: undefined } : undefined,
+    };
+  }
+  if (options.policy === 'observe' && !session.targetId)
+    throw new Error('Observation borrowing requires an explicit existing target ID');
+  const pageOptions = {
+    targetId: session.targetId,
+    ...(options.policy === 'observe' ? { minViewport: false as const } : {}),
+    fallbackToBestTarget: false,
+  };
   const daemonDisabled = isDaemonDisabledByEnv();
   const daemonRequired = session.transport?.mode === 'daemon';
 
@@ -482,6 +526,8 @@ export async function attachSession(
         });
         closeDaemonClient = () => cdp.close();
         daemonClientIsConnected = () => cdp.isConnected;
+        if (session.provider === 'cloudflare')
+          await cdp.send('daemon.acquireLease', undefined, null, { timeout: 1000 });
 
         const { Browser: BrowserClass } = await import('../browser/browser.ts');
         const { Page: PageClass } = await import('../browser/page.ts');
@@ -511,19 +557,41 @@ export async function attachSession(
                   // another target is later attached on the shared client.
                   cdp.setSessionId(cdpSessionId);
                   const scoped = createSessionScopedCDP(cdp, cdpSessionId);
-                  const attachedPage = new PageClass(scoped, session.targetId!);
-                  await attachedPage.init();
-                  return attachedPage;
+                  const { nodeRecordingIo } = await import('../adapters/node/recording.ts');
+                  const attachedPage = new PageClass(scoped, session.targetId!, {
+                    recordingIo: nodeRecordingIo,
+                  });
+                  try {
+                    await attachedPage.init();
+                    return attachedPage;
+                  } catch (error) {
+                    attachedPage.dispose();
+                    if (
+                      error instanceof CDPError &&
+                      error.message.includes('Session with given id not found')
+                    ) {
+                      // The target was verified above. A stale flat attachment
+                      // can be replaced on this owner without changing tabs or
+                      // allocating/reconnecting the browser.
+                      return browser.page(undefined, pageOptions);
+                    }
+                    throw error;
+                  }
                 })()
               )
-            : addBatchToPage(await browser.page(undefined, { targetId: session.targetId }));
+            : addBatchToPage(await browser.page(undefined, pageOptions));
 
         // Hydrate ref map from session cache if URL matches
         const currentUrl = await page.url();
-        await applySessionEnvironment(page, currentUrl, session.metadata?.env);
+        if (options.policy !== 'observe')
+          await applySessionEnvironment(page, currentUrl, session.metadata?.env);
         const refCache = session.metadata?.refCache;
-        if (refCache && refCache.url === currentUrl) {
-          page.importRefMap(refCache.refMap);
+        if (
+          refCache &&
+          refCache.url === currentUrl &&
+          refCache.documentIdentity === (await page.documentIdentity())
+        ) {
+          page.importRefMap(refCache.refMap, refCache.semantics);
         }
 
         // `bp connect` starts the daemon before a target is selected, so the
@@ -533,6 +601,7 @@ export async function attachSession(
         const activeCdpSessionId = page.cdpClient.sessionId;
         let attachedSession = session;
         if (
+          options.persistBinding !== false &&
           activeCdpSessionId &&
           session.daemon &&
           session.daemon.cdpSessionId !== activeCdpSessionId
@@ -596,6 +665,7 @@ export async function attachSession(
       // provider handshake here would allocate another browser per command.
       provider: 'generic',
       wsUrl: session.wsUrl,
+      wsHeaders: resolveWsHeaders(session.wsBearerTokenEnv),
       debug: options.trace,
     });
   } catch {
@@ -607,17 +677,27 @@ export async function attachSession(
     );
   }
 
-  const page = addBatchToPage(await browser.page(undefined, { targetId: session.targetId }));
+  try {
+    const page = addBatchToPage(await browser.page(undefined, pageOptions));
 
-  // Hydrate ref map from session cache if URL matches
-  const currentUrl = await page.url();
-  await applySessionEnvironment(page, currentUrl, session.metadata?.env);
-  const refCache = session.metadata?.refCache;
-  if (refCache && refCache.url === currentUrl) {
-    page.importRefMap(refCache.refMap);
+    // Hydrate ref map from session cache if URL matches
+    const currentUrl = await page.url();
+    if (options.policy !== 'observe')
+      await applySessionEnvironment(page, currentUrl, session.metadata?.env);
+    const refCache = session.metadata?.refCache;
+    if (
+      refCache &&
+      refCache.url === currentUrl &&
+      refCache.documentIdentity === (await page.documentIdentity())
+    ) {
+      page.importRefMap(refCache.refMap, refCache.semantics);
+    }
+
+    return { session, browser, page, viaDaemon: false };
+  } catch (error) {
+    await browser.disconnect().catch(() => {});
+    throw error;
   }
-
-  return { session, browser, page, viaDaemon: false };
 }
 
 /** Canonical connection entry point for stored CLI sessions. */

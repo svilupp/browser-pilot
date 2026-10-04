@@ -16,7 +16,9 @@ test('browser-use is in ConnectOptions provider union', async () => {
 
 test('browser-use is in ProviderType union in session.ts', async () => {
   const content = await Bun.file('src/cli/session.ts').text();
-  expect(content).toContain("'browser-use'");
+  expect(content).toContain('ProviderId');
+  const { normalizeProviderSelector } = await import('../../src/providers/selector.ts');
+  expect(normalizeProviderSelector('browser-use').provider).toBe('browser-use');
 });
 
 test('createProvider handles browser-use case', async () => {

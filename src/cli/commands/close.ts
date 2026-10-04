@@ -6,7 +6,7 @@
  * session owns the last reference.
  */
 
-import { daemonControlMatches } from '../../daemon/control.ts';
+import { daemonControlMatches, stopDaemonForRecovery } from '../../daemon/control.ts';
 import { isDaemonAlive, stopDaemon } from '../../daemon/lifecycle.ts';
 import {
   countSessionReferences,
@@ -35,7 +35,7 @@ Global options:
   --debug              Enable CDP transport debugging
   -h, --help           Show this help
 
-Browserbase sessions are released through the API using BROWSERBASE_API_KEY.
+Browserbase and Cloudflare sessions are released through their provider API.
 Pending cleanup exits nonzero and keeps the local session for retry.
 Use --force to remove the local record without releasing the remote session
 (e.g. when BROWSERBASE_API_KEY is unavailable and the record is stuck).
@@ -72,8 +72,12 @@ function parseCloseArgs(args: string[]): { sessionArg?: string; force: boolean }
   for (const arg of args) {
     if (arg === '--force') {
       force = true;
+    } else if (arg.startsWith('-')) {
+      throw new Error(`Unknown close argument: ${arg}`);
     } else if (sessionArg === undefined) {
       sessionArg = arg;
+    } else {
+      throw new Error('close accepts only one session identifier');
     }
   }
   return { sessionArg, force };
@@ -112,7 +116,10 @@ export async function closeCommand(
     session.transport?.mode === 'daemon' &&
     !!session.transport.daemonId &&
     (await countSessionReferences(session.transport.daemonId)) > 1;
-  const forcedSkipRelease = force && !sharedDaemon && session.provider === 'browserbase';
+  const forcedSkipRelease =
+    force &&
+    !sharedDaemon &&
+    (session.provider === 'browserbase' || session.provider === 'cloudflare');
   const providerRelease =
     sharedDaemon || force ? undefined : await releaseBrowserbaseSession(session);
   if (providerRelease?.status === 'cleanup_pending') {
@@ -161,7 +168,18 @@ export async function closeCommand(
             `Refusing to signal PID ${daemonOwner.pid}: the daemon control socket did not prove ownership`
           );
         }
-        daemonStopped = await stopDaemon(daemonOwner.pid);
+        if (force && session.provider === 'cloudflare') {
+          await stopDaemonForRecovery({
+            pid: daemonOwner.pid,
+            socketPath: daemonOwner.socketPath,
+            ...(session.transport?.mode === 'daemon' && session.transport.daemonId
+              ? { daemonId: session.transport.daemonId }
+              : {}),
+            endpointFingerprint:
+              daemonDescriptor?.endpointFingerprint ?? endpointFingerprint(session.wsUrl),
+          });
+          daemonStopped = true;
+        } else daemonStopped = await stopDaemon(daemonOwner.pid);
       }
     } catch (error) {
       if (isDaemonAlive(daemonOwner.pid)) throw error;
@@ -199,8 +217,7 @@ export async function closeCommand(
       ...(providerRelease ? { providerRelease } : {}),
       ...(forcedSkipRelease
         ? {
-            warning:
-              'Browserbase session was not released; only the local record was removed (--force).',
+            warning: `${session.provider === 'cloudflare' ? 'Cloudflare' : 'Browserbase'} session was not released; only the local record was removed (--force).`,
           }
         : {}),
     },

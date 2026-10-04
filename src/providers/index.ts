@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 /**
  * Provider module exports
  */
@@ -48,5 +50,15 @@ const envSecrets: SecretsPort = { get: getEnv };
  * `browser-pilot/core` and pass an explicit SecretsPort.
  */
 export function createProvider(options: ConnectOptions, ports?: ProviderFactoryPorts): Provider {
-  return createProviderCore(options, { secrets: ports?.secrets ?? envSecrets });
+  return createProviderCore(options, {
+    secrets: ports?.secrets ?? envSecrets,
+    idGenerator: ports?.idGenerator ?? randomUUID,
+  });
 }
+
+export { CloudflareProvider, type CloudflareProviderOptions } from './cloudflare.ts';
+export {
+  assertProviderConstraint,
+  type NormalizedProviderSelector,
+  normalizeProviderSelector,
+} from './selector.ts';

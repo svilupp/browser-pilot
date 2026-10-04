@@ -7,9 +7,13 @@
  * messages are sanitized so a wsUrl can never leak to shell output.
  */
 
+import type { Step } from '../actions/types.ts';
+import { validateSteps } from '../actions/validate.ts';
 import type { ActionOptions, ActionReceipt, DispatchState } from '../browser/types.ts';
+import { normalizeProviderSelector } from '../providers/selector.ts';
 import type { ProviderReleaseResult } from '../providers/types.ts';
 import { intFlag, type ParsedArgs, parseArgs } from './args.ts';
+import { projectBorrowedBrowser } from './default-connect.ts';
 import { helpText } from './help.ts';
 import { CapabilityError, type ExecutionContext, type SessionHandle } from './ports.ts';
 import {
@@ -33,7 +37,15 @@ export interface BpIo {
 
 const DEFAULT_MAX_OUTPUT_BYTES = 1_048_576;
 const DEFAULT_MAX_ARTIFACT_BYTES = 10_485_760;
-const PROVIDERS = ['browserbase', 'browserless', 'browser-use', 'generic'] as const;
+const PROVIDERS = [
+  'browserbase',
+  'browserless',
+  'browser-use',
+  'generic',
+  'cloudflare',
+  'cloudflare:chromium',
+  'cloudflare:kitesurf',
+] as const;
 
 const FLAGS = [
   '--handle-file',
@@ -132,6 +144,12 @@ function releaseJson(released: ProviderReleaseResult): string {
   return jsonLine({
     status: released.status,
     sessionId: sanitize(released.sessionId),
+    ...(released.localTerminated === undefined
+      ? {}
+      : { localTerminated: released.localTerminated }),
+    ...(released.allocationId === undefined
+      ? {}
+      : { allocationId: sanitize(released.allocationId) }),
     ...(released.providerStatus !== undefined
       ? { providerStatus: sanitize(released.providerStatus) }
       : {}),
@@ -243,25 +261,24 @@ async function withBrowser<T>(
   fn: (browser: BpBrowser, page: () => Promise<BpPage>) => Promise<T>,
   completion: 'check' | 'preserve-receipt' = 'check'
 ): Promise<T> {
-  let wsUrl: string;
-  try {
-    ({ wsUrl } = await ports.sessionOwner.resolve(handle, ctx));
-  } catch (error) {
-    // A host resolver may take long enough for the command to expire. Report
-    // the admission failure rather than proceeding with a later connection or
-    // action based on an already-expired context.
-    checkContext(ctx, handle);
-    throw toBpError(error, 'resolve_failed', 'Session resolve failed');
-  }
-  checkContext(ctx, handle);
-
   let browser: BpBrowser;
   try {
-    browser = await connect(wsUrl, ctx);
+    if ('acquire' in ports.sessionOwner) {
+      const lease = await ports.sessionOwner.acquire(handle, ctx);
+      browser = projectBorrowedBrowser(lease.browser, () => lease.detach());
+    } else {
+      const { wsUrl } = await ports.sessionOwner.resolve(handle, ctx).catch((error: unknown) => {
+        checkContext(ctx, handle);
+        throw toBpError(error, 'resolve_failed', 'Session resolve failed');
+      });
+      checkContext(ctx, handle);
+      browser = await connect(wsUrl, ctx);
+    }
   } catch (error) {
     checkContext(ctx, handle);
-    throw toBpError(error, 'connect_failed', 'Browser connect failed');
+    throw toBpError(error, 'connect_failed', 'Browser acquisition failed');
   }
+
   try {
     // Custom connect functions are extension points and may not inspect the
     // context themselves, so admit the connected browser before any lookup.
@@ -538,9 +555,70 @@ async function dispatch(
   const caps = ports.capabilities;
 
   switch (command) {
+    case 'run': {
+      requireCapability(caps, 'read');
+      requireCapability(caps, 'action');
+      requireCapability(caps, 'evaluate');
+      const handle = await handleFromArgs(parsed, positionals, io);
+      const input = parsed.flags.get('--input') ?? positionals.shift() ?? '-';
+      if (positionals.length) usageError('Usage: bp run <handle> [JSON|--input JSON|-]');
+      let steps: unknown;
+      try {
+        steps = JSON.parse(input === '-' ? io.stdin : input);
+      } catch {
+        usageError('run requires a JSON array of steps');
+      }
+      if (!Array.isArray(steps) || !validateSteps(steps).valid)
+        usageError('run requires valid action steps');
+      const allowed = new Set([
+        'goto',
+        'click',
+        'fill',
+        'type',
+        'select',
+        'check',
+        'uncheck',
+        'press',
+        'wait',
+        'switchFrame',
+        'switchToMain',
+        'evaluate',
+        'text',
+      ]);
+      if (steps.some((step) => !allowed.has(step.action)))
+        usageError(
+          'run supports page actions, frame selection and evaluation; use screenshot for byte-safe artifacts'
+        );
+      const ctx = ports.createContext();
+      checkContext(ctx, handle);
+      const result = await withBrowser(
+        ports,
+        connect,
+        handle,
+        ctx,
+        targetFromArgs(parsed),
+        async (_browser, getPage) => {
+          const page = await getPage();
+          if (!page.batch)
+            throw new CapabilityError('batch', 'Host page projection does not support run');
+          return page.batch(steps as Step[]);
+        }
+      );
+      return {
+        stdout: jsonLine(result),
+        stderr: '',
+        exitCode: result.success ? EXIT.ok : EXIT.runtime,
+      };
+    }
     case 'session open': {
       requireCapability(caps, 'read');
+      if (positionals.length) usageError('session open does not accept positional arguments');
       const provider = parsed.flags.get('--provider') ?? 'browserbase';
+      try {
+        normalizeProviderSelector(provider);
+      } catch {
+        usageError(`--provider must be one of: ${PROVIDERS.join(', ')}.`);
+      }
       if (!(PROVIDERS as readonly string[]).includes(provider)) {
         usageError(`--provider must be one of: ${PROVIDERS.join(', ')}.`);
       }
@@ -590,7 +668,10 @@ async function dispatch(
       const handle = await handleFromArgs(parsed, positionals, io);
       const ctx = ports.createContext();
       checkContext(ctx, handle);
-      const touch = ports.sessionOwner.touch?.bind(ports.sessionOwner);
+      const touch =
+        'touch' in ports.sessionOwner
+          ? ports.sessionOwner.touch?.bind(ports.sessionOwner)
+          : undefined;
       if (!touch) {
         throw new BpError('unsupported', 'This host does not support session touch.', EXIT.runtime);
       }

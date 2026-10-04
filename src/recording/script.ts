@@ -25,12 +25,18 @@ export const RECORDER_BINDING_NAME = '__recorder';
  */
 
 import { SENSITIVE_AUTOCOMPLETE_TOKENS } from './redaction.ts';
-export const RECORDER_SCRIPT = `(function() {
-  // Guard against multiple installations
-  if (window.__recorderInstalled) return;
-  window.__recorderInstalled = true;
+export function createRecorderScript(bindingName: string, ownerId: string, maxIdleMs = 0): string {
+  return `(function() {
+  const owner=${JSON.stringify(ownerId)}, BINDING_NAME=${JSON.stringify(bindingName)};
+  window.__bpRecorders=window.__bpRecorders || {};
+  if(window.__bpRecorders[owner])return;
+  let active=true;const listeners=[];
+  let leaseTimer;window.__bpRecorderLeases=window.__bpRecorderLeases || {};
+  window.__bpRecorderLeases[owner]=Date.now();
+  if(${JSON.stringify(maxIdleMs)}>0)leaseTimer=setInterval(()=>{if(Date.now()-window.__bpRecorderLeases?.[owner]>${JSON.stringify(maxIdleMs)}){window.__bpTraceHub?.release(owner);window.__bpRecorders?.[owner]?.();}},500);
 
-  const BINDING_NAME = '__recorder';
+  const listen=(event,handler,capture)=>{window.addEventListener(event,handler,capture);listeners.push([event,handler,capture]);};
+  window.__bpRecorders[owner]=()=>{active=false;clearInterval(leaseTimer);delete window.__bpRecorderLeases[owner];if(!Object.keys(window.__bpRecorderLeases).length)delete window.__bpRecorderLeases;for(const [event,handler,capture] of listeners)window.removeEventListener(event,handler,capture);delete window.__bpRecorders[owner];if(!Object.keys(window.__bpRecorders).length)delete window.__bpRecorders;};
 
   // Safe JSON stringify
   function safeJson(obj) {
@@ -43,6 +49,7 @@ export const RECORDER_SCRIPT = `(function() {
 
   // Send event to CDP client via binding
   function sendEvent(payload) {
+    if(!active)return;
     try {
       if (typeof window[BINDING_NAME] === 'function') {
         window[BINDING_NAME](safeJson(payload));
@@ -131,6 +138,7 @@ export const RECORDER_SCRIPT = `(function() {
 
   // Generate selector candidates ordered by quality
   function getSelectorCandidates(el) {
+    if(el.closest('[data-private],[data-bp-private],[data-revlet-private]'))return [];
     const candidates = [];
 
     // Get semantic info for role-based selectors
@@ -310,12 +318,15 @@ export const RECORDER_SCRIPT = `(function() {
   // Get element summary for debugging
   function getElementSummary(el) {
     if (!el || el.nodeType !== 1) return null;
+    if(el.closest('[data-private],[data-bp-private],[data-revlet-private]'))return {tag:el.tagName.toLowerCase(),id:null,name:null,type:null,role:null,ariaLabel:null,testid:null,text:null,private:true};
+    if (!el || el.nodeType !== 1) return null;
     const text = (el.innerText || '').trim().replace(/\\s+/g, ' ').slice(0, 120);
     return {
       tag: el.tagName.toLowerCase(),
       id: el.id || null,
       name: el.getAttribute('name') || null,
       type: el.getAttribute('type') || null,
+      autocomplete: el.getAttribute('autocomplete') || undefined,
       role: el.getAttribute('role') || null,
       ariaLabel: el.getAttribute('aria-label') || null,
       testid: el.getAttribute('data-testid') || null,
@@ -367,6 +378,7 @@ export const RECORDER_SCRIPT = `(function() {
 
   // Get input value, redacting sensitive fields
   function getInputValue(el) {
+    if(el.closest('[data-private],[data-bp-private],[data-revlet-private]'))return '[REDACTED]';
     if (isSensitiveValueField(el)) return '[REDACTED]';
     if (el.value !== undefined) return el.value;
     if (el.isContentEditable) return el.textContent || '';
@@ -377,9 +389,9 @@ export const RECORDER_SCRIPT = `(function() {
   function now() { return Date.now(); }
 
   // Click handler
-  window.addEventListener('click', function(ev) {
+  listen('click', function(ev) {
     const rawTarget = getEventTarget(ev);
-    if (!rawTarget) return;
+    if (!rawTarget || rawTarget.closest?.('[data-bp-record-ignore]')) return;
 
     // Bubble up to clickable ancestor for better selectors
     const el = findClickableAncestor(rawTarget);
@@ -395,9 +407,9 @@ export const RECORDER_SCRIPT = `(function() {
   }, true);
 
   // Double click handler
-  window.addEventListener('dblclick', function(ev) {
+  listen('dblclick', function(ev) {
     const rawTarget = getEventTarget(ev);
-    if (!rawTarget) return;
+    if (!rawTarget || rawTarget.closest?.('[data-bp-record-ignore]')) return;
 
     const el = findClickableAncestor(rawTarget);
 
@@ -412,7 +424,7 @@ export const RECORDER_SCRIPT = `(function() {
   }, true);
 
   // Input handler (for text inputs, textareas, contenteditable)
-  window.addEventListener('input', function(ev) {
+  listen('input', function(ev) {
     const el = getEventTarget(ev);
     if (!el) return;
 
@@ -431,7 +443,7 @@ export const RECORDER_SCRIPT = `(function() {
   }, true);
 
   // Change handler (for select, checkbox, radio)
-  window.addEventListener('change', function(ev) {
+  listen('change', function(ev) {
     const el = getEventTarget(ev);
     if (!el) return;
 
@@ -451,7 +463,7 @@ export const RECORDER_SCRIPT = `(function() {
   }, true);
 
   // Keydown handler (capture Enter for form submission)
-  window.addEventListener('keydown', function(ev) {
+  listen('keydown', function(ev) {
     if (ev.key !== 'Enter') return;
 
     const el = getEventTarget(ev);
@@ -467,7 +479,7 @@ export const RECORDER_SCRIPT = `(function() {
   }, true);
 
   // Submit handler
-  window.addEventListener('submit', function(ev) {
+  listen('submit', function(ev) {
     const el = getEventTarget(ev);
 
     sendEvent({
@@ -478,4 +490,10 @@ export const RECORDER_SCRIPT = `(function() {
       selectors: el ? getSelectorCandidates(el) : []
     });
   }, true);
+  sendEvent({ready:true});
 })();`;
+}
+export const RECORDER_SCRIPT = createRecorderScript(RECORDER_BINDING_NAME, 'legacy');
+export function recorderCleanupScript(ownerId: string): string {
+  return `window.__bpRecorders?.[${JSON.stringify(ownerId)}]?.()`;
+}

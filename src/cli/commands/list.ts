@@ -151,7 +151,23 @@ export async function listCommand(
       const stats = logger.getLogStats();
 
       if (globalOptions.format === 'json') {
-        output({ session, logStats: stats }, 'json');
+        output(
+          {
+            session,
+            logStats: stats,
+            lifecycle: {
+              provider: session.provider,
+              engine: session.metadata?.['detectedEngine'],
+              allocationId: session.providerSessionId,
+              browserGeneration: session.metadata?.['browserGeneration'],
+              ownership: session.metadata?.['ownership'],
+              bootstrapState: session.bootstrapState,
+              ownerAvailable: session.daemon ? isDaemonAlive(session.daemon.pid) : undefined,
+              capabilities: { lifecycle: 'unknown', interaction: 'unknown' },
+            },
+          },
+          'json'
+        );
         return;
       }
 

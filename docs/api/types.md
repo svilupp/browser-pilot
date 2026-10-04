@@ -1,15 +1,40 @@
 # Types Reference
 
-Complete TypeScript type definitions for browser-pilot.
+Selected public TypeScript contracts. The exported types and API report are the authoritative full surface.
 
 ## Connection Types
 
 ```typescript
-interface ConnectOptions {
-  provider: 'browserbase' | 'browserless' | 'browser-use' | 'generic';
+type ProviderId = 'browserbase' | 'browserless' | 'browser-use' | 'generic' | 'cloudflare';
+type ProviderSelector = ProviderId | 'cloudflare:chromium' | 'cloudflare:kitesurf';
+
+interface CloudflareChromiumOptions {
+  accountId?: string;
+  keepAliveMs?: number; // Integer: 10000–1200000 milliseconds.
+  lab?: boolean;
+  recording?: boolean;
+  providerSessionId?: string;
+  takeOwnership?: boolean; // Existing allocation is borrowed unless true.
+}
+interface CloudflareKitesurfOptions {
+  accountId?: string;
+  keepAliveMs?: never;
+  lab?: never;
+  recording?: never;
+  providerSessionId?: never;
+  takeOwnership?: never;
+}
+type ProviderSelection =
+  | { provider: 'cloudflare:kitesurf'; cloudflare?: CloudflareKitesurfOptions }
+  | { provider: Exclude<ProviderSelector, 'cloudflare:kitesurf'>; cloudflare?: CloudflareChromiumOptions };
+type ConnectOptions = Omit<ConnectOptionsBase, 'provider'> & ProviderSelection;
+
+interface ConnectOptionsBase {
+  provider: ProviderSelector;
   apiKey?: string;
   projectId?: string;
   wsUrl?: string;
+  wsHeaders?: Record<string, string>;
   channel?: 'stable' | 'beta' | 'dev' | 'canary';
   userDataDir?: string;
   session?: CreateSessionOptions;
@@ -18,8 +43,11 @@ interface ConnectOptions {
   proxyCountryCode?: string | null;
   profileId?: string;
   cloudTimeout?: number;
-  providerSession?: ProviderSession; // Trusted in-process session; URL may contain credentials.
+  providerSession?: ProviderSession; // Trusted injection; never serialize credentials.
 }
+
+// BrowserOptions additionally accepts signal?: AbortSignal, SecretsPort,
+// TransportFactory, idGenerator, recordingIo and localEndpointResolver.
 
 interface CreateSessionOptions {
   width?: number;
@@ -45,16 +73,24 @@ interface Provider {
   resumeSession?(sessionId: string): Promise<ProviderSession>;
 }
 
+type ProviderConnection =
+  | { kind: 'url'; url: string; headers?: Record<string, string> }
+  | { kind: 'opener'; open: TransportFactory };
+
 interface ProviderSession {
   wsUrl: string;
+  connection?: ProviderConnection; // Ephemeral authenticated URL or opener.
+  lifecycle?: { reconnectable: boolean; ownership: 'owned' | 'borrowed' };
   sessionId?: string;
   metadata?: Record<string, unknown>;
   close(): Promise<void | ProviderReleaseResult>;
 }
 
 interface ProviderReleaseResult {
-  status: 'released' | 'cleanup_pending' | 'already_released';
+  status: 'released' | 'cleanup_pending' | 'already_released' | 'detached' | 'terminated';
   sessionId: string;
+  localTerminated?: boolean;
+  allocationId?: string;
   providerStatus?: string;
   error?: string;
 }

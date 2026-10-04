@@ -11,6 +11,8 @@ import type { CDPErrorData } from '../cdp/protocol.ts';
 export interface DaemonRequest {
   /** Unique request ID for correlation */
   id: number;
+  /** Local-host IPC envelope; never forwarded to the browser. */
+  ipcBudget?: { timeoutMs: number; sentAt: number };
   /** CDP method to execute */
   method: string;
   /** CDP params */

@@ -152,3 +152,6 @@ tests/screenshots/
 # Cookie snapshot auth (docs/guides/auth-cookies.md) - never commit
 *.cookies.json
 .browser-pilot-auth/
+
+# Live Cloudflare learning artifacts (screenshots, traces, checkout state)
+artifacts/cf-learning/

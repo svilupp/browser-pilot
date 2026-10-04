@@ -30,7 +30,14 @@ export {
   isLegacyRecordingManifest,
   validateRecordingManifest,
 } from './manifest.ts';
-export type { ListenMode, RecorderListenOptions, RecorderOptions } from './recorder.ts';
+export type {
+  ListenMode,
+  RecorderCaptureStatus,
+  RecorderEventContext,
+  RecorderListenOptions,
+  RecorderMarker,
+  RecorderOptions,
+} from './recorder.ts';
 // Export Recorder class and options
 export { Recorder } from './recorder.ts';
 // Export recorder script

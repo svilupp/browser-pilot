@@ -3,13 +3,13 @@
 Lightweight CDP-based browser automation for AI agents.
 
 For simple, reusable, low-cost automation on top of browser-pilot, use the companion
-[Flightplan](https://github.com/svilupp/flightplan) package when it is released:
+[Flightplan](https://github.com/svilupp/flightplan) package:
 `bunx flightplan --help`.
 
 ## Quick Links
 
 - [Getting Started](./getting-started.md) - Installation and first steps
-- [Providers](./providers.md) - Browser Use, BrowserBase, Browserless, and local Chrome
+- [Providers](./providers.md) - Cloudflare, Browser Use, BrowserBase, Browserless, and local Chrome
 - [CLI Reference](./cli.md) - Command-line interface
 
 ## Command chooser
@@ -27,7 +27,7 @@ For simple, reusable, low-cost automation on top of browser-pilot, use the compa
 - [Multi-Selector](./guides/multi-selector.md) - Build resilient automations with fallback selectors
 - [Batch Actions](./guides/batch-actions.md) - Execute action sequences efficiently
 - [Snapshots](./guides/snapshots.md) - AI-optimized page state extraction
-- [Cloudflare Workers](./guides/cloudflare-workers.md) - Deploy to the edge
+- [Cloudflare Workers](./guides/cloudflare-workers.md) - Portable host adapters and local workerd validation
 - [WebMCP](./guides/webmcp.md) - Discover and invoke page-provided tools
 
 ## API Reference

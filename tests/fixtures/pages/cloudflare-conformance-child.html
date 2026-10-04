@@ -1,0 +1,3 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><title>Child fixture v1</title>
+<h1 id="identity">Child fixture v1</h1><label>Child value <input id="value" value="child"></label>
+<script>document.querySelector('#value').addEventListener('input',event=>parent.postMessage({value:event.target.value},'*'));</script></html>

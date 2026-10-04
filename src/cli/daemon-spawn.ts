@@ -69,6 +69,11 @@ export async function waitForDaemonReady(
 
   while (Date.now() < deadline) {
     try {
+      process.kill(expectedPid, 0);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ESRCH') return false;
+    }
+    try {
       const raw = fs.readFileSync(sessionFilePath, 'utf-8');
       const parsed: unknown = JSON.parse(raw);
       if (!isRecord(parsed)) continue;

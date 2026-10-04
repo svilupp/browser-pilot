@@ -1,11 +1,10 @@
 # browser-pilot
 
 Automation-first browser control over Chrome DevTools Protocol for AI agents.
-Supports Node.js, Bun, and Cloudflare Workers with zero production dependencies.
+Supports Node.js, Bun, and Cloudflare Workers with no mandatory production dependencies. Node authenticated WebSockets use the optional `ws` peer.
 
 > Companion package: [Flightplan](https://github.com/svilupp/flightplan) provides simple,
-> reusable, cheap automation on top of browser-pilot. It will be released immediately after
-> browser-pilot. Start with `bunx flightplan --help` for the higher-level interface.
+> reusable automation on top of browser-pilot. Start with `bunx flightplan --help` for the higher-level interface.
 
 ## Install
 
@@ -68,6 +67,33 @@ Native `select` can emit a synthetic untrusted `change` event before the final e
 reject untrusted events may observe an intermediate rejected event; the final selection is correct.
 
 ## Library quick start
+
+Cloudflare Chromium from Node (Node 18, 22 and 24):
+
+```sh
+npm install browser-pilot ws
+# Set CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN in the trusted host.
+```
+
+```ts
+import { connect } from 'browser-pilot';
+const browser = await connect({ provider: 'cloudflare' });
+try {
+  const page = await browser.page();
+  await page.goto('https://example.com');
+  console.log(await page.title());
+} finally {
+  const cleanup = await browser.close();
+  // cleanup_pending retains the allocation ID for an explicit retry.
+}
+```
+
+`cloudflare:chromium` is explicit Chromium; `cloudflare:kitesurf` is opt-in and
+experimental. The latter is connection-bound: a lost owner returns
+`SESSION_LOST`, never a replacement browser. Imported Node use needs no Bun or
+daemon. The CLI keeps a daemon owner for named Cloudflare sessions.
+See the [Workers guide](docs/guides/cloudflare-workers.md) and
+[validation report](docs/cloudflare-validation.md) for runtime and live gates.
 
 Hosted browser:
 

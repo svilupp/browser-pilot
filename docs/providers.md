@@ -418,7 +418,7 @@ All providers support these common options:
 
 ```typescript
 interface ConnectOptions {
-  provider: 'browserbase' | 'browserless' | 'browser-use' | 'generic';
+  provider: 'browserbase' | 'browserless' | 'browser-use' | 'generic' | 'cloudflare' | 'cloudflare:chromium' | 'cloudflare:kitesurf';
   apiKey?: string;
   wsUrl?: string;
   channel?: 'stable' | 'beta' | 'dev' | 'canary';
@@ -475,3 +475,47 @@ For extra HTTP headers, prefer the first-class `page.setExtraHTTPHeaders()` over
 `cdp.send('Network.setExtraHTTPHeaders', ...)` directly — see
 [Page API](./api/page.md#setextrahttpheadersheaders). It's the same underlying CDP call,
 just documented, and it's what `bp connect --cf-access` / `bp env auth set-headers` build on.
+
+## Cloudflare Browser Run
+
+First-party selectors are `cloudflare`, `cloudflare:chromium` and
+`cloudflare:kitesurf`. The default is Chromium. Export `CLOUDFLARE_ACCOUNT_ID`
+and `CLOUDFLARE_API_TOKEN` (or the paired aliases `CF_ACCOUNT_ID` / `CF_API_KEY`);
+never store literal tokens in workflow files.
+
+Use an API token with `Browser Rendering - Edit` permission. Account tokens
+(`cfat_` format) are supported; verify them through
+`/accounts/{account_id}/tokens/verify`, rather than `/user/tokens/verify`.
+The `CF_ACCESS_CLIENT_ID` / `CF_ACCESS_CLIENT_SECRET` service-token pair is used
+only for `--cf-access` on a protected target site, not for Browser Run allocation.
+
+```sh
+bun run dev:bp connect --provider cloudflare:chromium --name cf-shop
+bun run dev:bp exec -s cf-shop '{"action":"goto","url":"https://example.com"}'
+bun run dev:bp close -s cf-shop
+```
+
+Chromium owns an HTTP allocation, reconnects only to that same allocation, and
+reports provider cleanup separately from socket detachment. Kitesurf uses a
+connection-bound launch; loss reports `SESSION_LOST` rather than allocating a
+replacement. Unsupported Kitesurf keep-alive/recording/lab options fail before
+launch. A generic authenticated endpoint remains available, but does not confer
+provider ownership or HTTP allocation cleanup.
+
+Live validation currently passes Chromium frame workflows. Kitesurf parent
+input, SPA and PNG checks pass, but child frame selection fails against the
+current backend. Use Chromium when the workflow requires iframe interaction.
+
+Node authenticated WebSockets use the optional `ws` peer; Bun has a native
+header-capable adapter. Workers hosts inject the Workers transport/binding and
+secret/session ports through `browser-pilot/core`; they do not use the CLI daemon.
+Native Bun has a reproducible compressed-socket failure in an opt-in diagnostic;
+maintained Node transport passes that scenario. See the
+[validation report](./cloudflare-validation.md) for verified hosts and open gates.
+
+Flightplan accepts `[config.connect] mode = "hosted"` with these selectors, or
+`mode = "session"` with a host-resolved `session_ref` and explicit target policy.
+Borrowed teardown detaches its lease; the host retains allocation ownership.
+See [Flightplan hosted/session guidance](https://github.com/svilupp/flightplan/blob/main/docs/cloudflare-hosted.md).
+Live provider and order-confirmation gates remain separate from local fixtures;
+the [validation report](./cloudflare-validation.md) records verified support limits.

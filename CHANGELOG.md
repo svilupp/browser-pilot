@@ -1,5 +1,39 @@
 # Changelog
 
+## [0.7.0] - 2026-10-04
+
+### Added
+
+- Named observation connection discovery and optional recorder page-side heartbeat
+  leases for clients that must remove instrumentation after a supervisor crash.
+- Read-only named-session observation handles borrow an exact local target without
+  switching tabs, changing the viewport, rewriting owner files or closing the owner.
+- Metadata recording policies exclude field values, URL credentials/queries,
+  console and WebSocket payloads; screenshot capture can be disabled explicitly.
+- Recording time/byte bounds retain explicit complete/partial status and stop reasons.
+- Canonical recording manifests retain comment markers, timing, privacy and coverage
+  metadata; readiness reports distinguish candidate workflows from safe replay.
+
+- Cloudflare Browser Run support for creating, resuming and releasing Chromium
+  sessions, plus experimental Kitesurf connections.
+- Authenticated WebSocket connections across Node.js, Bun and Cloudflare Workers,
+  including Workers browser bindings.
+- Background recording with status, stop and marker commands, configurable
+  screenshots and capture limits, and support for appending recording segments.
+- Portable recording bundles and self-contained JSON exports with screenshots,
+  plus readiness reports highlighting missing inputs and unresolved steps.
+
+### Fixed
+
+- Select existing tabs by exact target identity, including duplicate-URL tabs and
+  daemon-owned sessions; failed selection never silently retargets another tab.
+- Remove only owned recorder listeners, frame hooks and trace sinks on stop/restart
+  or heartbeat expiration; preserve independently owned tracing.
+- Drain in-flight HTTP events within a bounded stop window, retaining unfinished
+  requests as partial evidence and collecting frames without duplicate handlers.
+- More reliable cross-origin frames and session recovery; Enter now submits forms
+  and inserts textarea newlines correctly.
+
 ## [0.6.0] - 2026-09-16
 
 ### Fixed

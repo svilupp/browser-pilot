@@ -7,11 +7,14 @@
  */
 
 import type { CDPClient } from '../cdp/client.ts';
+import { PageScript } from '../cdp/page-script.ts';
+import { createExecutionId } from '../runtime/id.ts';
 import { type CanonicalTraceEvent, createTraceId, normalizeTraceEvent } from '../trace/model.ts';
-import { TRACE_BINDING_NAME, TRACE_SCRIPT } from '../trace/script.ts';
+import { createTraceScript, traceCleanupScript } from '../trace/script.ts';
 import { formatConsoleArg, globToRegex, readString, readStringOr } from '../utils/strings.ts';
 import { aggregateEvents } from './aggregator.ts';
-import { RECORDER_BINDING_NAME, RECORDER_SCRIPT } from './script.ts';
+import { REDACTED_VALUE, redactRecordingURL, redactValueForRecording } from './redaction.ts';
+import { createRecorderScript, recorderCleanupScript } from './script.ts';
 import type {
   FullRecordingOutput,
   RawRecordedEvent,
@@ -34,11 +37,40 @@ export interface RecorderListenOptions {
 }
 
 /** Options for creating a Recorder. */
+export interface RecorderEventContext {
+  sequence: number;
+  signal: AbortSignal;
+}
+export interface RecorderMarker {
+  label: string;
+  sequence: number;
+  elapsedMs: number;
+  at: string;
+}
+export interface RecorderCaptureStatus {
+  scheduled: number;
+  completed: number;
+  failed: number;
+  skipped: number;
+  pending: number;
+  drainTimedOut: boolean;
+  cleanupErrors: string[];
+}
 export interface RecorderOptions {
+  /** Optional page-side fail-safe lease; call heartbeat() before this interval expires. */
+  maxIdleMs?: number;
+  /** Deadline for pending event/screenshot callbacks at stop (default 5 seconds). */
+  drainTimeoutMs?: number;
+  /** Bound retained DOM/runtime evidence, excluding host-owned image bytes. */
+  maxBytes?: number;
+  /** Metadata omits all field values, request bodies/headers, console arguments and WS contents. */
+  privacy?: 'standard' | 'metadata';
+  /** Current-document capture never registers future-document injection. */
+  navigation?: 'all' | 'current-document';
   /** Enable network traffic capture alongside DOM recording. */
   listen?: boolean | RecorderListenOptions;
   /** Called after each captured event. Use for live screenshot capture. */
-  onEvent?: (event: RawRecordedEvent) => void | Promise<void>;
+  onEvent?: (event: RawRecordedEvent, context: RecorderEventContext) => void | Promise<void>;
 }
 
 /**
@@ -54,6 +86,27 @@ export interface RecorderOptions {
  * ```
  */
 export class Recorder {
+  readonly id = createExecutionId('recording');
+  readonly bindingName = `__recorder_${this.id.replace(/[^a-zA-Z0-9_]/g, '_')}`;
+  private readonly traceBinding = `__bpTrace_${this.id.replace(/[^a-zA-Z0-9_]/g, '_')}`;
+  private scripts: PageScript[] = [];
+  private pendingEvents = new Set<Promise<void>>();
+  private eventTail: Promise<void> = Promise.resolve();
+  private abort = new AbortController();
+  private capture: RecorderCaptureStatus = {
+    scheduled: 0,
+    completed: 0,
+    failed: 0,
+    skipped: 0,
+    pending: 0,
+    drainTimedOut: false,
+    cleanupErrors: [],
+  };
+  private stopping?: Promise<FullRecordingOutput>;
+  private state: 'idle' | 'starting' | 'ready' | 'stopping' | 'complete' | 'failed' = 'idle';
+  private monoStart = 0;
+  private retainedBytes = 0;
+  private limited = false;
   private cdp: CDPClient;
   private options: RecorderOptions;
   private events: RawRecordedEvent[] = [];
@@ -101,120 +154,156 @@ export class Recorder {
    * the current page and all future navigations.
    */
   async start(): Promise<void> {
-    if (this.recording) {
+    if (this.recording || this.state === 'stopping') {
       throw new Error('Recording already in progress');
     }
 
+    this.retainedBytes = 0;
+    this.limited = false;
+    this.state = 'starting';
+    this.stopping = undefined;
+    this.abort = new AbortController();
+    this.pendingEvents = new Set();
+    this.eventTail = Promise.resolve();
+    this.capture = {
+      scheduled: 0,
+      completed: 0,
+      failed: 0,
+      skipped: 0,
+      pending: 0,
+      drainTimedOut: false,
+      cleanupErrors: [],
+    };
+    this.networkRequests = [];
+    this.networkResponses = [];
+    this.wsEvents = [];
+    this.wsFrames = [];
+    this.wsUrls.clear();
+    this.httpUrls.clear();
+    this.pendingBodies = [];
+    this.listenOpts = null;
+    this.monoStart = performance.now();
     this.events = [];
     this.traceEvents = [];
     this.startTime = Date.now();
     this.recording = true;
 
-    // Enable required CDP domains
-    await this.cdp.send('Runtime.enable');
-    await this.cdp.send('Page.enable');
-
-    // Get current URL for start state
     try {
-      const result = await this.cdp.send<{ result: { value: string } }>('Runtime.evaluate', {
-        expression: 'location.href',
-        returnByValue: true,
+      // Enable required CDP domains
+      await this.cdp.send('Runtime.enable');
+      await this.cdp.send('Page.enable');
+
+      // Get current URL for start state
+      try {
+        const result = await this.cdp.send<{ result: { value: string } }>('Runtime.evaluate', {
+          expression: 'location.href',
+          returnByValue: true,
+        });
+        this.startUrl = this.cleanURL(result.result.value);
+      } catch {
+        this.startUrl = '';
+      }
+
+      // Listen for binding calls
+      this.bindingHandler = (params: Record<string, unknown>) => {
+        const payload = readString(params['payload']);
+        if (!payload) {
+          return;
+        }
+
+        if (params['name'] === this.bindingName) {
+          this.handleBindingCall(payload);
+        } else if (params['name'] === this.traceBinding) {
+          this.handleTraceBindingCall(payload);
+        }
+      };
+      this.cdp.on('Runtime.bindingCalled', this.bindingHandler);
+      const future = this.options.navigation !== 'current-document';
+      this.scripts = [
+        new PageScript(
+          this.cdp,
+          this.bindingName,
+          createRecorderScript(this.bindingName, this.id, this.options.maxIdleMs),
+          recorderCleanupScript(this.id),
+          future
+        ),
+        new PageScript(
+          this.cdp,
+          this.traceBinding,
+          createTraceScript(this.traceBinding, this.id),
+          traceCleanupScript(this.id),
+          future
+        ),
+      ];
+      for (const script of this.scripts) await script.install();
+
+      this.subscribeTrace('Runtime.consoleAPICalled', (params) => {
+        const type = readStringOr(params['type'], 'log');
+        if (type !== 'log' && type !== 'warn' && type !== 'error') {
+          return;
+        }
+
+        const args = Array.isArray(params['args'])
+          ? (params['args'] as Array<Record<string, unknown>>)
+          : [];
+        const text =
+          this.options.privacy === 'metadata'
+            ? '[console arguments omitted]'
+            : args.map(formatConsoleArg).filter(Boolean).join(' ').slice(0, 4096);
+
+        this.appendTrace(
+          normalizeTraceEvent({
+            traceId: createTraceId('console'),
+            sessionId: '',
+            ts: new Date().toISOString(),
+            elapsedMs: this.elapsed(),
+            channel: 'console',
+            event: `console.${type}`,
+            severity: type === 'error' ? 'error' : type === 'warn' ? 'warn' : 'info',
+            summary: text || `console.${type}`,
+            data: this.options.privacy === 'metadata' ? {} : { args },
+            url: this.startUrl,
+          })
+        );
       });
-      this.startUrl = result.result.value;
-    } catch {
-      this.startUrl = '';
-    }
 
-    // Add binding for recorder callback
-    await this.cdp.send('Runtime.addBinding', { name: RECORDER_BINDING_NAME });
-    await this.cdp.send('Runtime.addBinding', { name: TRACE_BINDING_NAME });
+      this.subscribeTrace('Runtime.exceptionThrown', (params) => {
+        const details = (params['exceptionDetails'] ?? {}) as Record<string, unknown>;
+        this.appendTrace(
+          normalizeTraceEvent({
+            traceId: createTraceId('runtime'),
+            ts: new Date().toISOString(),
+            elapsedMs: this.elapsed(),
+            channel: 'runtime',
+            event: 'runtime.exception',
+            severity: 'error',
+            summary:
+              this.options.privacy === 'metadata'
+                ? 'Runtime exception'
+                : (readString(details['text']) ?? 'Runtime exception'),
+            data: this.options.privacy === 'metadata' ? {} : details,
+            url: this.startUrl,
+          })
+        );
+      });
 
-    // Auto-inject script on navigation
-    await this.cdp.send('Page.addScriptToEvaluateOnNewDocument', {
-      source: RECORDER_SCRIPT,
-    });
-    await this.cdp.send('Page.addScriptToEvaluateOnNewDocument', {
-      source: TRACE_SCRIPT,
-    });
+      // Set up network capture if listen option is enabled
+      if (this.options.listen) {
+        const listenOpts: RecorderListenOptions =
+          typeof this.options.listen === 'boolean' ? { mode: 'all' } : this.options.listen;
+        this.listenOpts = listenOpts;
+        this.matchRegex = listenOpts.match ? globToRegex(listenOpts.match) : null;
 
-    // Inject script into current document
-    await this.cdp.send('Runtime.evaluate', {
-      expression: RECORDER_SCRIPT,
-      awaitPromise: false,
-    });
-    await this.cdp.send('Runtime.evaluate', {
-      expression: TRACE_SCRIPT,
-      awaitPromise: false,
-    });
-
-    // Listen for binding calls
-    this.bindingHandler = (params: Record<string, unknown>) => {
-      const payload = readString(params['payload']);
-      if (!payload) {
-        return;
+        await this.cdp.send('Network.enable');
+        this.setupNetworkListeners(listenOpts);
       }
-
-      if (params['name'] === RECORDER_BINDING_NAME) {
-        this.handleBindingCall(payload);
-      } else if (params['name'] === TRACE_BINDING_NAME) {
-        this.handleTraceBindingCall(payload);
-      }
-    };
-    this.cdp.on('Runtime.bindingCalled', this.bindingHandler);
-
-    this.subscribeTrace('Runtime.consoleAPICalled', (params) => {
-      const type = readStringOr(params['type'], 'log');
-      if (type !== 'log' && type !== 'warn' && type !== 'error') {
-        return;
-      }
-
-      const args = Array.isArray(params['args'])
-        ? (params['args'] as Array<Record<string, unknown>>)
-        : [];
-      const text = args.map(formatConsoleArg).filter(Boolean).join(' ');
-
-      this.traceEvents.push(
-        normalizeTraceEvent({
-          traceId: createTraceId('console'),
-          sessionId: '',
-          ts: new Date().toISOString(),
-          elapsedMs: this.elapsed(),
-          channel: 'console',
-          event: `console.${type}`,
-          severity: type === 'error' ? 'error' : type === 'warn' ? 'warn' : 'info',
-          summary: text || `console.${type}`,
-          data: { args },
-          url: this.startUrl,
-        })
-      );
-    });
-
-    this.subscribeTrace('Runtime.exceptionThrown', (params) => {
-      const details = (params['exceptionDetails'] ?? {}) as Record<string, unknown>;
-      this.traceEvents.push(
-        normalizeTraceEvent({
-          traceId: createTraceId('runtime'),
-          ts: new Date().toISOString(),
-          elapsedMs: this.elapsed(),
-          channel: 'runtime',
-          event: 'runtime.exception',
-          severity: 'error',
-          summary: readString(details['text']) ?? 'Runtime exception',
-          data: details,
-          url: this.startUrl,
-        })
-      );
-    });
-
-    // Set up network capture if listen option is enabled
-    if (this.options.listen) {
-      const listenOpts: RecorderListenOptions =
-        typeof this.options.listen === 'boolean' ? { mode: 'all' } : this.options.listen;
-      this.listenOpts = listenOpts;
-      this.matchRegex = listenOpts.match ? globToRegex(listenOpts.match) : null;
-
-      await this.cdp.send('Network.enable');
-      this.setupNetworkListeners(listenOpts);
+      this.startUrl = this.cleanURL(this.startUrl);
+      this.state = 'ready';
+    } catch (error) {
+      this.recording = false;
+      this.state = 'failed';
+      await this.cleanup();
+      throw error;
     }
   }
 
@@ -223,39 +312,86 @@ export class Recorder {
    *
    * Returns a RecordingOutput with steps compatible with page.batch().
    */
-  async stop(): Promise<FullRecordingOutput> {
-    if (!this.recording) {
-      throw new Error('No recording in progress');
-    }
-
-    this.recording = false;
-    const duration = Date.now() - this.startTime;
-
-    // Remove event handler
+  stop(): Promise<FullRecordingOutput> {
+    if (this.stopping) return this.stopping;
+    if (!this.recording) return Promise.reject(new Error('No recording in progress'));
+    this.stopping = this.finalize();
+    return this.stopping;
+  }
+  private async cleanup(): Promise<void> {
     if (this.bindingHandler) {
       this.cdp.off('Runtime.bindingCalled', this.bindingHandler);
       this.bindingHandler = null;
     }
-
-    // Remove network handlers
-    for (const { event, handler } of this.networkHandlers) {
+    for (const { event, handler } of [...this.networkHandlers, ...this.traceHandlers])
       this.cdp.off(event, handler);
-    }
     this.networkHandlers = [];
-    for (const { event, handler } of this.traceHandlers) {
-      this.cdp.off(event, handler);
-    }
     this.traceHandlers = [];
-
-    // Disable network domain if listen was active
-    if (this.listenOpts) {
-      await this.cdp.send('Network.disable');
-    }
-
-    // Wait for any in-flight response body fetches to complete
-    await Promise.allSettled(this.pendingBodies);
+    for (const script of this.scripts) this.capture.cleanupErrors.push(...(await script.dispose()));
+    this.scripts = [];
+    // Never disable domains shared with an unrelated consumer on this CDP session.
+  }
+  async dispose(): Promise<void> {
+    if (this.recording) await this.stop();
+    else await this.cleanup();
+  }
+  async heartbeat(): Promise<void> {
+    if (!this.recording) return;
+    await this.cdp.send(
+      'Runtime.evaluate',
+      {
+        expression: `if(window.__bpRecorderLeases?.[${JSON.stringify(this.id)}])window.__bpRecorderLeases[${JSON.stringify(this.id)}]=Date.now()`,
+        returnByValue: true,
+      },
+      undefined,
+      { timeout: 2000 }
+    );
+  }
+  get status(): string {
+    return this.state;
+  }
+  marker(label: string): RecorderMarker {
+    if (!this.recording || this.state !== 'ready') throw new Error('Recording is not ready');
+    const marker = {
+      label: label.slice(0, 256),
+      sequence: this.events.length,
+      elapsedMs: Math.max(0, performance.now() - this.monoStart),
+      at: new Date().toISOString(),
+    };
+    this.appendTrace(
+      normalizeTraceEvent({
+        traceId: createTraceId('marker'),
+        ts: marker.at,
+        elapsedMs: marker.elapsedMs,
+        channel: 'session',
+        event: 'recording.marker',
+        summary: this.options.privacy === 'metadata' ? 'Recording marker' : marker.label,
+        data: marker,
+      })
+    );
+    return marker;
+  }
+  private async finalize(): Promise<FullRecordingOutput> {
+    this.recording = false;
+    this.state = 'stopping';
+    const duration = Date.now() - this.startTime;
+    await this.cleanup();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = this.options.drainTimeoutMs ?? 5000;
+    await Promise.race([
+      Promise.allSettled([...this.pendingEvents, ...this.pendingBodies]),
+      new Promise<void>((resolve) => {
+        timer = setTimeout(() => {
+          this.capture.drainTimedOut = true;
+          this.abort.abort();
+          resolve();
+        }, deadline);
+      }),
+    ]);
+    if (timer) clearTimeout(timer);
+    this.capture.pending = this.pendingEvents.size;
     this.pendingBodies = [];
-
+    this.state = 'complete';
     // Aggregate events into steps (pass startUrl for navigation detection)
     const steps = aggregateEvents(this.events, this.startUrl);
 
@@ -264,7 +400,8 @@ export class Recorder {
       startUrl: this.startUrl,
       duration,
       steps,
-      traceEvents: this.traceEvents,
+      traceEvents: [...this.traceEvents],
+      capture: { ...this.capture, cleanupErrors: [...this.capture.cleanupErrors] },
     };
 
     // Add network data if listen was enabled
@@ -303,14 +440,68 @@ export class Recorder {
    * Handle incoming binding call from the browser.
    */
   private handleBindingCall(payload: string): void {
-    if (!this.recording) return;
+    if (!this.recording || this.limited) return;
 
     try {
+      if (payload.length > 65536) return;
       const event = JSON.parse(payload) as RawRecordedEvent;
+      if (
+        !['click', 'dblclick', 'input', 'change', 'keydown', 'submit', 'navigation'].includes(
+          event.kind
+        ) ||
+        !Number.isFinite(event.timestamp) ||
+        typeof event.url !== 'string' ||
+        !Array.isArray(event.selectors)
+      )
+        return;
+      event.url = this.cleanURL(event.url);
+      event.value =
+        this.options.privacy === 'metadata' && event.value !== undefined
+          ? REDACTED_VALUE
+          : redactValueForRecording(event.value, {
+              tagName: event.element?.tag,
+              inputType: event.element?.type ?? undefined,
+              autocomplete: event.element?.autocomplete,
+              sensitiveValue: event.element?.private,
+            });
+      if (this.options.privacy === 'metadata') {
+        event.selectors = event.selectors.filter((s) =>
+          ['id', 'testid', 'css-path', 'name-attr'].includes(s.quality)
+        );
+        if (event.element)
+          event.element = {
+            tag: event.element.tag,
+            id: event.element.id,
+            name: event.element.name,
+            type: event.element.type,
+            role: event.element.role,
+            ariaLabel: null,
+            testid: event.element.testid,
+            text: null,
+          };
+      }
+      if (!this.reserve(event)) return;
       this.events.push(event);
       if (this.options.onEvent) {
-        // Fire-and-forget — don't block recording on screenshot I/O
-        Promise.resolve(this.options.onEvent(event)).catch(() => {});
+        const sequence = this.events.length,
+          signal = this.abort.signal,
+          capture = this.capture;
+        capture.scheduled++;
+        const task = this.eventTail.then(async () => {
+          if (signal.aborted) {
+            capture.skipped++;
+            return;
+          }
+          try {
+            await this.options.onEvent?.(event, { sequence, signal });
+            capture.completed++;
+          } catch {
+            capture.failed++;
+          }
+        });
+        this.eventTail = task;
+        this.pendingEvents.add(task);
+        void task.finally(() => this.pendingEvents.delete(task));
       }
     } catch {
       // Invalid payload, ignore
@@ -318,7 +509,7 @@ export class Recorder {
   }
 
   private handleTraceBindingCall(payload: string): void {
-    if (!this.recording) return;
+    if (!this.recording || this.limited) return;
 
     try {
       const data = JSON.parse(payload) as {
@@ -329,7 +520,7 @@ export class Recorder {
         data?: Record<string, unknown>;
       };
 
-      this.traceEvents.push(
+      this.appendTrace(
         normalizeTraceEvent({
           traceId: createTraceId('trace'),
           ts: data.ts ? new Date(data.ts).toISOString() : new Date().toISOString(),
@@ -337,9 +528,14 @@ export class Recorder {
           channel: this.channelForTraceEvent(data.event),
           event: data.event,
           severity: data.severity,
-          summary: data.summary ?? data.event,
-          data: data.data ?? {},
-          url: typeof data.data?.['url'] === 'string' ? data.data['url'] : this.startUrl,
+          summary:
+            this.options.privacy === 'metadata'
+              ? data.event
+              : (data.summary ?? data.event).slice(0, 4096),
+          data: this.options.privacy === 'metadata' ? {} : (data.data ?? {}),
+          url: this.cleanURL(
+            typeof data.data?.['url'] === 'string' ? data.data['url'] : this.startUrl
+          ),
         })
       );
     } catch {
@@ -352,16 +548,44 @@ export class Recorder {
     event: string,
     handler: (params: Record<string, unknown>) => void
   ): void {
-    this.cdp.on(event, handler);
-    this.networkHandlers.push({ event, handler });
+    const guarded = (params: Record<string, unknown>) => {
+      if (!this.limited && this.recording && this.reserve(params)) handler(params);
+    };
+    this.cdp.on(event, guarded);
+    this.networkHandlers.push({ event, handler: guarded });
   }
 
   private subscribeTrace(event: string, handler: (params: Record<string, unknown>) => void): void {
-    this.cdp.on(event, handler);
-    this.traceHandlers.push({ event, handler });
+    const guarded = (params: Record<string, unknown>) => {
+      if (!this.limited && this.recording && this.reserve(params)) handler(params);
+    };
+    this.cdp.on(event, guarded);
+    this.traceHandlers.push({ event, handler: guarded });
   }
 
   /** Check if a URL matches the configured filter. */
+  get byteCount(): number {
+    return this.retainedBytes;
+  }
+  get limitReached(): boolean {
+    return this.limited;
+  }
+  private reserve(value: unknown): boolean {
+    const bytes = new TextEncoder().encode(JSON.stringify(value)).length;
+    if (this.retainedBytes + bytes > (this.options.maxBytes ?? Infinity)) {
+      this.limited = true;
+      return false;
+    }
+    this.retainedBytes += bytes;
+    return true;
+  }
+  private appendTrace(event: CanonicalTraceEvent): void {
+    if (this.reserve(event)) this.traceEvents.push(event);
+  }
+  private cleanURL(url: string): string {
+    return this.options.privacy === 'metadata' ? redactRecordingURL(url) : url;
+  }
+
   private matchesUrl(url: string): boolean {
     if (!this.matchRegex) return true;
     return this.matchRegex.test(url);
@@ -378,6 +602,8 @@ export class Recorder {
     opcode: number
   ): { payload: string; length: number } {
     const data = payloadData ?? '';
+    if (this.options.privacy === 'metadata')
+      return { payload: REDACTED_VALUE, length: data.length };
     const maxPayload = this.listenOpts?.maxPayload ?? 256;
 
     if (opcode === 2) {
@@ -402,7 +628,7 @@ export class Recorder {
 
     if (mode === 'ws' || mode === 'all') {
       this.subscribeNetwork('Network.webSocketCreated', (params) => {
-        const url = params['url'] as string;
+        const url = this.cleanURL(params['url'] as string);
         const requestId = params['requestId'] as string;
         if (!this.matchesUrl(url)) return;
 
@@ -415,7 +641,7 @@ export class Recorder {
           type: 'created',
           url,
         });
-        this.traceEvents.push(
+        this.appendTrace(
           normalizeTraceEvent({
             traceId: createTraceId('ws'),
             ts: new Date(now).toISOString(),
@@ -449,7 +675,7 @@ export class Recorder {
           payload,
           length,
         });
-        this.traceEvents.push(
+        this.appendTrace(
           normalizeTraceEvent({
             traceId: createTraceId('ws'),
             ts: new Date(now).toISOString(),
@@ -483,7 +709,7 @@ export class Recorder {
           payload,
           length,
         });
-        this.traceEvents.push(
+        this.appendTrace(
           normalizeTraceEvent({
             traceId: createTraceId('ws'),
             ts: new Date(now).toISOString(),
@@ -512,7 +738,7 @@ export class Recorder {
           elapsedMs: this.elapsed(),
           type: 'closed',
         });
-        this.traceEvents.push(
+        this.appendTrace(
           normalizeTraceEvent({
             traceId: createTraceId('ws'),
             ts: new Date(now).toISOString(),
@@ -535,7 +761,7 @@ export class Recorder {
         const request = params['request'] as
           | { url: string; method: string; headers?: Record<string, string>; postData?: string }
           | undefined;
-        const url = request?.url ?? '';
+        const url = this.cleanURL(request?.url ?? '');
         const requestId = params['requestId'] as string;
         if (!this.matchesUrl(url)) return;
 
@@ -548,10 +774,10 @@ export class Recorder {
           elapsedMs: this.elapsed(),
           method: request?.method ?? 'GET',
           url,
-          headers: request?.headers,
-          body: request?.postData,
+          headers: this.options.privacy === 'metadata' ? undefined : request?.headers,
+          body: this.options.privacy === 'metadata' ? undefined : request?.postData,
         });
-        this.traceEvents.push(
+        this.appendTrace(
           normalizeTraceEvent({
             traceId: createTraceId('http'),
             ts: new Date(now).toISOString(),
@@ -561,8 +787,8 @@ export class Recorder {
             summary: `${request?.method ?? 'GET'} ${url}`,
             data: {
               method: request?.method ?? 'GET',
-              headers: request?.headers ?? {},
-              body: request?.postData ?? null,
+              headers: this.options.privacy === 'metadata' ? {} : (request?.headers ?? {}),
+              body: this.options.privacy === 'metadata' ? null : (request?.postData ?? null),
             },
             requestId,
             url,
@@ -588,10 +814,10 @@ export class Recorder {
           timestamp: now,
           elapsedMs: this.elapsed(),
           status: response?.status ?? 0,
-          headers: response?.headers,
+          headers: this.options.privacy === 'metadata' ? undefined : response?.headers,
           mimeType: response?.mimeType,
         });
-        this.traceEvents.push(
+        this.appendTrace(
           normalizeTraceEvent({
             traceId: createTraceId('http'),
             ts: new Date(now).toISOString(),
@@ -601,7 +827,7 @@ export class Recorder {
             summary: `${response?.status ?? 0} ${this.httpUrls.get(requestId) ?? ''}`,
             data: {
               status: response?.status ?? 0,
-              headers: response?.headers ?? {},
+              headers: this.options.privacy === 'metadata' ? {} : (response?.headers ?? {}),
               mimeType: response?.mimeType ?? null,
             },
             requestId,
@@ -610,14 +836,14 @@ export class Recorder {
         );
 
         // Optionally capture response body
-        if (this.listenOpts?.captureResponseBodies) {
+        if (this.listenOpts?.captureResponseBodies && this.options.privacy !== 'metadata') {
           const bodyPromise = this.cdp
             .send<{ body: string; base64Encoded: boolean }>('Network.getResponseBody', {
               requestId,
             })
             .then((result) => {
               const resp = this.networkResponses.find((r) => r.requestId === requestId);
-              if (resp) {
+              if (resp && !this.abort.signal.aborted && this.reserve(result.body)) {
                 resp.body = result.base64Encoded
                   ? `[base64: ${result.body.length} chars]`
                   : result.body;
@@ -633,7 +859,7 @@ export class Recorder {
 
       this.subscribeNetwork('Network.loadingFailed', (params) => {
         const requestId = params['requestId'] as string;
-        this.traceEvents.push(
+        this.appendTrace(
           normalizeTraceEvent({
             traceId: createTraceId('http'),
             ts: new Date().toISOString(),
@@ -643,7 +869,7 @@ export class Recorder {
             severity: 'error',
             summary: `HTTP request failed ${requestId}`,
             data: {
-              errorText: params['errorText'] ?? null,
+              errorText: this.options.privacy === 'metadata' ? null : (params['errorText'] ?? null),
               blockedReason: params['blockedReason'] ?? null,
               canceled: params['canceled'] ?? false,
             },

@@ -44,12 +44,20 @@ reproduce every native CLI command.
 ## Optional host contracts
 
 Browser connections do not require a ports bundle. Hosts that need opaque session
-handles can use `SessionOwner`; ordinary in-process callers can pass a
+handles and shared connections can use `ConnectionSessionOwner`; ordinary in-process callers can pass a
 `ProviderSession` directly.
 
-- `SessionOwner` holds provider sessions and validates handle generations and leases.
-  Credentials and connection URLs stay in the trusted host. Pending cleanup retains
-  the session for retry; lease expiry must not prevent release.
+- `ConnectionSessionOwner` implements `SessionOwnerV2`: open one physical browser
+  connection, acquire a borrower lease, detach the borrower, inspect or release.
+  It fences the entire browser against simultaneous borrowing (`session_busy`),
+  validates credential-free handle generations and expiry, and keeps cleanup
+  identity for retry. Detachment drains admitted work before another borrower
+  can acquire. Chromium reconnects only to the authoritative allocation/target;
+  a lost Kitesurf owner returns `SESSION_LOST` without replacement allocation.
+- Legacy `SessionOwner` has `resolve()` returning a WebSocket locator. Its shell
+  compatibility path can reconnect per command; it does not provide the shared
+  physical-connection guarantee. Credentials and URLs remain in trusted hosts.
+  Lease expiry or cancellation must not prevent cleanup.
 - `OperationContext` supplies a signal, deadline, and clock. `ExecutionContext`
   adds the generation used by session hosts. Artifact writes do not need a generation.
 - `ArtifactSink` accepts bytes and returns a storage receipt. The optional filesystem
@@ -58,7 +66,11 @@ handles can use `SessionOwner`; ordinary in-process callers can pass a
 - `SecretsPort` is optional credential lookup for provider factories. Explicit
   connection credentials remain supported.
 
-`adapters/node` contains the in-process owner and filesystem sink.
+The portable owner lives in `core`; `adapters/node` supplies native connection
+and filesystem defaults plus the authenticated optional-`ws` transport.
+`adapters/bun` supplies native header-capable WebSockets. `adapters/workers`
+supplies fetch upgrades and browser-binding acquisition; Worker hosts inject
+credentials/bindings and keep owners alive within their event scope.
 `adapters/memory` contains test doubles and memory storage. Hosts may supply their
 own implementations. Durable recovery and distributed session ownership belong
 to the embedding application.
@@ -68,7 +80,13 @@ to the embedding application.
 `browser-pilot/core` supports explicit cloud/CDP connections without loading local
 browser discovery. Node-only operations, including filesystem recording, still
 require Node/Bun. Supplying an artifact sink does not redirect batch recording.
-The native CLI and daemon remain Node/Bun entrypoints.
+The native CLI and daemon remain Node/Bun entrypoints. Cloudflare CLI sessions
+use a daemon owner and browser-wide command lease; imported Node use requires no
+Bun or daemon. Node authenticated sockets need the optional `ws` peer. Workers
+use the portable graph and explicit host adapters without `nodejs_compat`.
+See the [runtime and live validation report](cloudflare-validation.md) for the
+verified matrix and unresolved native Bun diagnostic; runtime portability does
+not imply live provider, Kitesurf or payment conformance.
 
 Cancellation stops admission of new shell operations and bounds supported waits.
 An already-dispatched browser action may have happened; consumers must use its

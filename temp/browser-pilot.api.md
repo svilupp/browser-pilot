@@ -119,6 +119,9 @@ export interface AssertionScope {
     selector?: string | string[];
 }
 
+// @public
+export function assertProviderConstraint(selector: ProviderSelector, provider: ProviderId, engine?: CloudflareEngine): void;
+
 // @public (undocumented)
 export function assertRecordingManifestIntegrity(manifest: RecordingManifest, artifactDir?: string): void;
 
@@ -199,14 +202,23 @@ export interface BatchResult {
     totalDurationMs: number;
 }
 
-// Warning: (ae-forgotten-export) The symbol "Browser_2" needs to be exported by the entry point index.d.ts
-//
 // @public
-export class Browser extends Browser_2 {
+export interface BorrowedBrowser {
+    // Warning: (ae-forgotten-export) The symbol "TargetInfo" needs to be exported by the entry point index.d.ts
+    //
+    // (undocumented)
+    listTargets(): Promise<TargetInfo[]>;
+    // (undocumented)
+    page(name?: string, options?: PageOptions): Promise<Page>;
+}
+
+// @public
+export class Browser extends PortableBrowser {
+    protected constructor(cdp: CDPClient, provider: Provider, session: ProviderSession, options: BrowserOptions);
     // (undocumented)
     static connect(options: BrowserOptions): Promise<Browser>;
     // (undocumented)
-    static fromCDP(cdp: Parameters<typeof Browser_2.fromCDP>[0], sessionInfo: Parameters<typeof Browser_2.fromCDP>[1]): Browser;
+    static fromCDP(cdp: Parameters<typeof PortableBrowser.fromCDP>[0], sessionInfo: Parameters<typeof PortableBrowser.fromCDP>[1]): Browser;
 }
 
 // @public (undocumented)
@@ -246,6 +258,16 @@ export class BrowserEndpointResolutionError extends Error {
 }
 
 // @public (undocumented)
+export interface BrowserLease {
+    // (undocumented)
+    browser: BorrowedBrowser;
+    // (undocumented)
+    detach(): Promise<void>;
+    // (undocumented)
+    handle: SessionHandle;
+}
+
+// @public (undocumented)
 export class BrowserlessProvider implements Provider {
     // Warning: (ae-forgotten-export) The symbol "BrowserlessOptions" needs to be exported by the entry point index.d.ts
     constructor(options: BrowserlessOptions);
@@ -256,11 +278,15 @@ export class BrowserlessProvider implements Provider {
 }
 
 // @public (undocumented)
-export interface BrowserOptions extends ConnectOptions {
+export type BrowserOptions = ConnectOptions & {
     debug?: boolean;
-    localEndpointResolver?: LocalEndpointResolver;
     secrets?: SecretsPort;
-}
+    transportFactory?: TransportFactory;
+    idGenerator?: () => string;
+    recordingIo?: RecordingIo;
+    signal?: AbortSignal;
+    localEndpointResolver?: LocalEndpointResolver;
+};
 
 // @public
 export interface BrowserUseOptions {
@@ -331,11 +357,55 @@ export type CandidateStrategy = 'testid' | 'role_name' | 'label' | 'scoped_text'
 export function canonicalizeRecordingArtifact(value: unknown): RecordingManifest;
 
 // @public
+export class CapabilityCache {
+    constructor(browserGeneration: string, revision?: string | undefined);
+    // (undocumented)
+    readonly browserGeneration: string;
+    // (undocumented)
+    get(name: string, documentGeneration?: number): CapabilityReport | undefined;
+    // (undocumented)
+    invalidateDocument(): void;
+    // (undocumented)
+    record(name: string, evidence: CapabilityEvidence, documentGeneration?: number): void;
+    // (undocumented)
+    report(documentGeneration?: number): CapabilityReport[];
+    // (undocumented)
+    readonly revision?: string | undefined;
+}
+
+// @public
 export class CapabilityError extends Error {
     constructor(capability: string, message?: string);
     // (undocumented)
     readonly capability: string;
 }
+
+// @public (undocumented)
+export interface CapabilityEvidence {
+    // (undocumented)
+    evidence: string;
+    // (undocumented)
+    observedAt: string;
+    // (undocumented)
+    probeVersion: string;
+    // (undocumented)
+    state: CapabilityState;
+}
+
+// @public (undocumented)
+export interface CapabilityReport extends CapabilityEvidence {
+    // (undocumented)
+    browserGeneration: string;
+    // (undocumented)
+    documentGeneration?: number;
+    // (undocumented)
+    name: string;
+    // (undocumented)
+    revision?: string;
+}
+
+// @public
+export type CapabilityState = 'verified' | 'unsupported' | 'unknown' | 'degraded';
 
 // @public
 export function captureBeforeState(page: Page, conditions: Condition[]): Promise<AssertionBeforeState>;
@@ -395,11 +465,12 @@ export interface CDPClient {
     setSessionId(sessionId: string | undefined): void;
 }
 
-// Warning: (ae-forgotten-export) The symbol "TransportOptions" needs to be exported by the entry point index.d.ts
-//
 // @public (undocumented)
 export interface CDPClientOptions extends TransportOptions {
+    commandTimeout?: number;
     debug?: boolean;
+    // (undocumented)
+    transportFactory?: TransportFactory;
 }
 
 // @public (undocumented)
@@ -439,6 +510,68 @@ export interface Clock {
     now(): number;
     // (undocumented)
     sleep(ms: number, signal?: AbortSignal): Promise<void>;
+}
+
+// @public (undocumented)
+export interface CloudflareChromiumOptions {
+    // (undocumented)
+    accountId?: string;
+    // (undocumented)
+    keepAliveMs?: number;
+    // (undocumented)
+    lab?: boolean;
+    // (undocumented)
+    providerSessionId?: string;
+    // (undocumented)
+    recording?: boolean;
+    takeOwnership?: boolean;
+}
+
+// @public (undocumented)
+export type CloudflareEngine = 'chromium' | 'kitesurf';
+
+// @public (undocumented)
+export interface CloudflareKitesurfOptions {
+    // (undocumented)
+    accountId?: string;
+    // (undocumented)
+    keepAliveMs?: never;
+    // (undocumented)
+    lab?: never;
+    // (undocumented)
+    providerSessionId?: never;
+    // (undocumented)
+    recording?: never;
+    // (undocumented)
+    takeOwnership?: never;
+}
+
+// @public
+export class CloudflareProvider implements Provider {
+    constructor(options: CloudflareProviderOptions);
+    // (undocumented)
+    createSession(): Promise<ProviderSession>;
+    // (undocumented)
+    readonly name = "cloudflare";
+    // (undocumented)
+    resumeSession(sessionId: string): Promise<ProviderSession>;
+}
+
+// @public (undocumented)
+export interface CloudflareProviderOptions extends CloudflareChromiumOptions {
+    // (undocumented)
+    accountId: string;
+    // (undocumented)
+    apiKey: string;
+    // (undocumented)
+    engine?: CloudflareEngine;
+    // (undocumented)
+    explicitEngine?: boolean;
+    fetch?: typeof fetch;
+    // (undocumented)
+    idGenerator?: () => string;
+    // (undocumented)
+    timeout?: number;
 }
 
 // @public
@@ -584,22 +717,28 @@ export function conditionRace(conditions: Condition[], page: Page, options?: {
 // @public
 export function connect(options: BrowserOptions): Promise<Browser>;
 
-// @public (undocumented)
-export interface ConnectOptions {
-    apiKey?: string;
-    channel?: ChromeChannel;
-    cloudTimeout?: number;
-    debug?: boolean;
-    profileId?: string;
-    projectId?: string;
-    provider: 'browserbase' | 'browserless' | 'browser-use' | 'generic';
-    providerSession?: ProviderSession;
-    proxyCountryCode?: string | null;
-    session?: CreateSessionOptions;
-    timeout?: number;
-    userDataDir?: string;
-    wsUrl?: string;
+// Warning: (ae-forgotten-export) The symbol "ConnectionSessionOwner_2" needs to be exported by the entry point index.d.ts
+//
+// @public
+export class ConnectionSessionOwner extends ConnectionSessionOwner_2 {
+    constructor(options?: ConnectionSessionOwnerOptions);
 }
+
+// @public (undocumented)
+export interface ConnectionSessionOwnerOptions {
+    connect?: (options: BrowserOptions) => Promise<PortableBrowser>;
+    // (undocumented)
+    defaults?: Omit<BrowserOptions, 'provider'>;
+    // (undocumented)
+    idGenerator?: () => string;
+    // (undocumented)
+    leaseMs?: number;
+}
+
+// Warning: (ae-forgotten-export) The symbol "ConnectOptionsBase" needs to be exported by the entry point index.d.ts
+//
+// @public (undocumented)
+export type ConnectOptions = Omit<ConnectOptionsBase, 'provider'> & ProviderSelection;
 
 // @public (undocumented)
 export type ConsoleHandler = (message: ConsoleMessage) => void;
@@ -1125,6 +1264,28 @@ export interface FulfillRequestOptions {
     status: number;
 }
 
+// Warning: (ae-forgotten-export) The symbol "RecordingOutput" needs to be exported by the entry point index.d.ts
+//
+// @public
+export interface FullRecordingOutput extends RecordingOutput {
+    // (undocumented)
+    capture?: RecorderCaptureStatus;
+    // Warning: (ae-forgotten-export) The symbol "NetworkRecording" needs to be exported by the entry point index.d.ts
+    //
+    // (undocumented)
+    network?: NetworkRecording;
+    // Warning: (ae-forgotten-export) The symbol "TimelineEntry" needs to be exported by the entry point index.d.ts
+    //
+    // (undocumented)
+    timeline?: TimelineEntry[];
+    // (undocumented)
+    traceEvents?: CanonicalTraceEvent[];
+    // Warning: (ae-forgotten-export) The symbol "WebSocketRecording" needs to be exported by the entry point index.d.ts
+    //
+    // (undocumented)
+    websockets?: WebSocketRecording;
+}
+
 // @public
 export interface FuzzyMatchOptions {
     maxResults?: number;
@@ -1285,6 +1446,19 @@ export interface NewPageOptions {
     background?: boolean;
 }
 
+// @public (undocumented)
+export interface NormalizedProviderSelector {
+    // (undocumented)
+    engine?: CloudflareEngine;
+    // (undocumented)
+    explicitEngine: boolean;
+    // (undocumented)
+    provider: ProviderId;
+}
+
+// @public
+export function normalizeProviderSelector(selector: string): NormalizedProviderSelector;
+
 // @public
 export interface OperationContext {
     // (undocumented)
@@ -1313,6 +1487,7 @@ export class Page {
     audioRoundTrip(options: RoundTripOptions): Promise<RoundTripResult>;
     batch(steps: Step[], options?: BatchOptions): Promise<BatchResult>;
     blockResources(types: ResourceType[]): Promise<() => void>;
+    readonly capabilities: CapabilityCache;
     captureState(): Promise<PageState>;
     get cdpClient(): CDPClient;
     check(selector: string | string[], options?: ActionOptions): Promise<boolean>;
@@ -1339,11 +1514,19 @@ export class Page {
     diagnoseReadiness(): ReadinessDiagnostics | undefined;
     disableInterception(): Promise<void>;
     dispose(): void;
+    get documentGeneration(): number;
+    documentIdentity(): Promise<string>;
     elementState(selector: string): Promise<ElementState>;
     emitMessage(payload: string, options?: EmitWsOptions): Promise<EmitResult>;
     emulate(device: DeviceDescriptor): Promise<void>;
     evaluate<T = unknown, Args extends unknown[] = unknown[]>(expression: string | ((...args: Args) => T), ...args: Args): Promise<T>;
+    // (undocumented)
     exportRefMap(): Record<string, number>;
+    // (undocumented)
+    exportRefSemantics(): Record<string, {
+        role: string;
+        name: string;
+    }>;
     fill(selector: string | string[], value: string, options?: FillOptions): Promise<boolean>;
     focus(selector: string | string[], options?: ActionOptions): Promise<boolean>;
     forms(): Promise<FormField[]>;
@@ -1380,7 +1563,11 @@ export class Page {
     goForward(options?: ActionOptions): Promise<void>;
     goto(url: string, options?: ActionOptions): Promise<void>;
     hover(selector: string | string[], options?: ActionOptions): Promise<boolean>;
-    importRefMap(refMap: Record<string, number>): void;
+    importRefMap(refMap: Record<string, number>, semantics?: Record<string, {
+        role: string;
+        name: string;
+    }>): void;
+    // (undocumented)
     init(): Promise<void>;
     intercept(pattern: string | RequestPattern, handler: RequestHandler): Promise<() => void>;
     listMessageTargets(): Promise<SocketCandidate[]>;
@@ -1392,6 +1579,7 @@ export class Page {
     onError(handler: ErrorHandler): Promise<() => void>;
     press(key: string, options?: {
         modifiers?: Array<'Control' | 'Shift' | 'Alt' | 'Meta'>;
+        timeout?: number;
     }): Promise<void>;
     reload(options?: ActionOptions): Promise<void>;
     removeLocalStorage(key: string): Promise<void>;
@@ -1435,7 +1623,9 @@ export class Page {
     setupAudio(): Promise<void>;
     setUserAgent(options: string | UserAgentOptions): Promise<void>;
     setViewport(options: ViewportOptions): Promise<void>;
-    shortcut(combo: string): Promise<void>;
+    shortcut(combo: string, options?: {
+        timeout?: number;
+    }): Promise<void>;
     snapshot(options?: SnapshotOptions): Promise<PageSnapshot>;
     submit(selector: string | string[], options?: SubmitOptions): Promise<boolean>;
     switchToFrame(selector: string | string[], options?: ActionOptions): Promise<boolean>;
@@ -1554,28 +1744,87 @@ export interface PlayOptions {
 }
 
 // @public (undocumented)
+export class PortableBrowser {
+    protected constructor(cdp: CDPClient, _provider: Provider, providerSession: ProviderSession, _options: BrowserOptions);
+    readonly capabilities: CapabilityCache;
+    get cdpClient(): CDPClient;
+    close(): Promise<ProviderReleaseResult | undefined>;
+    closePage(name: string): Promise<void>;
+    static connect(this: typeof PortableBrowser, options: BrowserOptions): Promise<PortableBrowser>;
+    disconnect(): Promise<void>;
+    expectNewPage<T>(trigger: () => Promise<T> | T, options?: ExpectNewPageOptions): Promise<Page>;
+    static fromCDP(this: typeof PortableBrowser, cdp: CDPClient, sessionInfo: {
+        wsUrl: string;
+        provider?: string;
+        sessionId?: string;
+    }): PortableBrowser;
+    get isConnected(): boolean;
+    listTargets(): Promise<TargetInfo[]>;
+    get metadata(): Record<string, unknown> | undefined;
+    newPage(url?: string, options?: NewPageOptions): Promise<Page>;
+    page(name?: string, options?: PageOptions): Promise<Page>;
+    get provenance(): BuildProvenance;
+    get sessionId(): string | undefined;
+    get wsUrl(): string;
+}
+
+// @public (undocumented)
 export interface Provider {
     createSession(options?: CreateSessionOptions): Promise<ProviderSession>;
     readonly name: string;
     resumeSession?(sessionId: string): Promise<ProviderSession>;
 }
 
+// @public (undocumented)
+export type ProviderConnection = {
+    kind: 'url';
+    url: string;
+    headers?: Record<string, string>;
+} | {
+    kind: 'opener';
+    open: TransportFactory;
+};
+
 // @public
 export interface ProviderFactoryPorts {
+    // (undocumented)
+    idGenerator?: () => string;
     secrets?: SecretsPort;
 }
 
 // @public
+export type ProviderId = 'browserbase' | 'browserless' | 'browser-use' | 'generic' | 'cloudflare';
+
+// @public
 export interface ProviderReleaseResult {
+    allocationId?: string;
     error?: string;
+    localTerminated?: boolean;
     providerStatus?: string;
     sessionId: string;
-    status: 'released' | 'cleanup_pending' | 'already_released';
+    status: 'released' | 'cleanup_pending' | 'already_released' | 'detached' | 'terminated';
 }
+
+// @public
+export type ProviderSelection = {
+    provider: 'cloudflare:kitesurf';
+    cloudflare?: CloudflareKitesurfOptions;
+} | {
+    provider: Exclude<ProviderSelector, 'cloudflare:kitesurf'>;
+    cloudflare?: CloudflareChromiumOptions;
+};
+
+// @public (undocumented)
+export type ProviderSelector = ProviderId | 'cloudflare:chromium' | 'cloudflare:kitesurf';
 
 // @public (undocumented)
 export interface ProviderSession {
     close(): Promise<void | ProviderReleaseResult>;
+    connection?: ProviderConnection;
+    lifecycle?: {
+        reconnectable: boolean;
+        ownership: 'owned' | 'borrowed';
+    };
     metadata?: Record<string, unknown>;
     sessionId?: string;
     wsUrl: string;
@@ -1614,6 +1863,25 @@ export function rankSelectorCandidates(el: InteractiveElement, options?: {
     score: number;
 }[];
 
+// @public
+export interface RawRecordedEvent {
+    checked?: boolean;
+    client?: {
+        x: number;
+        y: number;
+    };
+    // Warning: (ae-forgotten-export) The symbol "ElementSummary" needs to be exported by the entry point index.d.ts
+    element?: ElementSummary;
+    key?: string;
+    // Warning: (ae-forgotten-export) The symbol "RecordedEventKind" needs to be exported by the entry point index.d.ts
+    kind: RecordedEventKind;
+    // Warning: (ae-forgotten-export) The symbol "SelectorCandidate" needs to be exported by the entry point index.d.ts
+    selectors: SelectorCandidate[];
+    timestamp: number;
+    url: string;
+    value?: string;
+}
+
 // @public (undocumented)
 export interface ReadinessDiagnostics {
     // (undocumented)
@@ -1634,6 +1902,93 @@ export type ReadyCondition = string | {
     url?: string;
     predicate?: string | (() => unknown);
 };
+
+// @public
+export class Recorder {
+    constructor(cdp: CDPClient, options?: RecorderOptions);
+    // (undocumented)
+    readonly bindingName: string;
+    get byteCount(): number;
+    // (undocumented)
+    dispose(): Promise<void>;
+    getEvents(): RawRecordedEvent[];
+    // (undocumented)
+    heartbeat(): Promise<void>;
+    // (undocumented)
+    readonly id: string;
+    get isRecording(): boolean;
+    // (undocumented)
+    get limitReached(): boolean;
+    // (undocumented)
+    marker(label: string): RecorderMarker;
+    start(): Promise<void>;
+    // (undocumented)
+    get status(): string;
+    stop(): Promise<FullRecordingOutput>;
+}
+
+// @public (undocumented)
+export interface RecorderCaptureStatus {
+    // (undocumented)
+    cleanupErrors: string[];
+    // (undocumented)
+    completed: number;
+    // (undocumented)
+    drainTimedOut: boolean;
+    // (undocumented)
+    failed: number;
+    // (undocumented)
+    pending: number;
+    // (undocumented)
+    scheduled: number;
+    // (undocumented)
+    skipped: number;
+}
+
+// @public
+export interface RecorderEventContext {
+    // (undocumented)
+    sequence: number;
+    // (undocumented)
+    signal: AbortSignal;
+}
+
+// @public
+export interface RecorderListenOptions {
+    // (undocumented)
+    captureResponseBodies?: boolean;
+    // (undocumented)
+    match?: string;
+    // (undocumented)
+    maxPayload?: number;
+    // Warning: (ae-forgotten-export) The symbol "ListenMode" needs to be exported by the entry point index.d.ts
+    //
+    // (undocumented)
+    mode?: ListenMode;
+}
+
+// @public (undocumented)
+export interface RecorderMarker {
+    // (undocumented)
+    at: string;
+    // (undocumented)
+    elapsedMs: number;
+    // (undocumented)
+    label: string;
+    // (undocumented)
+    sequence: number;
+}
+
+// @public (undocumented)
+export interface RecorderOptions {
+    drainTimeoutMs?: number;
+    listen?: boolean | RecorderListenOptions;
+    maxBytes?: number;
+    maxIdleMs?: number;
+    navigation?: 'all' | 'current-document';
+    onEvent?: (event: RawRecordedEvent, context: RecorderEventContext) => void | Promise<void>;
+    privacy?: 'standard' | 'metadata';
+}
 
 // @public (undocumented)
 export interface RecordingAction {
@@ -1777,6 +2132,30 @@ export interface RecordingIntegrityResult {
 }
 
 // @public (undocumented)
+export interface RecordingIo {
+    // (undocumented)
+    cwd(): string;
+    // (undocumented)
+    existsSync(path: string): boolean;
+    // (undocumented)
+    join(...parts: string[]): string;
+    // (undocumented)
+    mkdirSync(path: string, options: {
+        recursive: true;
+    }): unknown;
+    // (undocumented)
+    readFileSync(path: string, encoding: 'utf-8'): string;
+    // (undocumented)
+    renameSync(from: string, to: string): void;
+    // (undocumented)
+    statSync(path: string): {
+        size: number;
+    };
+    // (undocumented)
+    writeFileSync(path: string, data: string | Uint8Array): void;
+}
+
+// @public (undocumented)
 export interface RecordingManifest {
     // (undocumented)
     actions: RecordingAction[];
@@ -1796,6 +2175,16 @@ export interface RecordingManifest {
     };
     // (undocumented)
     recordedAt: string;
+    // (undocumented)
+    recording?: {
+        id: string;
+        segmentMode: 'new' | 'append';
+        screenshotPolicy: 'off' | 'markers' | 'events';
+        privacy: 'standard' | 'metadata';
+        complete: boolean;
+        capture?: RecorderCaptureStatus;
+        stopReason?: string;
+    };
     // (undocumented)
     screenshots: RecordingScreenshot[];
     // (undocumented)
@@ -1861,6 +2250,7 @@ export interface RecordingScreenshot {
 export interface RecordOptions {
     format?: 'png' | 'jpeg' | 'webp';
     highlights?: boolean;
+    io?: RecordingIo;
     outputDir?: string;
     quality?: number;
     sessionId?: string;
@@ -2082,11 +2472,7 @@ export interface SessionHandle {
 }
 
 // @public
-export type SessionOpenOptions = {
-    provider: 'browserbase' | 'browserless' | 'browser-use' | 'generic';
-    wsUrl?: string;
-    session?: CreateSessionOptions;
-};
+export type SessionOpenOptions = ConnectOptions;
 
 // @public
 export interface SessionOwner {
@@ -2099,6 +2485,45 @@ export interface SessionOwner {
         wsUrl: string;
     }>;
     touch?(handle: SessionHandle, ctx: ExecutionContext): Promise<SessionHandle>;
+}
+
+// @public (undocumented)
+export interface SessionOwnerV2 {
+    // (undocumented)
+    acquire(handle: SessionHandle, ctx: ExecutionContext): Promise<BrowserLease>;
+    // (undocumented)
+    inspect(handle: SessionHandle, ctx: ExecutionContext): Promise<SessionStatus>;
+    // (undocumented)
+    open(options: SessionOpenOptions, ctx: ExecutionContext): Promise<SessionHandle>;
+    // (undocumented)
+    release(handle: SessionHandle, ctx: ExecutionContext): Promise<ProviderReleaseResult>;
+}
+
+// @public (undocumented)
+export interface SessionStatus {
+    // (undocumented)
+    browserResponsive?: boolean;
+    // (undocumented)
+    capabilities?: {
+        lifecycle: CapabilityReport[];
+        interaction: CapabilityReport[];
+    };
+    // (undocumented)
+    cleanup: 'active' | 'releasing' | 'cleanup_pending';
+    // (undocumented)
+    documentHealthy?: boolean;
+    // (undocumented)
+    metadata?: Record<string, unknown>;
+    // (undocumented)
+    ownerAvailable: boolean;
+    // (undocumented)
+    provider: string;
+    // (undocumented)
+    sessionId?: string;
+    // (undocumented)
+    socketOpen: boolean;
+    // (undocumented)
+    targetExists?: boolean;
 }
 
 // @public (undocumented)
@@ -2519,6 +2944,34 @@ export interface TranscribeResult {
     text: string;
 }
 
+// @public
+export interface Transport {
+    // (undocumented)
+    close(): Promise<void>;
+    // (undocumented)
+    onClose(handler: () => void): void | (() => void);
+    // (undocumented)
+    onError(handler: (error: Error) => void): void | (() => void);
+    // (undocumented)
+    onMessage(handler: (message: string) => void): void | (() => void);
+    // (undocumented)
+    send(message: string, budget?: {
+        timeoutMs: number;
+    }): void;
+}
+
+// @public (undocumented)
+export type TransportFactory = (url: string, options?: TransportOptions) => Promise<Transport>;
+
+// @public (undocumented)
+export interface TransportOptions {
+    headers?: Record<string, string>;
+    // (undocumented)
+    signal?: AbortSignal;
+    // (undocumented)
+    timeout?: number;
+}
+
 // @public (undocumented)
 export interface TypeOptions extends ActionOptions {
     blur?: boolean;
@@ -2804,12 +3257,12 @@ export interface WorkflowSummary {
 
 // Warnings were encountered during analysis:
 //
-// dist/index.d.ts:400:5 - (ae-forgotten-export) The symbol "CanonicalTraceEvent" needs to be exported by the entry point index.d.ts
-// dist/page-BB6d6Cwo.d.ts:494:9 - (ae-forgotten-export) The symbol "CoveringElement" needs to be exported by the entry point index.d.ts
-// dist/page-BB6d6Cwo.d.ts:495:9 - (ae-forgotten-export) The symbol "HitElement" needs to be exported by the entry point index.d.ts
-// dist/page-BB6d6Cwo.d.ts:496:9 - (ae-forgotten-export) The symbol "PointerEventsDiagnosis" needs to be exported by the entry point index.d.ts
-// dist/providers.d.ts:77:9 - (ae-forgotten-export) The symbol "LocalBrowserCandidate" needs to be exported by the entry point index.d.ts
-// dist/providers.d.ts:78:9 - (ae-forgotten-export) The symbol "LocalDiscoveryFailure" needs to be exported by the entry point index.d.ts
+// dist/index.d.ts:390:5 - (ae-forgotten-export) The symbol "CanonicalTraceEvent" needs to be exported by the entry point index.d.ts
+// dist/page-CRESxuLk.d.ts:1437:9 - (ae-forgotten-export) The symbol "CoveringElement" needs to be exported by the entry point index.d.ts
+// dist/page-CRESxuLk.d.ts:1438:9 - (ae-forgotten-export) The symbol "HitElement" needs to be exported by the entry point index.d.ts
+// dist/page-CRESxuLk.d.ts:1439:9 - (ae-forgotten-export) The symbol "PointerEventsDiagnosis" needs to be exported by the entry point index.d.ts
+// dist/providers.d.ts:78:9 - (ae-forgotten-export) The symbol "LocalBrowserCandidate" needs to be exported by the entry point index.d.ts
+// dist/providers.d.ts:79:9 - (ae-forgotten-export) The symbol "LocalDiscoveryFailure" needs to be exported by the entry point index.d.ts
 
 // (No @packageDocumentation comment for this package)
 

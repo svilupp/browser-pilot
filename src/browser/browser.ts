@@ -1,11 +1,15 @@
+import { CapabilityCache } from './capabilities.ts';
 /**
  * Browser class - manages CDP connection and pages
  */
 
 import { type CDPClient, createCDPClient, createSessionScopedCDP } from '../cdp/index.ts';
 import type { TargetInfo } from '../cdp/protocol.ts';
+import type { TransportFactory } from '../cdp/transport.ts';
+import { withinBudget } from '../core/budget.ts';
 import { CapabilityError, type SecretsPort } from '../core/ports.ts';
 import { createProvider } from '../providers/factory.ts';
+import { normalizeProviderSelector } from '../providers/selector.ts';
 import type {
   ChromeChannel,
   ConnectOptions,
@@ -35,7 +39,7 @@ export interface LocalEndpointRequest {
  */
 export type LocalEndpointResolver = (request: LocalEndpointRequest) => Promise<{ wsUrl: string }>;
 
-export interface BrowserOptions extends ConnectOptions {
+export type BrowserOptions = ConnectOptions & {
   /** Enable debug logging */
   debug?: boolean;
   /**
@@ -44,9 +48,14 @@ export interface BrowserOptions extends ConnectOptions {
    * port; the portable core requires it (or an explicit `apiKey`).
    */
   secrets?: SecretsPort;
+  /** Host-supplied CDP transport; prepared before provider allocation. */
+  transportFactory?: TransportFactory;
+  idGenerator?: () => string;
+  recordingIo?: import('../actions/types.ts').RecordingIo;
+  signal?: AbortSignal;
   /** Local browser discovery hook for the generic provider without `wsUrl`. */
   localEndpointResolver?: LocalEndpointResolver;
-}
+};
 
 export interface NewPageOptions {
   /**
@@ -146,10 +155,13 @@ function summarizeTargets(targets: TargetInfo[]): TargetSummary[] {
 }
 
 export class Browser {
+  /** Host-supplied disposable-fixture evidence, scoped to this physical browser. */
+  readonly capabilities: import('./capabilities.ts').CapabilityCache;
   private cdp: CDPClient;
   private providerSession: ProviderSession;
   private pages = new Map<string, Page>();
   private pageCounter = 0;
+  private readonly recordingIo?: import('../actions/types.ts').RecordingIo;
   private targetDiscoveryReady: Promise<void>;
 
   /**
@@ -164,7 +176,20 @@ export class Browser {
     _options: BrowserOptions
   ) {
     this.cdp = cdp;
+    this.recordingIo = _options.recordingIo;
     this.providerSession = providerSession;
+    this.capabilities = new CapabilityCache(
+      String(
+        providerSession.metadata?.['browserGeneration'] ??
+          _options.idGenerator?.() ??
+          globalThis.crypto?.randomUUID() ??
+          providerSession.sessionId ??
+          'unknown'
+      ),
+      typeof providerSession.metadata?.['revision'] === 'string'
+        ? providerSession.metadata['revision']
+        : undefined
+    );
     // Popup expectations rely on Target.targetCreated/targetInfoChanged. Ask
     // Chrome for those browser-level events as part of every Browser
     // initialization, including daemon-backed connections.
@@ -209,6 +234,20 @@ export class Browser {
    * Connect to a browser instance
    */
   static async connect(this: typeof Browser, options: BrowserOptions): Promise<Browser> {
+    const selection = normalizeProviderSelector(options.provider);
+    if (options.signal?.aborted)
+      throw new CapabilityError('cancelled', 'Connect cancelled before allocation');
+    if (
+      options.timeout !== undefined &&
+      (!Number.isFinite(options.timeout) || options.timeout <= 0)
+    )
+      throw new CapabilityError('deadline', 'Connect timeout must be positive');
+    const deadline = Date.now() + (options.timeout ?? 30000);
+    const remaining = () => {
+      const budget = deadline - Date.now();
+      if (budget <= 0) throw new CapabilityError('deadline', 'Connect deadline exceeded');
+      return budget;
+    };
     let connectOptions = options;
 
     if (options.provider === 'generic' && !options.wsUrl && !options.providerSession) {
@@ -221,10 +260,13 @@ export class Browser {
             'pass wsUrl / providerSession explicitly.'
         );
       }
-      const endpoint = await resolveEndpoint({
-        channel: options.channel,
-        userDataDir: options.userDataDir,
-      });
+      const endpoint = await withinBudget(
+        resolveEndpoint({
+          channel: options.channel,
+          userDataDir: options.userDataDir,
+        }),
+        { timeout: remaining(), signal: options.signal }
+      );
       connectOptions = {
         ...options,
         wsUrl: endpoint.wsUrl,
@@ -247,8 +289,12 @@ export class Browser {
         },
       };
     } else {
-      provider = createProvider(connectOptions, { secrets: connectOptions.secrets });
-      const rawSessionId = connectOptions.session?.['sessionId'];
+      provider = createProvider(connectOptions, {
+        secrets: connectOptions.secrets,
+        idGenerator: connectOptions.idGenerator,
+      });
+      const rawSessionId =
+        connectOptions.cloudflare?.providerSessionId ?? connectOptions.session?.['sessionId'];
       const sessionId = typeof rawSessionId === 'string' ? rawSessionId : undefined;
       if (sessionId !== undefined) {
         if (!provider.resumeSession) {
@@ -257,10 +303,19 @@ export class Browser {
             `Provider "${provider.name}" does not support session resumption (resumeSession is not implemented), so session "${sessionId}" cannot be resumed. Refusing to silently create a new session.`
           );
         }
-        session = await provider.resumeSession(sessionId);
+        session = await withinBudget(provider.resumeSession(sessionId), {
+          timeout: remaining(),
+          signal: options.signal,
+        });
         releaseOnFailure = false;
       } else {
-        session = await provider.createSession(connectOptions.session);
+        session = await withinBudget(
+          provider.createSession(connectOptions.session),
+          { timeout: remaining(), signal: options.signal },
+          async (lateSession) => {
+            await lateSession.close();
+          }
+        );
       }
     }
 
@@ -270,17 +325,63 @@ export class Browser {
 
     let cdp: CDPClient | undefined;
     try {
-      cdp = await createCDPClient(session.wsUrl, {
+      const connection = session.connection;
+      cdp = await createCDPClient(connection?.kind === 'url' ? connection.url : session.wsUrl, {
+        transportFactory:
+          connection?.kind === 'opener' ? connection.open : connectOptions.transportFactory,
+        signal: connectOptions.signal,
         debug: connectOptions.debug,
-        timeout: connectOptions.timeout,
+        timeout: remaining(),
+        commandTimeout: options.timeout ?? 30000,
+        headers: connection?.kind === 'url' ? connection.headers : connectOptions.wsHeaders,
       });
+      if (provider.name === 'cloudflare' || session.metadata?.['provider'] === 'cloudflare') {
+        const version = await cdp.send<{ product?: string; revision?: string }>(
+          'Browser.getVersion',
+          undefined,
+          null,
+          { timeout: remaining(), signal: options.signal }
+        );
+        if (typeof version.product !== 'string' || typeof version.revision !== 'string') {
+          throw new CapabilityError(
+            'PROTOCOL_RESULT_INVALID',
+            'Browser.getVersion returned invalid identity'
+          );
+        }
+        const detected = /@kitesurf\b/i.test(version.revision)
+          ? 'kitesurf'
+          : /chrome|chromium/i.test(version.product)
+            ? 'chromium'
+            : undefined;
+        const expected = session.metadata?.['requestedEngine'];
+        if (
+          !detected ||
+          (expected !== undefined && detected !== expected) ||
+          (selection.provider === 'cloudflare' &&
+            selection.explicitEngine &&
+            detected !== selection.engine)
+        ) {
+          throw new CapabilityError(
+            'ENGINE_MISMATCH',
+            'Cloudflare browser engine does not match the requested engine'
+          );
+        }
+        session.metadata = {
+          ...session.metadata,
+          detectedEngine: detected,
+          revision: version.revision,
+        };
+      }
       // Polymorphic static construction keeps Browser.connect() subclasses
       // compatible with the root entry's Browser constructor. `this` is
       // already typed as `typeof Browser` (see the method signature), so the
       // protected constructor can be invoked directly without a double cast.
       // biome-ignore lint/complexity/noThisInStatic: required for polymorphic static construction
       const browser = new this(cdp, provider, session, connectOptions);
-      await browser.targetDiscoveryReady;
+      await withinBudget(browser.targetDiscoveryReady, {
+        timeout: remaining(),
+        signal: options.signal,
+      });
       return browser;
     } catch (error) {
       await cdp?.close().catch(() => {});
@@ -295,9 +396,12 @@ export class Browser {
           });
         }
         if (cleanup?.status === 'cleanup_pending') {
-          throw new Error(
-            `${errMsg(error)}; provider cleanup pending for session ${cleanup.sessionId}`,
-            { cause: error }
+          throw Object.assign(
+            new Error(
+              `${errMsg(error)}; provider cleanup pending for session ${cleanup.sessionId}`,
+              { cause: error }
+            ),
+            { providerCleanup: cleanup }
           );
         }
       }
@@ -443,6 +547,9 @@ export class Browser {
 
     // Create and initialize page
     const page = new Page(createSessionScopedCDP(this.cdp, sessionId), targetId, {
+      recordingIo: this.recordingIo,
+      browserGeneration: this.capabilities.browserGeneration,
+      engineRevision: this.capabilities.revision,
       blockNativePrint: options?.blockNativePrint === true,
       targetProvenance: { targetId, source: 'selected' },
     });
@@ -725,11 +832,13 @@ export class Browser {
       const { targetInfos } = await this.cdp.send<{ targetInfos: TargetInfo[] }>(
         'Target.getTargets',
         undefined,
-        null
+        null,
+        { timeout: Math.max(1, deadline - Date.now()) }
       );
       if (!targetInfos.some((t) => t.targetId === targetId)) return;
       await new Promise((r) => setTimeout(r, 50));
     }
+    throw new CapabilityError('target-close', `Target ${targetId} did not disappear after close`);
   }
 
   /**
@@ -831,7 +940,7 @@ export class Browser {
       }
       throw cdpError;
     }
-    return releaseResult;
+    return releaseResult ? { ...releaseResult, localTerminated: !this.cdp.isConnected } : undefined;
   }
 
   /**

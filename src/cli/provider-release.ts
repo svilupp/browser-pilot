@@ -1,5 +1,6 @@
 /** Provider release for native CLI records. Embedding hosts own their own lifecycle. */
 import { BrowserBaseProvider } from '../providers/browserbase.ts';
+import { createProvider } from '../providers/index.ts';
 import type { ProviderReleaseResult } from '../providers/types.ts';
 import { getEnv } from '../runtime/env.ts';
 import type { SessionData } from './session.ts';
@@ -8,6 +9,21 @@ import type { SessionData } from './session.ts';
 export async function releaseBrowserbaseSession(
   session: SessionData
 ): Promise<ProviderReleaseResult | undefined> {
+  if (session.provider === 'cloudflare') {
+    if (session.metadata?.['ownership'] === 'borrowed' || session.connectionBound) return undefined;
+    if (!session.providerSessionId || !session.cloudflareRequest)
+      throw new Error('Cloudflare allocation identity unavailable; local cleanup record retained');
+    const provider = createProvider({
+      ...session.cloudflareRequest,
+      cloudflare: {
+        ...session.cloudflareRequest.cloudflare,
+        providerSessionId: session.providerSessionId,
+        takeOwnership: true,
+      },
+    } as import('../providers/types.ts').ConnectOptions);
+    const allocation = await provider.resumeSession!(session.providerSessionId);
+    return (await allocation.close()) ?? undefined;
+  }
   if (session.provider !== 'browserbase') return undefined;
   const apiKey = getEnv('BROWSERBASE_API_KEY');
   if (!apiKey || !session.providerSessionId) {

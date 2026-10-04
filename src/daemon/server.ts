@@ -6,10 +6,12 @@
  * CDP commands that are proxied to Chrome via the persistent WebSocket.
  */
 
+import { chmodSync } from 'node:fs';
 import { lstat, unlink } from 'node:fs/promises';
 import { createServer, connect as netConnect, type Server, type Socket } from 'node:net';
 import type { CDPClient } from '../cdp/client.ts';
 import { CDPError, type CDPErrorData } from '../cdp/protocol.ts';
+import { RuntimeResultError } from '../cdp/runtime-result.ts';
 import { daemonLog } from './lifecycle.ts';
 import type { DaemonEvent, DaemonRequest, DaemonResponse } from './types.ts';
 
@@ -51,7 +53,13 @@ function isValidDaemonRequest(value: unknown): value is DaemonRequest {
     typeof request.id === 'number' &&
     Number.isInteger(request.id) &&
     typeof request.method === 'string' &&
-    request.method.length > 0
+    request.method.length > 0 &&
+    (request.ipcBudget === undefined ||
+      (typeof request.ipcBudget === 'object' &&
+        request.ipcBudget !== null &&
+        Number.isFinite(request.ipcBudget.timeoutMs) &&
+        request.ipcBudget.timeoutMs > 0 &&
+        Number.isFinite(request.ipcBudget.sentAt)))
   );
 }
 
@@ -87,6 +95,8 @@ export interface DaemonServer {
 }
 
 export interface DaemonIdentity {
+  /** Connection-scoped leases are required for owner-held hosted sessions. */
+  requireLease?: boolean;
   daemonId?: string;
   endpointFingerprint?: string;
 }
@@ -136,7 +146,7 @@ export async function startDaemonServer(
   socketPath: string,
   cdp: CDPClient,
   onActivity: () => void,
-  onShutdown?: () => void,
+  onShutdown?: (reason?: 'recovery') => void,
   identity?: DaemonIdentity
 ): Promise<DaemonServer> {
   // Never unlink a live server's socket. A concurrent or manually started
@@ -144,6 +154,7 @@ export async function startDaemonServer(
   await removeStaleSocket(socketPath);
 
   const clients = new Set<Socket>();
+  let browserLease: { socket: Socket; pending: number } | undefined;
 
   // Forward all CDP events to all connected clients. The sessionId is carried
   // through so the CLI's CDP client can route session-scoped events (OOPIF child
@@ -220,28 +231,99 @@ export async function startDaemonServer(
       const request = parsed;
 
       try {
+        const remaining = request.ipcBudget
+          ? Math.min(
+              request.ipcBudget.timeoutMs,
+              request.ipcBudget.sentAt + request.ipcBudget.timeoutMs - Date.now()
+            )
+          : undefined;
+        if (remaining !== undefined && remaining <= 0)
+          throw new Error('IPC deadline exceeded before browser dispatch');
+        const sendOptions = remaining === undefined ? undefined : { timeout: remaining };
+        const sendToBrowser = async (
+          method: string,
+          params?: Record<string, unknown>,
+          sessionId?: string | null
+        ): Promise<unknown> => {
+          const lease = browserLease;
+          if (identity?.requireLease && lease?.socket !== socket)
+            throw new CDPError({
+              code: -32005,
+              message: 'session_busy: acquire the command lease before browser dispatch',
+            });
+          if (lease?.socket === socket) lease.pending++;
+          try {
+            return await cdp.send(method, params, sessionId, sendOptions);
+          } finally {
+            if (lease?.socket === socket) {
+              lease.pending--;
+              if (lease.pending === 0 && socket.destroyed && browserLease === lease)
+                browserLease = undefined;
+            }
+          }
+        };
         // Control-plane methods never cross the browser connection. They let
         // clients verify daemon ownership without opening another CDP socket.
         let result: unknown;
-        if (request.method === 'daemon.ping') {
+        if (request.method === 'daemon.acquireLease') {
+          if (browserLease && browserLease.socket !== socket)
+            throw new CDPError({
+              code: -32005,
+              message: 'session_busy: another command holds the browser lease',
+            });
+          browserLease ??= { socket, pending: 0 };
+          result = { ok: true };
+        } else if (request.method === 'daemon.releaseLease') {
+          if (browserLease?.socket !== socket || browserLease.pending !== 0)
+            throw new CDPError({
+              code: -32005,
+              message: 'session_busy: lease is absent or commands are still pending',
+            });
+          browserLease = undefined;
+          result = { ok: true };
+        } else if (request.method === 'daemon.ping') {
           result = { ok: true, ...identity };
         } else if (request.method === 'daemon.status') {
-          result = { ok: true, pid: process.pid, clientCount: clients.size, ...identity };
+          result = {
+            ok: true,
+            pid: process.pid,
+            clientCount: clients.size,
+            commandLeaseActive: browserLease !== undefined,
+            ...identity,
+          };
         } else if (request.method === 'daemon.shutdown') {
+          const reason = request.params?.['reason'];
+          if (reason !== undefined && reason !== 'recovery')
+            throw new Error('Invalid daemon shutdown reason');
           result = { ok: true };
-          onShutdown?.();
+          queueMicrotask(() => onShutdown?.(reason));
         } else if (request.method === 'daemon.detach' && request.params?.['sessionId']) {
-          await cdp.send(
+          await sendToBrowser(
             'Target.detachFromTarget',
             { sessionId: String(request.params['sessionId']) },
             null
           );
           result = { ok: true };
         } else {
-          result = await cdp.send(request.method, request.params, request.sessionId);
+          result = await sendToBrowser(request.method, request.params, request.sessionId);
         }
         writeMessage(socket, { id: request.id, result });
       } catch (err) {
+        if (
+          err instanceof RuntimeResultError &&
+          (request.method === 'Runtime.evaluate' || request.method === 'Runtime.callFunctionOn')
+        ) {
+          // Preserve the Runtime failure envelope across IPC so the command's
+          // decoder retains exceptionDetails and the protocol-invalid code.
+          writeMessage(socket, {
+            id: request.id,
+            result:
+              err.code === 'RUNTIME_EXCEPTION'
+                ? { result: { type: 'undefined' }, exceptionDetails: err.exceptionDetails }
+                : { result: null },
+          });
+          return;
+        }
         writeMessage(socket, { id: request.id, error: serializeError(err) });
       }
     };
@@ -251,6 +333,7 @@ export async function startDaemonServer(
     });
 
     socket.on('close', () => {
+      if (browserLease?.socket === socket && browserLease.pending === 0) browserLease = undefined;
       clients.delete(socket);
       daemonLog('info', `Client disconnected (total: ${clients.size})`);
     });
@@ -268,6 +351,12 @@ export async function startDaemonServer(
     });
 
     server.listen(socketPath, () => {
+      try {
+        chmodSync(socketPath, 0o600);
+      } catch (error) {
+        server.close(() => reject(error));
+        return;
+      }
       daemonLog('info', `Daemon server listening on ${socketPath}`);
 
       resolve({
