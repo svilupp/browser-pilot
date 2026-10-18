@@ -66,10 +66,18 @@ export class InProcessSessionOwner extends PortableLegacyOwner {
 }
 
 export {
+  borrowNamedSession,
+  type NamedSessionBorrow,
+  type NamedSessionHandback,
+  type NamedSessionOptions,
+} from './named-session.ts';
+export {
   describeObservationSession,
   type ObservedSession,
   type ObserveSessionOptions,
   observeSession,
 } from './observe-session.ts';
+export { type OwnerActionDaemonOptions, startOwnerActionDaemon } from './owner-action-daemon.ts';
+export { type BorrowedOwnerActions, borrowOwnerActions } from './owner-actions.ts';
 export { nodeRecordingIo } from './recording.ts';
 export { ConnectionSessionOwner } from './session-owner.ts';

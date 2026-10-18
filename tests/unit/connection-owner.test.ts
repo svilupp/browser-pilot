@@ -2,6 +2,14 @@ import { expect, test } from 'bun:test';
 import { Browser } from '../../src/browser/browser.ts';
 import type { Transport } from '../../src/cdp/transport.ts';
 import { ConnectionSessionOwner } from '../../src/core/sessions/owner.ts';
+import {
+  decodeObject,
+  jsonNumber,
+  jsonRecord,
+  jsonString,
+  optionalJson,
+  parseJson,
+} from '../../src/utils/json.ts';
 
 function fixture() {
   let messages: ((message: string) => void) | undefined;
@@ -10,11 +18,11 @@ function fixture() {
   let closes = 0;
   const transport: Transport = {
     send(raw) {
-      const request = JSON.parse(raw) as {
-        id: number;
-        method: string;
-        params?: Record<string, unknown>;
-      };
+      const request = decodeObject(parseJson(raw), {
+        id: jsonNumber,
+        method: jsonString,
+        params: optionalJson(jsonRecord),
+      });
       let result: unknown = {};
       if (request.method === 'Target.getTargets')
         result = {

@@ -1,3 +1,4 @@
+import { now as clockNow } from '../runtime/clock.ts';
 /**
  * Thin OpenAI Whisper transcription wrapper
  *
@@ -68,7 +69,7 @@ export async function transcribe(
     sampleRate: audio.sampleRate,
   });
 
-  const boundary = `----bpAudio${Date.now()}`;
+  const boundary = `----bpAudio${clockNow()}`;
   const parts: Uint8Array[] = [];
 
   appendFormField(parts, boundary, 'file', new Uint8Array(wavBuffer), 'audio.wav', 'audio/wav');
@@ -92,7 +93,7 @@ export async function transcribe(
     offset += part.length;
   }
 
-  const start = Date.now();
+  const start = clockNow();
   const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
     method: 'POST',
     headers: {
@@ -101,7 +102,7 @@ export async function transcribe(
     },
     body,
   });
-  const apiDurationMs = Date.now() - start;
+  const apiDurationMs = clockNow() - start;
 
   if (!response.ok) {
     const errorBody = await response.text().catch(() => '');

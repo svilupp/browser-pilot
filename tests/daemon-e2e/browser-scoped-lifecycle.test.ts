@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { decodeObject, jsonString, optionalJson, parseJson } from '../../src/utils/json.ts';
 import { generateSessionName, runCLI } from '../cli/setup.ts';
 import { createAutoConnectHarness, destroyHarness } from '../utils/harness.ts';
 
@@ -51,9 +52,11 @@ describe('Packaged browser-scoped daemon lifecycle', () => {
         'sessions',
         `${thirdSession}.json`
       );
-      const persisted = JSON.parse(await readFile(sessionPath, 'utf8')) as {
-        daemon?: { cdpSessionId?: string };
-      };
+      const persisted = decodeObject(parseJson(await readFile(sessionPath, 'utf8')), {
+        daemon: optionalJson((value) =>
+          decodeObject(value, { cdpSessionId: optionalJson(jsonString) })
+        ),
+      });
       expect(typeof persisted.daemon?.cdpSessionId).toBe('string');
 
       process.kill(daemonPid!, 'SIGKILL');

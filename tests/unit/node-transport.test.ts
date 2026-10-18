@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test';
 import { WebSocketServer } from 'ws';
 import { createNodeTransportFactory } from '../../src/adapters/node/transport.ts';
 import { createCDPClient } from '../../src/cdp/client.ts';
+import { decodeObject, jsonNumber, parseJson } from '../../src/utils/json.ts';
 
 test('maintained Node transport authenticates and decodes real binary CDP responses', async () => {
   const server = new WebSocketServer({ port: 0 });
@@ -12,7 +13,7 @@ test('maintained Node transport authenticates and decodes real binary CDP respon
   server.on('connection', (socket, request) => {
     authorization = request.headers.authorization;
     socket.on('message', (data) => {
-      const request = JSON.parse(data.toString()) as { id: number };
+      const request = decodeObject(parseJson(data.toString()), { id: jsonNumber });
       socket.send(
         Buffer.from(JSON.stringify({ id: request.id, result: { value: 'round trip' } })),
         { binary: true }

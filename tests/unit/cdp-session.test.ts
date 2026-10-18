@@ -1,3 +1,4 @@
+import { parseJsonRecord } from '../../src/utils/json.ts';
 /**
  * Unit tests for multi-session (flat) CDP support in the client layer.
  *
@@ -20,7 +21,7 @@ class FakeTransport implements Transport {
   private closeHandlers: Array<() => void> = [];
 
   send(message: string): void {
-    const parsed = JSON.parse(message) as Record<string, unknown>;
+    const parsed = parseJsonRecord(message);
     this.sent.push(parsed);
     if (this.autoRespond && typeof parsed['id'] === 'number') {
       const id = parsed['id'];

@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test';
 import { Page } from '../../src/browser/page.ts';
 import { createCDPClientFromTransport } from '../../src/cdp/client.ts';
 import type { Transport } from '../../src/cdp/transport.ts';
+import { decodeObject, jsonNumber, jsonString, parseJson } from '../../src/utils/json.ts';
 
 test('one keyboard action budget spans multiple CDP input acknowledgements and never replays late input', async () => {
   let message: ((raw: string) => void) | undefined;
@@ -9,7 +10,7 @@ test('one keyboard action budget spans multiple CDP input acknowledgements and n
   const timers: Array<ReturnType<typeof setTimeout>> = [];
   const transport: Transport = {
     send(raw) {
-      const request = JSON.parse(raw) as { id: number; method: string };
+      const request = decodeObject(parseJson(raw), { id: jsonNumber, method: jsonString });
       requests.push(request.method);
       timers.push(setTimeout(() => message?.(JSON.stringify({ id: request.id, result: {} })), 50));
     },

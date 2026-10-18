@@ -80,3 +80,8 @@ export function requireEnv(name: string): string {
 export function isDaemonDisabledByEnv(): boolean {
   return ['1', 'true'].includes((getEnv('BROWSER_PILOT_NO_DAEMON') ?? '').trim().toLowerCase());
 }
+
+/** Snapshot the active environment including explicit overrides. */
+export function getEnvironment(): Record<string, string | undefined> {
+  return { ...getProcessEnv(), ...envOverrides };
+}

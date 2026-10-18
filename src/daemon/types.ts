@@ -11,6 +11,9 @@ import type { CDPErrorData } from '../cdp/protocol.ts';
 export interface DaemonRequest {
   /** Unique request ID for correlation */
   id: number;
+  /** Owner-issued socket-bound admission proof; never forwarded to Chrome. */
+  ownerFence?: import('../owner/lease-controller.ts').OwnerFence;
+  ownerOperationId?: string;
   /** Local-host IPC envelope; never forwarded to the browser. */
   ipcBudget?: { timeoutMs: number; sentAt: number };
   /** CDP method to execute */

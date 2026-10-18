@@ -1,3 +1,5 @@
+import { now as clockNow } from '../runtime/clock.ts';
+import { reportDiagnostic } from '../trace/tracer.ts';
 import { CapabilityCache } from './capabilities.ts';
 /**
  * Browser class - manages CDP connection and pages
@@ -242,9 +244,9 @@ export class Browser {
       (!Number.isFinite(options.timeout) || options.timeout <= 0)
     )
       throw new CapabilityError('deadline', 'Connect timeout must be positive');
-    const deadline = Date.now() + (options.timeout ?? 30000);
+    const deadline = clockNow() + (options.timeout ?? 30000);
     const remaining = () => {
-      const budget = deadline - Date.now();
+      const budget = deadline - clockNow();
       if (budget <= 0) throw new CapabilityError('deadline', 'Connect deadline exceeded');
       return budget;
     };
@@ -320,7 +322,7 @@ export class Browser {
     }
 
     if (session.metadata?.['liveUrl']) {
-      console.error(`Live viewer: ${session.metadata['liveUrl']}`);
+      reportDiagnostic('error', 'navigation', `Live viewer: ${session.metadata['liveUrl']}`);
     }
 
     let cdp: CDPClient | undefined;
@@ -565,7 +567,9 @@ export class Browser {
           '({ w: window.innerWidth, h: window.innerHeight })'
         );
         if (viewport.w < minViewport.width || viewport.h < minViewport.height) {
-          console.warn(
+          reportDiagnostic(
+            'warn',
+            'navigation',
             `[browser-pilot] Attached target has small viewport (${viewport.w}x${viewport.h}). ` +
               `Applying default viewport override (1280x720). ` +
               `Use { minViewport: false } to disable this check.`
@@ -619,7 +623,7 @@ export class Browser {
     options: ExpectNewPageOptions = {}
   ): Promise<Page> {
     await (this.targetDiscoveryReady ?? Promise.resolve());
-    const armedAt = Date.now();
+    const armedAt = clockNow();
     const timeout = options.timeout ?? 15000;
     const expectedTypes = options.type
       ? new Set(Array.isArray(options.type) ? options.type : [options.type])
@@ -772,7 +776,7 @@ export class Browser {
     const onCreated = (params: Record<string, unknown>): void => {
       const info = params['targetInfo'] as TargetInfo | undefined;
       if (!info || typeof info.targetId !== 'string') return;
-      const candidate = { info, createdAt: Date.now() };
+      const candidate = { info, createdAt: clockNow() };
       candidates.set(info.targetId, candidate);
       attachCandidate(candidate);
     };
@@ -827,13 +831,13 @@ export class Browser {
     this.pages.delete(name);
 
     // Wait for the browser to actually destroy the target
-    const deadline = Date.now() + 5000;
-    while (Date.now() < deadline) {
+    const deadline = clockNow() + 5000;
+    while (clockNow() < deadline) {
       const { targetInfos } = await this.cdp.send<{ targetInfos: TargetInfo[] }>(
         'Target.getTargets',
         undefined,
         null,
-        { timeout: Math.max(1, deadline - Date.now()) }
+        { timeout: Math.max(1, deadline - clockNow()) }
       );
       if (!targetInfos.some((t) => t.targetId === targetId)) return;
       await new Promise((r) => setTimeout(r, 50));

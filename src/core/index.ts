@@ -94,6 +94,24 @@ export {
 } from '../providers/selector.ts';
 export { getBuildProvenance } from '../runtime/provenance.ts';
 export { webmcpCall, webmcpList } from '../webmcp/client.ts';
+export type {
+  OwnerAction,
+  OwnerActionCapabilities,
+  OwnerActionContext,
+  OwnerActionPolicy,
+  OwnerActionPort,
+  OwnerActionReceipt,
+  OwnerActionService,
+  OwnerApproval,
+  OwnerAssurance,
+  OwnerExtractField,
+  OwnerExtractRequest,
+  OwnerExtractResult,
+  OwnerGrant,
+  OwnerObservation,
+  PreparedAction,
+} from './owner-actions/index.ts';
+export { createOwnerActionService } from './owner-actions/index.ts';
 export {
   LegacyReconnectAdapter,
   type LegacyReconnectAdapterOptions,

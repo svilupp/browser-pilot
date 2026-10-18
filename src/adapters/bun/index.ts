@@ -5,14 +5,12 @@ import type { TransportFactory } from '../../cdp/transport.ts';
 export function createBunTransportFactory(): TransportFactory {
   return async (url, options = {}) => {
     if (options.signal?.aborted) throw new Error('WebSocket connection aborted');
-    const Socket = WebSocket as unknown as new (
-      url: string,
-      options: { headers?: Record<string, string> }
-    ) => WebSocket;
-    const socket =
+    // Bun extends the constructor with handshake options; validate its standard socket contract.
+    const socket: unknown =
       options.headers && Object.keys(options.headers).length
-        ? new Socket(url, { headers: options.headers })
+        ? Reflect.construct(WebSocket, [url, { headers: options.headers }])
         : new WebSocket(url);
+    if (!(socket instanceof WebSocket)) throw new Error('Invalid Bun WebSocket');
     return openSocket(socket, options);
   };
 }

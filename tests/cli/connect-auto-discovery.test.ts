@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { mkdir, mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { decodeObject, jsonString, optionalJson, parseJson } from '../../src/utils/json.ts';
 import { createAutoConnectHarness, createTestHarness, destroyHarness } from '../utils/harness.ts';
 import { generateSessionName, runCLI } from './setup.ts';
 
@@ -94,12 +95,22 @@ describe('CLI connect auto-discovery', () => {
 
       expect(result.exitCode).toBe(0);
       expect(result.json).toMatchObject({ success: true, transport: 'direct' });
-      const session = JSON.parse(
-        await readFile(
-          join(harness.homeDir!, '.browser-pilot', 'sessions', `${sessionName}.json`),
-          'utf8'
-        )
-      ) as { transport?: { mode?: string; reason?: string } };
+      const session = decodeObject(
+        parseJson(
+          await readFile(
+            join(harness.homeDir!, '.browser-pilot', 'sessions', `${sessionName}.json`),
+            'utf8'
+          )
+        ),
+        {
+          transport: optionalJson((value) =>
+            decodeObject(value, {
+              mode: optionalJson(jsonString),
+              reason: optionalJson(jsonString),
+            })
+          ),
+        }
+      );
       expect(session.transport).toEqual({ mode: 'direct', reason: 'environment' });
     } finally {
       await runCLI(['close', '-s', sessionName], { env }).catch(() => {});

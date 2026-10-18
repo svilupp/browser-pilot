@@ -1,3 +1,4 @@
+import { now as clockNow } from '../runtime/clock.ts';
 /**
  * Actionability checks for browser automation
  *
@@ -508,14 +509,14 @@ export async function ensureActionable(
   options?: ActionabilityOptions
 ): Promise<void> {
   const timeout = options?.timeout ?? 30000;
-  const start = Date.now();
+  const start = clockNow();
   let attempt = 0;
 
   while (true) {
     const result = await runChecks(cdp, objectId, checks, options);
     if (result.actionable) return;
 
-    if (Date.now() - start >= timeout) {
+    if (clockNow() - start >= timeout) {
       throw new ActionabilityError(
         `Element not actionable: ${result.reason}`,
         result.failureType,

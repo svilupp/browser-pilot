@@ -1,6 +1,16 @@
 import type { CDPClient } from '../cdp/client.ts';
 import { PageScript } from '../cdp/page-script.ts';
+import { now as clockNow } from '../runtime/clock.ts';
 import { createExecutionId } from '../runtime/id.ts';
+import {
+  decodeObject,
+  jsonNumber,
+  jsonRecord,
+  jsonString,
+  jsonTraceSeverity,
+  optionalJson,
+  parseJson,
+} from '../utils/json.ts';
 import { formatConsoleArg, globToRegex, readString, readStringOr } from '../utils/strings.ts';
 import type { CanonicalTraceEvent } from './model.ts';
 import { createTraceId, normalizeTraceEvent } from './model.ts';
@@ -40,7 +50,7 @@ export class LiveTraceCollector {
     }
   >();
   private readonly events: CanonicalTraceEvent[] = [];
-  private readonly startTime = Date.now();
+  private readonly startTime = clockNow();
   private readonly matchRegex: RegExp | null;
 
   constructor(cdp: CDPClient, options: LiveTraceCollectorOptions = {}) {
@@ -297,13 +307,13 @@ export class LiveTraceCollector {
 
       const raw = readStringOr(params['payload']);
       try {
-        const payload = JSON.parse(raw) as {
-          event: string;
-          severity?: 'info' | 'warn' | 'error';
-          summary?: string;
-          ts?: number;
-          data?: Record<string, unknown>;
-        };
+        const payload = decodeObject(parseJson(raw), {
+          event: jsonString,
+          severity: optionalJson(jsonTraceSeverity),
+          summary: optionalJson(jsonString),
+          ts: optionalJson(jsonNumber),
+          data: optionalJson(jsonRecord),
+        });
 
         const channel = this.channelForTraceEvent(payload.event);
         void this.emit({
@@ -321,13 +331,15 @@ export class LiveTraceCollector {
     });
   }
 
-  async stop(): Promise<CanonicalTraceEvent[]> {
+  async stop(options: { requireCleanup?: boolean } = {}): Promise<CanonicalTraceEvent[]> {
     for (const { event, handler } of this.handlers) {
       this.cdp.off(event, handler);
     }
     this.handlers.length = 0;
-    await this.script?.dispose();
+    const cleanupErrors = await this.script?.dispose();
     this.script = undefined;
+    if (options.requireCleanup && cleanupErrors?.length)
+      throw new Error('Trace instrumentation cleanup is incomplete');
     return [...this.events];
   }
 
@@ -387,7 +399,7 @@ export class LiveTraceCollector {
       traceId: event.traceId ?? createTraceId(event.channel),
       sessionId: this.options.sessionId,
       targetId: this.options.targetId,
-      elapsedMs: event.elapsedMs ?? Date.now() - this.startTime,
+      elapsedMs: event.elapsedMs ?? clockNow() - this.startTime,
       ...event,
     });
     this.events.push(normalized);

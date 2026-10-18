@@ -8,13 +8,14 @@ import type { StepResult } from '../../src/actions/types.ts';
 import { nodeRecordingIo } from '../../src/adapters/node/recording.ts';
 import { getHighlightLabel, stepToHighlightKind } from '../../src/browser/action-highlight.ts';
 import type { Page } from '../../src/browser/page.ts';
-import type { RecordingManifest } from '../../src/recording/manifest.ts';
+import { canonicalizeRecordingArtifact } from '../../src/recording/manifest.ts';
 import {
   isSensitiveFieldMetadata,
   REDACTED_VALUE,
   redactValueForRecording,
 } from '../../src/recording/redaction.ts';
 import { RECORDER_SCRIPT } from '../../src/recording/script.ts';
+import { parseJson } from '../../src/utils/json.ts';
 
 function createRecordingPage(options: { failClick?: boolean } = {}) {
   const calls: Array<{ method: string; args: unknown[] }> = [];
@@ -198,9 +199,9 @@ describe('recording artifacts', () => {
     expect(result.steps[0]?.screenshotPath).toBeDefined();
     expect(fs.existsSync(result.steps[0]!.screenshotPath!)).toBe(true);
 
-    const manifest = JSON.parse(
-      await readFile(result.recordingManifest!, 'utf-8')
-    ) as RecordingManifest;
+    const manifest = canonicalizeRecordingArtifact(
+      parseJson(await readFile(result.recordingManifest!, 'utf-8'))
+    );
 
     expect(manifest.session.id).toBe('sess-redacted');
     expect(manifest.actions).toHaveLength(1);
@@ -228,9 +229,9 @@ describe('recording artifacts', () => {
     expect(result.stoppedAtIndex).toBe(0);
     expect(result.recordingManifest).toBe(join(tempDir, 'recording.json'));
 
-    const manifest = JSON.parse(
-      await readFile(result.recordingManifest!, 'utf-8')
-    ) as RecordingManifest;
+    const manifest = canonicalizeRecordingArtifact(
+      parseJson(await readFile(result.recordingManifest!, 'utf-8'))
+    );
 
     expect(manifest.session.id).toBe('sess-failure');
     expect(manifest.actions).toHaveLength(1);
@@ -249,9 +250,9 @@ describe('recording artifacts', () => {
     });
     expect(result1.success).toBe(true);
 
-    const manifest1 = JSON.parse(
-      await readFile(join(tempDir, 'recording.json'), 'utf-8')
-    ) as RecordingManifest;
+    const manifest1 = canonicalizeRecordingArtifact(
+      parseJson(await readFile(join(tempDir, 'recording.json'), 'utf-8'))
+    );
     expect(manifest1.actions).toHaveLength(1);
 
     // Second execution: another click — frames should accumulate
@@ -260,9 +261,9 @@ describe('recording artifacts', () => {
     });
     expect(result2.success).toBe(true);
 
-    const manifest2 = JSON.parse(
-      await readFile(join(tempDir, 'recording.json'), 'utf-8')
-    ) as RecordingManifest;
+    const manifest2 = canonicalizeRecordingArtifact(
+      parseJson(await readFile(join(tempDir, 'recording.json'), 'utf-8'))
+    );
     expect(manifest2.actions).toHaveLength(2);
     expect(manifest2.actions[0]?.action).toBe('click');
     expect(manifest2.actions[1]?.action).toBe('click');

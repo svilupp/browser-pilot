@@ -15,6 +15,12 @@ For local Chrome on Chrome 144+, try plain `bp connect` first after enabling rem
 Keep the named session for capture and replay. Local CLI sessions use one
 browser-scoped daemon by default; CI must set `BROWSER_PILOT_NO_DAEMON=1`.
 
+## Shared controller ownership
+
+Named daemon sessions admit one controller across all aliases. On `session_busy`, wait for the current controller to hand back; do not reconnect, open a fallback tab or force-stop the owner. After Flightplan returns control, take a fresh snapshot before using element refs.
+
+An uncertain action requires reconciliation before another controller can act. Strict owner profiles require the typed host API and refuse raw CLI/CDP actions. See [shared owner](../guides/shared-owner.md) when embedding or configuring a guarded host.
+
 ## Core rule
 
 Do not start by reading raw `recording.json`.

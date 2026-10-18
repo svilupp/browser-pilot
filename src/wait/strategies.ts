@@ -1,3 +1,4 @@
+import { now as clockNow } from '../runtime/clock.ts';
 /**
  * Wait strategy implementations
  */
@@ -260,7 +261,7 @@ export async function waitForElement(
 ): Promise<WaitResult> {
   const { state = 'visible', timeout = 30000, pollInterval = 100, contextId } = options;
 
-  const startTime = Date.now();
+  const startTime = clockNow();
   const deadline = startTime + timeout;
 
   const checkCondition = async (): Promise<boolean> => {
@@ -282,7 +283,7 @@ export async function waitForElement(
 
   // Immediate check
   if (await checkCondition()) {
-    return { success: true, waitedMs: Date.now() - startTime };
+    return { success: true, waitedMs: clockNow() - startTime };
   }
 
   // For waiting-for-absence states (hidden/detached), skip fast-fail
@@ -296,22 +297,22 @@ export async function waitForElement(
     if (pageStatic) {
       // DOM is static — one final check then bail
       if (await checkCondition()) {
-        return { success: true, waitedMs: Date.now() - startTime };
+        return { success: true, waitedMs: clockNow() - startTime };
       }
-      return { success: false, waitedMs: Date.now() - startTime };
+      return { success: false, waitedMs: clockNow() - startTime };
     }
   }
 
   // Standard polling loop for dynamic pages
-  while (Date.now() < deadline) {
+  while (clockNow() < deadline) {
     await sleep(pollInterval);
 
     if (await checkCondition()) {
-      return { success: true, waitedMs: Date.now() - startTime };
+      return { success: true, waitedMs: clockNow() - startTime };
     }
   }
 
-  return { success: false, waitedMs: Date.now() - startTime };
+  return { success: false, waitedMs: clockNow() - startTime };
 }
 
 /**
@@ -325,7 +326,7 @@ export async function waitForAnyElement(
 ): Promise<{ success: boolean; selector?: string; waitedMs: number }> {
   const { state = 'visible', timeout = 30000, pollInterval = 100, contextId } = options;
 
-  const startTime = Date.now();
+  const startTime = clockNow();
   const deadline = startTime + timeout;
 
   const checkSelector = async (selector: string): Promise<boolean> => {
@@ -348,7 +349,7 @@ export async function waitForAnyElement(
   // Immediate check
   for (const selector of selectors) {
     if (await checkSelector(selector)) {
-      return { success: true, selector, waitedMs: Date.now() - startTime };
+      return { success: true, selector, waitedMs: clockNow() - startTime };
     }
   }
 
@@ -359,25 +360,25 @@ export async function waitForAnyElement(
     if (pageStatic) {
       for (const selector of selectors) {
         if (await checkSelector(selector)) {
-          return { success: true, selector, waitedMs: Date.now() - startTime };
+          return { success: true, selector, waitedMs: clockNow() - startTime };
         }
       }
-      return { success: false, waitedMs: Date.now() - startTime };
+      return { success: false, waitedMs: clockNow() - startTime };
     }
   }
 
   // Standard polling loop
-  while (Date.now() < deadline) {
+  while (clockNow() < deadline) {
     await sleep(pollInterval);
 
     for (const selector of selectors) {
       if (await checkSelector(selector)) {
-        return { success: true, selector, waitedMs: Date.now() - startTime };
+        return { success: true, selector, waitedMs: clockNow() - startTime };
       }
     }
   }
 
-  return { success: false, waitedMs: Date.now() - startTime };
+  return { success: false, waitedMs: clockNow() - startTime };
 }
 
 export interface NavigationOptions {
@@ -435,7 +436,7 @@ export async function waitForNavigation(
 ): Promise<WaitResult> {
   const { timeout = 30000, allowSameDocument = true, waitUntil = 'load', expectedUrl } = options;
 
-  const startTime = Date.now();
+  const startTime = clockNow();
   let startUrl = '';
   let startLoaderId: string | undefined;
   const initialUrl = getCurrentUrl(cdp).catch(() => '');
@@ -457,7 +458,7 @@ export async function waitForNavigation(
       resolved = true;
       lastMilestone = milestone ?? lastMilestone;
       for (const fn of cleanup) fn();
-      resolve({ success, waitedMs: Date.now() - startTime, milestone: lastMilestone });
+      resolve({ success, waitedMs: clockNow() - startTime, milestone: lastMilestone });
     };
 
     const isMainFrame = (frameId?: unknown, parentId?: unknown): boolean => {
@@ -638,7 +639,7 @@ export async function waitForNavigation(
 
     // Fallback: URL polling (catches edge cases)
     const pollUrl = async () => {
-      while (!resolved && Date.now() < startTime + timeout) {
+      while (!resolved && clockNow() < startTime + timeout) {
         await sleep(100);
         if (resolved) return;
         try {
@@ -798,7 +799,7 @@ export async function waitForReady(
 ): Promise<WaitResult> {
   const timeout = options.timeout ?? 30000;
   const pollInterval = options.pollInterval ?? 100;
-  const startTime = Date.now();
+  const startTime = clockNow();
   const deadline = startTime + timeout;
   const anyConditions = options.any ?? [];
   const allConditions = options.all ?? [];
@@ -811,7 +812,7 @@ export async function waitForReady(
   let unmet: string[] = [];
 
   try {
-    while (Date.now() <= deadline) {
+    while (clockNow() <= deadline) {
       const checks: ReadyCheckResult[] = [];
       if (options.url !== undefined)
         checks.push(await checkReadyCondition(cdp, { url: options.url }, options));
@@ -843,17 +844,17 @@ export async function waitForReady(
       if (!quiet) missing.push(`DOM quiet for ${quietFor}ms`);
       unmet = missing;
       if (missing.length === 0) {
-        return { success: true, waitedMs: Date.now() - startTime };
+        return { success: true, waitedMs: clockNow() - startTime };
       }
-      if (Date.now() >= deadline) break;
-      await sleep(Math.min(pollInterval, Math.max(0, deadline - Date.now())));
+      if (clockNow() >= deadline) break;
+      await sleep(Math.min(pollInterval, Math.max(0, deadline - clockNow())));
     }
     return {
       success: false,
-      waitedMs: Date.now() - startTime,
+      waitedMs: clockNow() - startTime,
       diagnostics: {
         ready: false,
-        waitedMs: Date.now() - startTime,
+        waitedMs: clockNow() - startTime,
         unmetConditions: unmet,
         checkedAt: new Date().toISOString(),
       },
@@ -871,7 +872,7 @@ export async function waitForNetworkIdle(
   options: { timeout?: number; idleTime?: number } = {}
 ): Promise<WaitResult> {
   const { timeout = 30000, idleTime = 500 } = options;
-  const startTime = Date.now();
+  const startTime = clockNow();
 
   // Enable network events if not already enabled
   await cdp.send('Network.enable');
@@ -882,7 +883,7 @@ export async function waitForNetworkIdle(
 
     const timeoutTimer = setTimeout(() => {
       cleanup();
-      resolve({ success: false, waitedMs: Date.now() - startTime });
+      resolve({ success: false, waitedMs: clockNow() - startTime });
     }, timeout);
 
     const checkIdle = () => {
@@ -890,7 +891,7 @@ export async function waitForNetworkIdle(
         if (idleTimer) clearTimeout(idleTimer);
         idleTimer = setTimeout(() => {
           cleanup();
-          resolve({ success: true, waitedMs: Date.now() - startTime });
+          resolve({ success: true, waitedMs: clockNow() - startTime });
         }, idleTime);
       }
     };

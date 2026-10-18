@@ -1,3 +1,5 @@
+import { now as clockNow } from '../runtime/clock.ts';
+import { decodeObject, jsonNumber, jsonString, parseJson } from '../utils/json.ts';
 /**
  * AudioOutput — capture audio that a page plays
  *
@@ -675,11 +677,11 @@ export class AudioOutput {
     return new Promise<CaptureResult>((resolve) => {
       let heardAudio = false;
       let lastSoundTime = 0;
-      const startTime = Date.now();
+      const startTime = clockNow();
 
       const checkInterval = setInterval(() => {
         void (async () => {
-          const elapsed = Date.now() - startTime;
+          const elapsed = clockNow() - startTime;
 
           // Check max duration (applies to both phases)
           if (elapsed > maxDuration) {
@@ -698,7 +700,7 @@ export class AudioOutput {
                 heardAudio = true;
                 this.onDiagHandler?.('first audio detected — silence countdown begins');
               }
-              lastSoundTime = Date.now();
+              lastSoundTime = clockNow();
             }
           }
 
@@ -711,7 +713,7 @@ export class AudioOutput {
           }
 
           // Only apply silence timeout AFTER first audio detected
-          if (heardAudio && Date.now() - lastSoundTime > silenceTimeout) {
+          if (heardAudio && clockNow() - lastSoundTime > silenceTimeout) {
             clearInterval(checkInterval);
             resolve(await this.stop());
           }
@@ -810,12 +812,12 @@ export class AudioOutput {
 
   private handleAudioData(payload: string): void {
     try {
-      const data = JSON.parse(payload) as {
-        left: string;
-        right: string;
-        sampleRate: number;
-        samples: number;
-      };
+      const data = decodeObject(parseJson(payload), {
+        left: jsonString,
+        right: jsonString,
+        sampleRate: jsonNumber,
+        samples: jsonNumber,
+      });
 
       const leftBytes = base64ToBuffer(data.left);
       const rightBytes = base64ToBuffer(data.right);
@@ -824,7 +826,7 @@ export class AudioOutput {
         right: new Float32Array(rightBytes.buffer),
         sampleRate: data.sampleRate,
         samples: data.samples,
-        timestamp: Date.now(),
+        timestamp: clockNow(),
       };
 
       this.chunks.push(chunk);
@@ -840,7 +842,7 @@ export class AudioOutput {
       if (this.firstChunkTime === null) {
         const rms = calculateRMS(chunk.left);
         if (rms > 0.001) {
-          this.firstChunkTime = Date.now();
+          this.firstChunkTime = clockNow();
         }
       }
 

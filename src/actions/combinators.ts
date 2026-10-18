@@ -1,3 +1,4 @@
+import { now as clockNow } from '../runtime/clock.ts';
 /**
  * Condition combinators for multi-path waits
  */
@@ -101,7 +102,7 @@ export async function conditionRace(
 ): Promise<CombinatorResult> {
   const { timeout = 10000, pollInterval = 200, networkTracker, beforeSignature } = options;
   const context = { networkTracker, beforeSignature };
-  const startTime = Date.now();
+  const startTime = clockNow();
   const deadline = startTime + timeout;
 
   // Immediate check
@@ -109,7 +110,7 @@ export async function conditionRace(
   if (immediate.matched) return immediate;
 
   // Polling loop
-  while (Date.now() < deadline) {
+  while (clockNow() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, pollInterval));
     const result = await conditionAny(conditions, page, context);
     if (result.matched) return result;

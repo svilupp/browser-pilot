@@ -15,6 +15,7 @@ import { existsSync } from 'node:fs';
 import { cp, mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { decodeObject, jsonArray, jsonMap, jsonString, parseJson } from '../../src/utils/json.ts';
 
 const REPO_ROOT = resolve(import.meta.dir, '../..');
 const BUILD_TIMEOUT_MS = 240_000;
@@ -26,7 +27,10 @@ interface PackageJson {
 }
 
 async function readPackageJson(): Promise<PackageJson> {
-  return JSON.parse(await readFile(resolve(REPO_ROOT, 'package.json'), 'utf8')) as PackageJson;
+  return decodeObject(parseJson(await readFile(resolve(REPO_ROOT, 'package.json'), 'utf8')), {
+    exports: jsonMap(jsonMap(jsonString)),
+    files: jsonArray(jsonString),
+  });
 }
 
 /** Map an `exports` target like `./dist/index.mjs` to the isolated build output. */
@@ -90,9 +94,12 @@ describe('packed exports', () => {
           cwd: shadowDir,
         });
         expect(pack.exitCode).toBe(0);
-        const parsed = JSON.parse(pack.stdout.toString()) as Array<{
-          files: Array<{ path: string }>;
-        }>;
+        const parsed = jsonArray((item) =>
+          decodeObject(item, {
+            files: jsonArray((file) => decodeObject(file, { path: jsonString })),
+          })
+        )(parseJson(pack.stdout.toString()));
+
         const packedPaths = new Set(parsed[0]!.files.map((file) => file.path));
         const notPacked: string[] = [];
         for (const conditions of Object.values(pkg.exports)) {

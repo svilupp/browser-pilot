@@ -834,6 +834,11 @@ export function createFingerprint(node: SnapshotNode, context: {
 }): SemanticFingerprint;
 
 // @public
+export function createOwnerActionService(options: {
+    policy: OwnerActionPolicy;
+}): OwnerActionService;
+
+// @public
 export function createProvider(options: ConnectOptions, ports?: ProviderFactoryPorts): Provider;
 
 // @public (undocumented)
@@ -1478,6 +1483,225 @@ export interface OverlayInfo {
     overlayText?: string;
 }
 
+// @public
+export type OwnerAction = {
+    kind: 'goto';
+    url: string;
+} | {
+    kind: 'click' | 'hover' | 'submit';
+    selector: string;
+} | {
+    kind: 'fill';
+    selector: string;
+    value: string;
+    verify?: 'exact' | 'normalized' | false;
+} | {
+    kind: 'type' | 'select';
+    selector: string;
+    value: string;
+} | {
+    kind: 'check';
+    selector: string;
+    checked: boolean;
+} | {
+    kind: 'press';
+    selector: string;
+    key: string;
+};
+
+// @public (undocumented)
+export interface OwnerActionCapabilities {
+    // (undocumented)
+    actions: readonly OwnerAction['kind'][];
+    // (undocumented)
+    assurance: OwnerAssurance;
+    // (undocumented)
+    evidence: 'structural-with-trusted-text-redaction';
+    // (undocumented)
+    images: false;
+    // (undocumented)
+    profile: 'strict';
+    // (undocumented)
+    reads: readonly string[];
+    // (undocumented)
+    version: 1;
+}
+
+// @public (undocumented)
+export interface OwnerActionContext {
+    // (undocumented)
+    assertCurrent?(): void;
+    // (undocumented)
+    grant: OwnerGrant;
+    // (undocumented)
+    send(method: string, params?: Record<string, unknown>, sessionId?: string): Promise<unknown>;
+}
+
+// @public (undocumented)
+export interface OwnerActionPolicy {
+    // (undocumented)
+    allowedActions: readonly OwnerAction['kind'][];
+    // (undocumented)
+    allowedNavigationOrigins?: readonly string[];
+    // (undocumented)
+    allowValueReads?: boolean;
+    evaluate?(evidence: Readonly<PreparedAction>, signal: AbortSignal): Promise<{
+        verdict: 'allow' | 'deny' | 'unknown';
+        reason: string;
+    }>;
+    // (undocumented)
+    id: string;
+    // (undocumented)
+    mode: 'shadow' | 'enforce';
+    // (undocumented)
+    observe?(result: OwnerApproval): void;
+    redactText?(text: string): string;
+    // (undocumented)
+    timeoutMs?: number;
+    // (undocumented)
+    version: string;
+}
+
+// @public (undocumented)
+export interface OwnerActionPort {
+    // (undocumented)
+    authorize(request: {
+        preparedId: string;
+    }): Promise<OwnerApproval>;
+    // (undocumented)
+    capabilities(): Promise<OwnerActionCapabilities>;
+    // (undocumented)
+    dispatch(request: {
+        approvalId: string;
+    }): Promise<OwnerActionReceipt>;
+    // (undocumented)
+    extract(request: OwnerExtractRequest): Promise<OwnerExtractResult>;
+    // (undocumented)
+    observe(request: {
+        pageTargetId: string;
+        kind: 'state' | 'snapshot' | 'element';
+        selector?: string;
+    }): Promise<OwnerObservation>;
+    // (undocumented)
+    prepare(request: {
+        pageTargetId: string;
+        action: OwnerAction;
+    }): Promise<PreparedAction>;
+}
+
+// @public (undocumented)
+export interface OwnerActionReceipt {
+    // (undocumented)
+    assurance: OwnerAssurance;
+    // (undocumented)
+    dispatchState: 'not_dispatched' | 'dispatched' | 'unknown';
+    // (undocumented)
+    inputEventsSent: string[];
+    // (undocumented)
+    reason?: string;
+    // (undocumented)
+    retrySafe: boolean;
+}
+
+// @public (undocumented)
+export interface OwnerActionService {
+    // (undocumented)
+    dispatch(method: string, params: unknown, context: OwnerActionContext): Promise<unknown>;
+    // (undocumented)
+    readonly rawAllowed: boolean;
+    // (undocumented)
+    revoke(grantId: string, cleanupSend?: OwnerActionContext['send']): Promise<void>;
+}
+
+// @public (undocumented)
+export interface OwnerApproval {
+    // (undocumented)
+    approvalId?: string;
+    // (undocumented)
+    reason: string;
+    // (undocumented)
+    verdict: 'allow' | 'deny' | 'unknown';
+}
+
+// @public (undocumented)
+export type OwnerAssurance = 'owner-serialized-prechecked-native' | 'renderer-same-task-dom';
+
+// @public
+export interface OwnerExtractField {
+    // (undocumented)
+    attribute?: string;
+    // (undocumented)
+    required?: boolean;
+    // (undocumented)
+    secret?: boolean;
+    // (undocumented)
+    selector: string;
+    // (undocumented)
+    source: 'text' | 'value' | 'attribute';
+    // (undocumented)
+    type: 'string' | 'number' | 'boolean';
+}
+
+// @public (undocumented)
+export interface OwnerExtractRequest {
+    // (undocumented)
+    fields: Record<string, OwnerExtractField>;
+    // (undocumented)
+    maxRows: number;
+    // (undocumented)
+    pageTargetId: string;
+    // (undocumented)
+    selector: string;
+}
+
+// @public (undocumented)
+export interface OwnerExtractResult {
+    // (undocumented)
+    documentId: string;
+    // (undocumented)
+    rows: Record<string, string | number | boolean>[];
+    // (undocumented)
+    secretFields: string[];
+}
+
+// @public (undocumented)
+export interface OwnerGrant {
+    // (undocumented)
+    grantId: string;
+    // (undocumented)
+    ownerEpoch: string;
+    // (undocumented)
+    sequence: number;
+}
+
+// @public (undocumented)
+export interface OwnerObservation {
+    // (undocumented)
+    documentId: string;
+    // (undocumented)
+    element?: {
+        exists: boolean;
+        visible: boolean;
+        count: number;
+        text: string;
+        boundingBox: OwnerNodeObservation['boundingBox'];
+    };
+    // Warning: (ae-forgotten-export) The symbol "OwnerNodeObservation" needs to be exported by the entry point index.d.ts
+    //
+    // (undocumented)
+    nodes?: readonly OwnerNodeObservation[];
+    // (undocumented)
+    observedAt: number;
+    // (undocumented)
+    pageTargetId: string;
+    // (undocumented)
+    text: string;
+    // (undocumented)
+    title: string;
+    // (undocumented)
+    url: string;
+}
+
 // @public (undocumented)
 export class Page {
     // Warning: (ae-forgotten-export) The symbol "PageInitOptions" needs to be exported by the entry point index.d.ts
@@ -1766,6 +1990,27 @@ export class PortableBrowser {
     get provenance(): BuildProvenance;
     get sessionId(): string | undefined;
     get wsUrl(): string;
+}
+
+// @public (undocumented)
+export interface PreparedAction {
+    // (undocumented)
+    assurance: OwnerAssurance;
+    // (undocumented)
+    documentId: string;
+    // (undocumented)
+    elementIdentity?: string;
+    evidence: OwnerObservation & {
+        action: OwnerAction['kind'];
+        target?: string;
+        destination?: string;
+    };
+    // (undocumented)
+    pageTargetId: string;
+    // (undocumented)
+    policyVersion: string;
+    // (undocumented)
+    preparedId: string;
 }
 
 // @public (undocumented)

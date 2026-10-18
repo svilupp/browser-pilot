@@ -1,3 +1,4 @@
+import { jsonValue, parseJson } from '../utils/json.ts';
 /**
  * Portable core of the `bp` shell command.
  *
@@ -384,12 +385,7 @@ async function runPageAction(
     const details: Record<string, JsonValue> = { action, target };
     if (dispatchState !== undefined) details['dispatchState'] = dispatchState;
     if (receipt) {
-      // `ActionReceipt`'s optional fields (e.g. a function-valued
-      // `ReadyCondition.predicate` nested under `staleRecovery`) aren't
-      // structurally JsonValue-compatible even though every field we
-      // actually populate here is JSON-safe at runtime; a double cast
-      // documents that gap rather than hiding a real type error.
-      details['receipt'] = receipt as unknown as JsonValue;
+      details['receipt'] = jsonValue(parseJson(JSON.stringify(receipt)));
       details['retrySafe'] = receipt.retrySafe;
     } else {
       details['retrySafe'] = fallback.retrySafe;

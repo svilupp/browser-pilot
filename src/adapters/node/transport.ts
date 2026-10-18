@@ -1,4 +1,4 @@
-import { type MessageSocket, openSocket } from '../../cdp/socket-transport.ts';
+import { openSocket } from '../../cdp/socket-transport.ts';
 import type { TransportFactory } from '../../cdp/transport.ts';
 import { CapabilityError } from '../../core/ports.ts';
 
@@ -24,6 +24,25 @@ export async function createNodeTransportFactory(): Promise<TransportFactory> {
     // ws emits EventEmitter errors as well as ErrorEvents. Always consume them,
     // including failures after cancellation while the handshake is unwinding.
     socket.on('error', () => {});
-    return openSocket(socket as unknown as MessageSocket, options);
+    return openSocket(
+      {
+        get readyState() {
+          return socket.readyState;
+        },
+        send: (data) => socket.send(data),
+        close: () => {
+          socket.close();
+        },
+        addEventListener: (type, listener) => {
+          if (type === 'open' || type === 'close' || type === 'error' || type === 'message')
+            socket.addEventListener(type, listener);
+        },
+        removeEventListener: (type, listener) => {
+          if (type === 'open' || type === 'close' || type === 'error' || type === 'message')
+            socket.removeEventListener(type, listener);
+        },
+      },
+      options
+    );
   };
 }

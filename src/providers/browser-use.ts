@@ -34,8 +34,8 @@ interface BrowserUseSession {
   status: 'active' | 'stopped';
   cdpUrl: string | null;
   liveUrl: string | null;
-  timeoutAt: string;
-  startedAt: string;
+  timeoutAt?: string;
+  startedAt?: string;
   finishedAt?: string | null;
 }
 
@@ -210,7 +210,24 @@ export class BrowserUseProvider implements Provider {
     ) {
       throw new Error('Browser Use returned an invalid session response');
     }
-    return data as unknown as BrowserUseSession;
+    return {
+      id: data['id'],
+      status: data['status'],
+      cdpUrl:
+        data['cdpUrl'] === null || data['cdpUrl'] === undefined ? null : jsonString(data['cdpUrl']),
+      liveUrl:
+        data['liveUrl'] === null || data['liveUrl'] === undefined
+          ? null
+          : jsonString(data['liveUrl']),
+      timeoutAt: data['timeoutAt'] === undefined ? undefined : jsonString(data['timeoutAt']),
+      startedAt: data['startedAt'] === undefined ? undefined : jsonString(data['startedAt']),
+      finishedAt:
+        data['finishedAt'] === null
+          ? null
+          : data['finishedAt'] === undefined
+            ? undefined
+            : jsonString(data['finishedAt']),
+    };
   }
 
   private throwApiError(operation: string, status: number): never {
@@ -228,4 +245,10 @@ export class BrowserUseProvider implements Provider {
         throw new Error(prefix);
     }
   }
+}
+
+function jsonString(value: unknown): string {
+  if (typeof value !== 'string')
+    throw new Error('Browser Use returned an invalid session response');
+  return value;
 }

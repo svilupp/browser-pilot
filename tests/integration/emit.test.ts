@@ -1,3 +1,4 @@
+import { jsonArray, jsonString, parseJson } from '../../src/utils/json.ts';
 /**
  * Emit integration tests - real Chrome, real WebSockets.
  *
@@ -24,7 +25,7 @@ async function waitForLogEntry(
     const raw = (await page.evaluate(
       `JSON.stringify((window.__received || []).filter((entry) => ${predicate}))`
     )) as string;
-    const matches = JSON.parse(raw ?? '[]') as string[];
+    const matches = jsonArray(jsonString)(parseJson(raw ?? '[]'));
     if (matches.length > 0) return matches;
     await new Promise((resolve) => setTimeout(resolve, 100));
   }

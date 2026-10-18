@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import type { CanonicalTraceEvent } from './model.ts';
+import { parseTraceEvent } from './model.ts';
 
 export const TRACE_FILE_NAME = 'trace.jsonl';
 const SESSION_DIR = join(homedir(), '.browser-pilot', 'sessions');
@@ -51,7 +52,7 @@ export function readTraceEvents(path: string): CanonicalTraceEvent[] {
     .split('\n')
     .map((line) => {
       try {
-        return JSON.parse(line) as CanonicalTraceEvent;
+        return parseTraceEvent(line);
       } catch {
         return null;
       }

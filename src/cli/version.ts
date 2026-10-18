@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { decodeObject, jsonString, optionalJson, parseJson } from '../utils/json.ts';
 
 declare const __BP_CLI_VERSION__: string | undefined;
 
@@ -10,10 +11,10 @@ function readVersionFromPackageJson(): string | undefined {
   for (const relativePath of candidates) {
     try {
       const fileUrl = new URL(relativePath, import.meta.url);
-      const parsed = JSON.parse(readFileSync(fileUrl, 'utf8')) as {
-        name?: string;
-        version?: string;
-      };
+      const parsed = decodeObject(parseJson(readFileSync(fileUrl, 'utf8')), {
+        name: optionalJson(jsonString),
+        version: optionalJson(jsonString),
+      });
 
       if (parsed.name === 'browser-pilot' && parsed.version) {
         return parsed.version;

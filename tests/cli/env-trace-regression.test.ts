@@ -2,6 +2,7 @@ import { afterAll, test as baseTest, beforeAll, describe, expect } from 'bun:tes
 import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { homedir, networkInterfaces } from 'node:os';
 import { join } from 'node:path';
+import { parseJsonRecord } from '../../src/utils/json.ts';
 import { withRetry } from '../utils/retry.ts';
 import { generateSessionName, getWebSocketUrl, runCLI, setup, teardown } from './setup.ts';
 
@@ -596,7 +597,7 @@ function analyzeTraceWindow(tracePath: string) {
     .trim()
     .split('\n')
     .filter(Boolean)
-    .map((line) => JSON.parse(line) as Record<string, unknown>)
+    .map((line) => parseJsonRecord(line))
     .filter((event) => event['channel'] === 'ws');
 
   const closeIndex = events.findIndex((event) => event['event'] === 'ws.connection.closed');

@@ -12,7 +12,17 @@ import { createServer, connect as netConnect, type Server, type Socket } from 'n
 import type { CDPClient } from '../cdp/client.ts';
 import { CDPError, type CDPErrorData } from '../cdp/protocol.ts';
 import { RuntimeResultError } from '../cdp/runtime-result.ts';
+import type { OwnerActionService } from '../core/owner-actions/index.ts';
+import { OwnerCleanupQueue } from '../owner/cleanup-queue.ts';
+import { HandbackCoordinator } from '../owner/handback.ts';
+import {
+  LeaseController,
+  type OwnerAdmission,
+  OwnerLeaseError,
+} from '../owner/lease-controller.ts';
+import { PassiveEvents } from '../owner/passive-events.ts';
 import { daemonLog } from './lifecycle.ts';
+import { OwnerJournal } from './owner-journal.ts';
 import type { DaemonEvent, DaemonRequest, DaemonResponse } from './types.ts';
 
 /**
@@ -64,6 +74,7 @@ function isValidDaemonRequest(value: unknown): value is DaemonRequest {
 }
 
 function serializeError(error: unknown): CDPErrorData {
+  if (error instanceof OwnerLeaseError) return { code: error.code, message: error.message };
   if (error instanceof CDPError) {
     return {
       code: error.code,
@@ -90,6 +101,7 @@ export interface DaemonServer {
   server: Server;
   /** Number of currently connected clients */
   clientCount: number;
+  readonly commandLeaseActive: boolean;
   /** Close the server and all client connections */
   close(): Promise<void>;
 }
@@ -99,6 +111,16 @@ export interface DaemonIdentity {
   requireLease?: boolean;
   daemonId?: string;
   endpointFingerprint?: string;
+  handback?: (
+    session: string,
+    targetId: string,
+    currentUrl: string,
+    ownerEpoch: string,
+    expectedRevision?: number
+  ) => Promise<number>;
+  resolveBinding?: (session: string) => Promise<number>;
+  /** Trusted owner configuration only; callers cannot install or relax this policy. */
+  ownerActions?: OwnerActionService;
 }
 
 async function removeStaleSocket(socketPath: string): Promise<void> {
@@ -154,15 +176,54 @@ export async function startDaemonServer(
   await removeStaleSocket(socketPath);
 
   const clients = new Set<Socket>();
-  let browserLease: { socket: Socket; pending: number } | undefined;
+  const owner = new LeaseController();
+  const passive = new PassiveEvents((client, sessionId, reason) =>
+    writeMessage(client as Socket, {
+      method: 'daemon.subscriptionRevoked',
+      params: { sessionId, reason },
+    })
+  );
+  let shuttingDown = false;
+  const journal = identity?.requireLease
+    ? new OwnerJournal(`${socketPath}.owner-pending`)
+    : undefined;
+  const leasedSessions = new WeakMap<Socket, string>();
+  const grants = new WeakMap<Socket, string>();
+  const cleanup = new OwnerCleanupQueue(async (sessionId) => {
+    await cdp.send('Target.detachFromTarget', { sessionId }, null);
+    passive.detach(sessionId);
+  });
+  const cleanupIdle = (socket: Socket) => {
+    cleanup.drainObservers(!owner.active);
+    const grant = grants.get(socket);
+    if (!grant || owner.active) return;
+    cleanup.leaseEnded(grant, async () => {
+      if (identity?.ownerActions)
+        await identity.ownerActions.revoke(grant, (method, params, sessionId) =>
+          cdp.send(method, params, sessionId)
+        );
+      journal?.clear();
+    });
+  };
+  const bindingRevisions = new WeakMap<Socket, number>();
+  const operations = new Map<string, OwnerAdmission>();
+  const handbacks = new HandbackCoordinator();
 
   // Forward all CDP events to all connected clients. The sessionId is carried
   // through so the CLI's CDP client can route session-scoped events (OOPIF child
   // sessions) correctly instead of leaking them into main-page handlers.
   const forwardEvent = (method: string, params: Record<string, unknown>, sessionId?: string) => {
+    if (method === 'Target.detachedFromTarget' && typeof params['sessionId'] === 'string')
+      passive.detach(params['sessionId']);
+    if (identity?.ownerActions && !identity.ownerActions.rawAllowed) return;
     const event: DaemonEvent = { method, params, sessionId };
     for (const client of clients) {
-      writeMessage(client, event);
+      if (
+        !identity?.requireLease ||
+        owner.owns(client) ||
+        passive.permits(client, method, sessionId)
+      )
+        writeMessage(client, event);
     }
   };
   cdp.onAny(forwardEvent);
@@ -245,57 +306,279 @@ export async function startDaemonServer(
           params?: Record<string, unknown>,
           sessionId?: string | null
         ): Promise<unknown> => {
-          const lease = browserLease;
-          if (identity?.requireLease && lease?.socket !== socket)
-            throw new CDPError({
-              code: -32005,
-              message: 'session_busy: acquire the command lease before browser dispatch',
-            });
-          if (lease?.socket === socket) lease.pending++;
+          if (identity?.ownerActions && !identity.ownerActions.rawAllowed)
+            throw new OwnerLeaseError(
+              'owner_policy: raw CDP is unavailable under the strict action profile'
+            );
+          let admission: OwnerAdmission | undefined;
+          if (identity?.requireLease)
+            admission = owner.admit(
+              socket,
+              request.ownerFence,
+              request.ownerOperationId ? operations.get(request.ownerOperationId) : undefined
+            );
           try {
-            return await cdp.send(method, params, sessionId, sendOptions);
-          } finally {
-            if (lease?.socket === socket) {
-              lease.pending--;
-              if (lease.pending === 0 && socket.destroyed && browserLease === lease)
-                browserLease = undefined;
+            if (admission) owner.assertCurrent(admission);
+            const result: unknown = await cdp.send(method, params, sessionId, sendOptions);
+            if (method === 'Target.attachToTarget' && result && typeof result === 'object') {
+              const id = (result as { sessionId?: unknown }).sessionId;
+              if (typeof id === 'string') passive.attach(socket, id);
             }
+            if (method === 'Target.detachFromTarget' && typeof params?.['sessionId'] === 'string')
+              passive.detach(params['sessionId']);
+            return result;
+          } catch (error) {
+            if (admission) {
+              const state = (error as { dispatchState?: string }).dispatchState;
+              const uncertain = state !== 'not_dispatched' && !(error instanceof CDPError);
+              owner.finish(admission, uncertain);
+              if (uncertain) passive.revoke(socket, 'owner_uncertain');
+              admission = undefined;
+            }
+            throw error;
+          } finally {
+            if (admission) owner.finish(admission);
+            cleanupIdle(socket);
           }
         };
         // Control-plane methods never cross the browser connection. They let
         // clients verify daemon ownership without opening another CDP socket.
         let result: unknown;
-        if (request.method === 'daemon.acquireLease') {
-          if (browserLease && browserLease.socket !== socket)
-            throw new CDPError({
-              code: -32005,
-              message: 'session_busy: another command holds the browser lease',
+        if (request.method.startsWith('owner.action.')) {
+          if (!identity?.ownerActions) throw new Error('Owner action profile unavailable');
+          const admission = owner.admit(socket, request.ownerFence);
+          let uncertain = false;
+          try {
+            result = await identity.ownerActions.dispatch(request.method, request.params ?? {}, {
+              grant: admission.fence,
+              assertCurrent: () => owner.assertCurrent(admission),
+              send: async (method, params, sessionId) => {
+                owner.assertCurrent(admission);
+                const budget = request.ipcBudget;
+                const timeout = budget
+                  ? Math.min(budget.timeoutMs, budget.sentAt + budget.timeoutMs - Date.now())
+                  : undefined;
+                if (timeout !== undefined && timeout <= 0)
+                  throw Object.assign(
+                    new Error('IPC deadline exceeded before owner action dispatch'),
+                    { dispatchState: 'not_dispatched' }
+                  );
+                return await cdp.send(
+                  method,
+                  params,
+                  sessionId,
+                  timeout === undefined ? undefined : { timeout }
+                );
+              },
             });
-          browserLease ??= { socket, pending: 0 };
+            const state = (result as { dispatchState?: string } | undefined)?.dispatchState;
+            uncertain = state === 'unknown' || state === 'uncertain';
+          } catch (error) {
+            const state = (error as { dispatchState?: string }).dispatchState;
+            uncertain = state === 'unknown' || state === 'uncertain';
+            throw error;
+          } finally {
+            owner.finish(admission, uncertain);
+            if (uncertain) passive.revoke(socket, 'owner_uncertain');
+          }
+        } else if (request.method === 'daemon.acquireLease') {
+          cleanup.drainObservers(!owner.active);
+          await cleanup.ready();
+          if (shuttingDown) throw new OwnerLeaseError('session_busy: owner is shutting down');
+          if (journal?.unfinished)
+            throw new OwnerLeaseError(
+              'session_busy: unfinished prior owner requires reconciliation'
+            );
+          const wasActive = owner.active;
+          const grant = owner.acquire(socket);
+          grants.set(socket, grant.grantId);
+          if (!wasActive) {
+            try {
+              journal?.claim(grant.ownerEpoch, grant.grantId);
+            } catch (error) {
+              owner.release(socket);
+              throw error;
+            }
+            handbacks.clear(socket);
+          }
+          const logicalSession = request.params?.['session'];
+          if (typeof logicalSession === 'string' && logicalSession !== leasedSessions.get(socket))
+            passive.revoke(socket);
+          if (typeof logicalSession === 'string' && !wasActive) {
+            try {
+              if (identity?.resolveBinding)
+                bindingRevisions.set(socket, await identity.resolveBinding(logicalSession));
+              leasedSessions.set(socket, logicalSession);
+            } catch (error) {
+              owner.release(socket);
+              journal?.clear();
+              throw error;
+            }
+          }
+          result = {
+            ok: true,
+            protocolVersion: 2,
+            rawCompatibility: identity?.ownerActions?.rawAllowed ?? true,
+            ...grant,
+          };
+        } else if (request.method === 'daemon.attachObserver') {
+          if (identity?.ownerActions && !identity.ownerActions.rawAllowed)
+            throw new OwnerLeaseError(
+              'owner_policy: raw CDP is unavailable under the strict action profile'
+            );
+          const targetId = request.params?.['targetId'];
+          if (typeof targetId !== 'string' || !targetId)
+            throw new Error('Exact observer target required');
+          const admission = owner.admit(socket, request.ownerFence);
+          let uncertain = false;
+          try {
+            owner.assertCurrent(admission);
+            const attached = await cdp.send<{ sessionId?: unknown }>(
+              'Target.attachToTarget',
+              { targetId, flatten: true },
+              null,
+              sendOptions
+            );
+            if (typeof attached.sessionId !== 'string') {
+              uncertain = true;
+              throw new Error('Observer attachment unavailable');
+            }
+            passive.observeAttachment(socket, attached.sessionId);
+            if (socket.destroyed || !clients.has(socket)) {
+              cleanup.queueObservers(passive.takeCleanup(socket));
+              passive.disconnect(socket);
+            } else owner.assertCurrent(admission);
+            result = { sessionId: attached.sessionId };
+          } catch (error) {
+            const state = (error as { dispatchState?: string }).dispatchState;
+            uncertain ||= state !== 'not_dispatched' && !(error instanceof CDPError);
+            throw error;
+          } finally {
+            owner.finish(admission, uncertain);
+            cleanupIdle(socket);
+          }
+        } else if (request.method === 'daemon.subscribeEvents') {
+          if (identity?.ownerActions && !identity.ownerActions.rawAllowed)
+            throw new OwnerLeaseError('owner_policy: passive raw telemetry is unavailable');
+          const admission = owner.admit(socket, request.ownerFence);
+          try {
+            const sessionId = request.params?.['sessionId'];
+            const logicalSession = leasedSessions.get(socket);
+            if (typeof sessionId !== 'string' || !logicalSession)
+              throw new Error('Exact named passive session required');
+            passive.subscribe(socket, sessionId, logicalSession);
+            result = { ok: true, sessionId };
+          } finally {
+            owner.finish(admission);
+          }
+        } else if (request.method === 'daemon.unsubscribeEvents') {
+          passive.revoke(socket);
+          result = { ok: true };
+        } else if (request.method === 'daemon.beginOperation') {
+          const admission = owner.admit(socket, request.ownerFence);
+          const operationId = crypto.randomUUID();
+          operations.set(operationId, admission);
+          result = { operationId };
+        } else if (request.method === 'daemon.endOperation') {
+          owner.validateControl(socket, request.ownerFence);
+          const id = request.params?.['operationId'];
+          const admission = typeof id === 'string' ? operations.get(id) : undefined;
+          if (!admission || admission.client !== socket) throw new Error('Unknown owner operation');
+          operations.delete(id as string);
+          owner.finish(admission, request.params?.['uncertain'] === true);
+          if (request.params?.['uncertain'] === true) passive.revoke(socket, 'owner_uncertain');
           result = { ok: true };
         } else if (request.method === 'daemon.releaseLease') {
-          if (browserLease?.socket !== socket || browserLease.pending !== 0)
-            throw new CDPError({
-              code: -32005,
-              message: 'session_busy: lease is absent or commands are still pending',
-            });
-          browserLease = undefined;
+          owner.validateControl(socket, request.ownerFence);
+          const grantId = request.ownerFence?.grantId;
+          await owner.freeze(socket);
+          const transaction = owner.holdFrozen(socket);
+          let uncertain = true;
+          try {
+            if (grantId && identity?.ownerActions)
+              await identity.ownerActions.revoke(grantId, (method, params, sessionId) =>
+                cdp.send(method, params, sessionId)
+              );
+            uncertain = false;
+          } finally {
+            owner.finish(transaction, uncertain);
+          }
+          owner.release(socket);
+          cleanup.drainObservers(true);
+          if (grantId) cleanup.markComplete(grantId);
+          journal?.clear();
           result = { ok: true };
+        } else if (request.method === 'daemon.handback') {
+          owner.validateControl(socket, request.ownerFence);
+          const targetId = request.params?.['targetId'];
+          if (typeof targetId !== 'string') throw new Error('Exact handback target required');
+          result = await handbacks.commit(socket, targetId, async () => {
+            const grant = await owner.freeze(socket);
+            const transaction = owner.holdFrozen(socket);
+            let commitStarted = false;
+            let committed = false;
+            try {
+              const session = leasedSessions.get(socket);
+              if (typeof targetId !== 'string' || !session || !identity?.handback)
+                throw new Error('Owner handback requires a named session and exact target');
+              const { targetInfos } = await cdp.send<{
+                targetInfos: Array<{ targetId: string; type: string; url: string }>;
+              }>('Target.getTargets', undefined, null);
+              const target = targetInfos.find(
+                (item) => item.type === 'page' && item.targetId === targetId
+              );
+              if (!target) throw new Error('Owner handback target is missing');
+              passive.revokeLogical(session);
+              owner.assertCurrent(transaction);
+              commitStarted = true;
+              const bindingRevision = await identity.handback(
+                session,
+                targetId,
+                target.url,
+                grant.ownerEpoch,
+                bindingRevisions.get(socket)
+              );
+              committed = true;
+              return {
+                confirmed: true,
+                ...grant,
+                targetId,
+                refsInvalidated: true,
+                pendingActions: 'drained',
+                bindingRevision,
+                observationEpoch: crypto.randomUUID(),
+              };
+            } finally {
+              owner.finish(transaction, commitStarted && !committed);
+              cleanupIdle(socket);
+            }
+          });
         } else if (request.method === 'daemon.ping') {
-          result = { ok: true, ...identity };
+          result = {
+            ok: true,
+            daemonId: identity?.daemonId,
+            endpointFingerprint: identity?.endpointFingerprint,
+            protocolVersion: 2,
+            ownerEpoch: owner.ownerEpoch,
+          };
         } else if (request.method === 'daemon.status') {
           result = {
             ok: true,
             pid: process.pid,
             clientCount: clients.size,
-            commandLeaseActive: browserLease !== undefined,
-            ...identity,
+            commandLeaseActive: owner.active,
+            daemonId: identity?.daemonId,
+            endpointFingerprint: identity?.endpointFingerprint,
+            protocolVersion: 2,
+            ownerEpoch: owner.ownerEpoch,
           };
         } else if (request.method === 'daemon.shutdown') {
+          if (owner.active) throw new Error('session_busy: cannot shut down an active owner');
           const reason = request.params?.['reason'];
           if (reason !== undefined && reason !== 'recovery')
             throw new Error('Invalid daemon shutdown reason');
           result = { ok: true };
+          shuttingDown = true;
           queueMicrotask(() => onShutdown?.(reason));
         } else if (request.method === 'daemon.detach' && request.params?.['sessionId']) {
           await sendToBrowser(
@@ -332,11 +615,29 @@ export async function startDaemonServer(
       void handleRequestLine(line);
     });
 
-    socket.on('close', () => {
-      if (browserLease?.socket === socket && browserLease.pending === 0) browserLease = undefined;
+    let disconnected = false;
+    const disconnectClient = () => {
+      if (disconnected) return;
+      disconnected = true;
+      cleanup.queueObservers(passive.takeCleanup(socket));
+      passive.disconnect(socket);
+      for (const [id, admission] of operations) {
+        if (admission.client === socket) {
+          owner.finish(admission, true);
+          operations.delete(id);
+        }
+      }
+      owner.disconnected(socket);
+      cleanupIdle(socket);
       clients.delete(socket);
       daemonLog('info', `Client disconnected (total: ${clients.size})`);
+    };
+    // Revoke before acknowledging the peer's FIN, not only after our close event.
+    socket.on('end', () => {
+      disconnectClient();
+      socket.destroy();
     });
+    socket.on('close', disconnectClient);
 
     socket.on('error', (err: Error) => {
       daemonLog('warn', `Client socket error: ${err.message}`);
@@ -363,6 +664,9 @@ export async function startDaemonServer(
         server,
         get clientCount() {
           return clients.size;
+        },
+        get commandLeaseActive() {
+          return owner.active;
         },
         async close() {
           cdp.offAny(forwardEvent);

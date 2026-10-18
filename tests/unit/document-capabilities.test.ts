@@ -4,6 +4,7 @@ import { Page } from '../../src/browser/page.ts';
 import type { CDPClient } from '../../src/cdp/client.ts';
 import { createCDPClient } from '../../src/cdp/client.ts';
 import type { Transport } from '../../src/cdp/transport.ts';
+import { decodeObject, jsonNumber, parseJson } from '../../src/utils/json.ts';
 
 test('document capability evidence expires while lifecycle evidence remains and copies cannot alter cache', () => {
   const cache = new CapabilityCache('browser-1', '@fixture');
@@ -82,7 +83,7 @@ test('connection handshake budget does not shrink subsequent command budget', as
   let listener: ((raw: string) => void) | undefined;
   const transport: Transport = {
     send(raw) {
-      const request = JSON.parse(raw) as { id: number };
+      const request = decodeObject(parseJson(raw), { id: jsonNumber });
       setTimeout(
         () => listener?.(JSON.stringify({ id: request.id, result: { product: 'fixture' } })),
         20

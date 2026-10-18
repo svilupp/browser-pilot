@@ -24,7 +24,12 @@ export function decodeRuntimeResult(value: unknown): RemoteObject {
         'PROTOCOL_RESULT_INVALID',
         'Malformed Runtime result exception details'
       );
-    const details = value['exceptionDetails'] as unknown as ExceptionDetails;
+    const details = value['exceptionDetails'];
+    if (!isExceptionDetails(details))
+      throw new RuntimeResultError(
+        'PROTOCOL_RESULT_INVALID',
+        'Malformed Runtime result exception details'
+      );
     throw new RuntimeResultError(
       'RUNTIME_EXCEPTION',
       details.exception?.description ?? details.text ?? 'Runtime exception',
@@ -55,5 +60,24 @@ export function decodeRuntimeResult(value: unknown): RemoteObject {
     )
       throw new RuntimeResultError('PROTOCOL_RESULT_INVALID', 'Malformed Runtime result value');
   }
-  return value['result'] as unknown as RemoteObject;
+  if (!isRemoteObject(object))
+    throw new RuntimeResultError('PROTOCOL_RESULT_INVALID', 'Malformed Runtime result object');
+  return object;
+}
+
+function isRemoteObject(value: unknown): value is RemoteObject {
+  if (!isRecord(value) || typeof value['type'] !== 'string') return false;
+  return ['subtype', 'className', 'unserializableValue', 'description', 'objectId'].every(
+    (key) => value[key] === undefined || typeof value[key] === 'string'
+  );
+}
+function isExceptionDetails(value: unknown): value is ExceptionDetails {
+  if (!isRecord(value) || typeof value['text'] !== 'string') return false;
+  return (
+    ['exceptionId', 'lineNumber', 'columnNumber'].every((key) => typeof value[key] === 'number') &&
+    ['scriptId', 'url'].every(
+      (key) => value[key] === undefined || typeof value[key] === 'string'
+    ) &&
+    (value['exception'] === undefined || isRemoteObject(value['exception']))
+  );
 }
