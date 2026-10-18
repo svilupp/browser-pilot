@@ -23,6 +23,7 @@ For simple, reusable, low-cost automation on top of browser-pilot, use the compa
 
 ## Guides
 
+- [Shared Browser Owner](./guides/shared-owner.md) - Named borrowing, handback, fencing and trusted action policies
 - [Action Recording](./guides/action-recording.md) - Record workflows and capture replay screenshot trails
 - [Multi-Selector](./guides/multi-selector.md) - Build resilient automations with fallback selectors
 - [Batch Actions](./guides/batch-actions.md) - Execute action sequences efficiently

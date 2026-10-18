@@ -3,6 +3,7 @@ import type { Browser } from '../browser/browser.ts';
 import { connect as connectBrowser } from '../browser/connect.ts';
 import type { SessionData } from '../cli/session.ts';
 import { resolveWsHeaders } from '../cli/ws-auth.ts';
+import { decodeObject, jsonString, optionalJson, parseJson } from '../utils/json.ts';
 
 /**
  * Daemon entry point — spawned as a detached subprocess by `bp connect`.
@@ -118,7 +119,9 @@ function printVersion(): void {
     join(here, '..', '..', 'package.json'),
   ]) {
     try {
-      const parsed = JSON.parse(fs.readFileSync(packagePath, 'utf8')) as { version?: unknown };
+      const parsed = decodeObject(parseJson(fs.readFileSync(packagePath, 'utf8')), {
+        version: optionalJson(jsonString),
+      });
       if (typeof parsed.version === 'string') {
         console.log(parsed.version);
         return;
@@ -314,6 +317,10 @@ async function main(): Promise<void> {
   // Start the Unix socket server
   const idleTimer = idleTimeoutMs
     ? createIdleTimer(() => {
+        if (daemonServer.commandLeaseActive) {
+          idleTimer.reset();
+          return;
+        }
         void shutdown();
       }, idleTimeoutMs)
     : { reset() {}, stop() {} };
@@ -328,7 +335,33 @@ async function main(): Promise<void> {
     {
       ...(sessionData.daemonId ? { daemonId: sessionData.daemonId } : {}),
       endpointFingerprint: endpointFingerprint(sessionData.wsUrl),
-      requireLease: sessionData.cloudflareRequest !== undefined,
+      requireLease: true,
+      resolveBinding: async (sessionId) => {
+        const { loadSession } = await import('../cli/session.ts');
+        const current = await loadSession(sessionId);
+        if (current.daemon?.socketPath !== socketPath)
+          throw new Error('Owner session binding mismatch');
+        return current.metadata?.bindingRevision ?? 0;
+      },
+      handback: async (sessionId, targetId, currentUrl, _epoch, expectedRevision) => {
+        const { loadSession, listSessions, updateSessionTargetBinding, updateSession } =
+          await import('../cli/session.ts');
+        const current = await loadSession(sessionId);
+        if (current.daemon?.socketPath !== socketPath)
+          throw new Error('Owner session binding mismatch');
+        const updated = await updateSessionTargetBinding(sessionId, {
+          targetId,
+          currentUrl,
+          invalidateRefs: true,
+          expectedRevision,
+          expectedSocketPath: socketPath,
+        });
+        for (const alias of await listSessions()) {
+          if (alias.id !== sessionId && alias.daemon?.socketPath === socketPath)
+            await updateSession(alias.id, { metadata: { refCache: undefined } });
+        }
+        return updated.metadata?.bindingRevision ?? 0;
+      },
     }
   ).catch((err) => {
     daemonLog('error', `Failed to start Unix socket server: ${err}`);

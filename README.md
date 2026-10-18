@@ -260,6 +260,12 @@ bp connect --name app-work --auth app
 in CI. See the [cookie snapshot auth guide](./docs/guides/auth-cookies.md) for scope rules,
 file privacy, expiry/rotation, and the GitHub Actions pattern.
 
+## Shared named sessions
+
+The prepared 0.8.0 build lets Flightplan and BP borrow one named daemon session in turn. One controller holds the browser at a time; handback drains admitted actions and invalidates cached refs. Contention returns `session_busy`, and uncertain work requires reconciliation.
+
+Use `borrowNamedSession` for trusted raw-compatible access or `borrowOwnerActions` with a trusted host policy for typed native actions. Strict owners refuse raw CDP. Native prechecks do not make renderer execution atomic. See [shared owner setup and compatibility](./docs/guides/shared-owner.md).
+
 ## Package exports
 
 | Export | Use |
@@ -267,7 +273,7 @@ file privacy, expiry/rotation, and the GitHub Actions pattern.
 | `browser-pilot` | Node/Bun library, including environment credentials and local browser discovery |
 | `browser-pilot/core` | Browser/Page APIs and providers with explicit connection options; no local discovery or environment fallback |
 | `browser-pilot/browser`, `/cdp`, `/providers`, `/actions` | Focused entries for the browser, CDP, provider, and action layers |
-| `browser-pilot/adapters/node` | Optional in-process session owner and filesystem artifact sink |
+| `browser-pilot/adapters/node` | Named-session borrowing, trusted owner policy host, in-process sessions and filesystem artifacts |
 | `browser-pilot/adapters/memory` | Test doubles and an in-memory artifact sink |
 | `browser-pilot/shell` | Shell-agnostic shell commands over the shared browser APIs |
 | `browser-pilot/just-bash` | Thin `just-bash` command binding over `browser-pilot/shell` |
@@ -316,6 +322,7 @@ See [CLI configuration](./docs/cli.md#install) for supported dotenv syntax.
 - [Getting Started](./docs/getting-started.md)
 - [CLI Guide](./docs/cli.md)
 - [Architecture](./docs/architecture.md)
+- [Shared browser owner and named borrowing](./docs/guides/shared-owner.md)
 - [Providers](./docs/providers.md)
 - [Shell / just-bash adapter](./docs/guides/just-bash.md)
 - [Cloudflare Workers](./docs/guides/cloudflare-workers.md)

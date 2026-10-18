@@ -2,12 +2,12 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { defineConfig } from 'tsup';
+import { decodeObject, jsonString, parseJson } from './src/utils/json.ts';
 
-const packageJson = JSON.parse(
-  readFileSync(new URL('./package.json', import.meta.url), 'utf8')
-) as {
-  version: string;
-};
+const packageJson = decodeObject(
+  parseJson(readFileSync(new URL('./package.json', import.meta.url), 'utf8')),
+  { version: jsonString }
+);
 
 function gitSourceHash(): string {
   try {

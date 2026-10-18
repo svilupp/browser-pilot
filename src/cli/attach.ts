@@ -526,8 +526,20 @@ export async function attachSession(
         });
         closeDaemonClient = () => cdp.close();
         daemonClientIsConnected = () => cdp.isConnected;
-        if (session.provider === 'cloudflare')
-          await cdp.send('daemon.acquireLease', undefined, null, { timeout: 1000 });
+        const ownerGrant = await cdp.send<{
+          protocolVersion: number;
+          ownerEpoch: string;
+          grantId: string;
+          rawCompatibility?: boolean;
+        }>('daemon.acquireLease', { session: session.id }, null, { timeout: 1000 });
+        if (ownerGrant.protocolVersion !== 2 || !ownerGrant.ownerEpoch || !ownerGrant.grantId)
+          throw new Error(
+            'Daemon owner protocol version 2 is required; upgrade the owner outside an active workflow'
+          );
+        if (ownerGrant.rawCompatibility === false)
+          throw new Error(
+            'Owner uses the strict action profile; use borrowOwnerActions instead of a raw Page'
+          );
 
         const { Browser: BrowserClass } = await import('../browser/browser.ts');
         const { Page: PageClass } = await import('../browser/page.ts');
@@ -633,7 +645,16 @@ export async function attachSession(
           }
         }
 
-        return { session: attachedSession, browser, page, viaDaemon: true };
+        const { withOwnerOperations } = await import('../owner/page-operations.ts');
+        const originalPage = browser.page.bind(browser);
+        browser.page = async (...args: Parameters<typeof browser.page>) =>
+          withOwnerOperations(await originalPage(...args), cdp);
+        return {
+          session: attachedSession,
+          browser,
+          page: withOwnerOperations(page, cdp),
+          viaDaemon: true,
+        };
       } catch (err) {
         if (err instanceof TargetNotFoundError || daemonClientIsConnected?.()) {
           // A healthy control socket plus a page/session error is not evidence

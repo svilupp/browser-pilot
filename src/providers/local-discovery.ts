@@ -1,4 +1,5 @@
 import { createCDPClient } from '../cdp/index.ts';
+import { getEnvironment } from '../runtime/env.ts';
 import { getBrowserWebSocketUrl } from './generic.ts';
 import type { ChromeChannel } from './types.ts';
 
@@ -115,7 +116,7 @@ function getRuntimeEnv(): Record<string, string | undefined> {
   if (typeof process === 'undefined') {
     return {};
   }
-  return process.env;
+  return getEnvironment();
 }
 
 function getRuntimePlatform(): string | undefined {

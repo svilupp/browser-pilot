@@ -1,3 +1,4 @@
+import { decodeObject, jsonNumber, jsonString, parseJson } from '../../src/utils/json.ts';
 /**
  * Unit tests for injected providerSession / resumeSession wiring in
  * Browser.connect() and the close()/disconnect() release contract.
@@ -68,7 +69,7 @@ class MockWebSocket {
   send(message: string) {
     // Reply to Target.setDiscoverTargets (issued during Browser construction)
     // so `targetDiscoveryReady` resolves.
-    const parsed = JSON.parse(message) as { id: number; method: string };
+    const parsed = decodeObject(parseJson(message), { id: jsonNumber, method: jsonString });
     if (parsed.method === 'Browser.getVersion' || parsed.method === 'Target.setDiscoverTargets') {
       queueMicrotask(() => {
         this.emit('message', {

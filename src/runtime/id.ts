@@ -1,3 +1,4 @@
+import { now as clockNow } from './clock.ts';
 /**
  * Centralized random ID generation.
  *
@@ -16,7 +17,7 @@ let actionSequence = 0;
 /** Allocate an ID that is unique across executions in this runtime. */
 export function createExecutionId(prefix = 'execution'): string {
   executionSequence += 1;
-  return `${prefix}-${Date.now().toString(36)}-${executionSequence.toString(36)}-${randomId()}`;
+  return `${prefix}-${clockNow().toString(36)}-${executionSequence.toString(36)}-${randomId()}`;
 }
 
 /** Allocate a globally unique action ID for one attempt. */

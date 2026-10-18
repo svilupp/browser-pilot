@@ -1,3 +1,12 @@
+import {
+  decodeObject,
+  jsonArray,
+  jsonBoolean,
+  jsonMap,
+  jsonRecord,
+  jsonString,
+  optionalJson,
+} from '../../utils/json.ts';
 /**
  * Snapshot command - Get page accessibility snapshot
  */
@@ -5,7 +14,7 @@
 import * as fs from 'node:fs';
 import { injectRefOverlay, removeRefOverlay } from '../../browser/overlay.ts';
 import { diffSnapshots, formatDiffPretty } from '../../browser/snapshot-diff.ts';
-import type { PageSnapshot } from '../../browser/types.ts';
+import type { PageSnapshot, SnapshotNode } from '../../browser/types.ts';
 import { isRecord } from '../../utils/json.ts';
 import { attachSession } from '../attach.ts';
 import { output, renderOutput } from '../output.ts';
@@ -178,7 +187,7 @@ export async function snapshotCommand(
       if (!isRecord(parsedBefore) || !Array.isArray(parsedBefore['accessibilityTree'])) {
         throw new Error('Diff file is not a valid PageSnapshot JSON payload');
       }
-      const beforeSnapshot = parsedBefore as unknown as PageSnapshot;
+      const beforeSnapshot = decodeSnapshot(parsedBefore);
       const diff = diffSnapshots(beforeSnapshot, snapshot);
 
       if (options.outputFile) {
@@ -236,4 +245,38 @@ export async function snapshotCommand(
   } finally {
     await browser.disconnect();
   }
+}
+
+function decodeSnapshotNode(value: unknown): SnapshotNode {
+  return decodeObject(value, {
+    role: jsonString,
+    ref: jsonString,
+    name: optionalJson(jsonString),
+    value: optionalJson(jsonString),
+    children: optionalJson(jsonArray(decodeSnapshotNode)),
+    disabled: optionalJson(jsonBoolean),
+    checked: optionalJson(jsonBoolean),
+    properties: optionalJson(jsonRecord),
+  });
+}
+function decodeSnapshot(value: unknown): PageSnapshot {
+  return decodeObject(value, {
+    url: jsonString,
+    title: jsonString,
+    timestamp: jsonString,
+    text: jsonString,
+    accessibilityTree: jsonArray(decodeSnapshotNode),
+    interactiveElements: jsonArray((item) =>
+      decodeObject(item, {
+        ref: jsonString,
+        role: jsonString,
+        name: jsonString,
+        selector: jsonString,
+        disabled: optionalJson(jsonBoolean),
+        checked: optionalJson(jsonBoolean),
+        value: optionalJson(jsonString),
+        attributes: optionalJson(jsonMap(jsonString)),
+      })
+    ),
+  });
 }

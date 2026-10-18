@@ -89,7 +89,16 @@ export async function readDaemonDescriptor(id: string): Promise<DaemonDescriptor
     ) {
       return null;
     }
-    return value as unknown as DaemonDescriptor;
+    return {
+      schemaVersion: 1,
+      id: value['id'],
+      connectionKey: value['connectionKey'],
+      endpointFingerprint: value['endpointFingerprint'],
+      pid: value['pid'],
+      socketPath: value['socketPath'],
+      startedAt: value['startedAt'],
+      heartbeatPath: value['heartbeatPath'],
+    };
   } catch {
     return null;
   }

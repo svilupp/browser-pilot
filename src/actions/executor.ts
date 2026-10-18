@@ -1,3 +1,12 @@
+import { now as clockNow } from '../runtime/clock.ts';
+import {
+  decodeObject,
+  jsonRecord,
+  jsonString,
+  optionalJson,
+  parseJson,
+  parseJsonRecord,
+} from '../utils/json.ts';
 /**
  * Batch action executor
  */
@@ -91,7 +100,7 @@ function loadExistingRecording(
   executions?: RecordingExecution[];
 } {
   try {
-    const raw = JSON.parse(io.readFileSync(manifestPath, 'utf-8')) as unknown;
+    const raw = parseJson(io.readFileSync(manifestPath, 'utf-8'));
 
     if ((raw as { version?: number }).version === 1) {
       const legacy = raw as { frames?: RecordingFrame[]; recordedAt?: string; startUrl?: string };
@@ -360,7 +369,7 @@ export class BatchExecutor {
   async execute(steps: Step[], options: BatchOptions = {}): Promise<BatchResult> {
     const { timeout = DEFAULT_TIMEOUT, onFail = 'stop' } = options;
     const results: StepResult[] = [];
-    const startTime = Date.now();
+    const startTime = clockNow();
     const executionId = createExecutionId();
     const recording = options.record
       ? await this.createRecordingContext(options.record, executionId)
@@ -373,7 +382,7 @@ export class BatchExecutor {
 
     for (let i = 0; i < steps.length; i++) {
       const step = steps[i]!;
-      const stepStart = Date.now();
+      const stepStart = clockNow();
       const maxAttempts = (step.retry ?? 0) + 1;
       const retryDelay = step.retryDelay ?? 500;
       const effect = step.effect ?? defaultActionEffect(step.action);
@@ -435,7 +444,7 @@ export class BatchExecutor {
           recording.traceEvents.push(
             normalizeTraceEvent({
               traceId: createTraceId('action'),
-              elapsedMs: Date.now() - startTime,
+              elapsedMs: clockNow() - startTime,
               channel: 'action',
               event: 'action.started',
               summary: `${step.action}${step.selector ? ` ${Array.isArray(step.selector) ? step.selector[0] : step.selector}` : ''}`,
@@ -485,14 +494,14 @@ export class BatchExecutor {
             executionId,
             attempt: attempt + 1,
             targetId: this.page.targetId,
-            targetProvenance: this.page.getTargetProvenance?.() as unknown as
-              | Record<string, unknown>
-              | undefined,
+            targetProvenance: this.page.getTargetProvenance
+              ? { ...this.page.getTargetProvenance() }
+              : undefined,
             success: true,
-            durationMs: Date.now() - stepStart,
+            durationMs: clockNow() - stepStart,
             result: result.value,
             text: result.text,
-            timestamp: Date.now(),
+            timestamp: clockNow(),
             coordinates: this.page.getLastActionCoordinates() ?? undefined,
             boundingBox: this.page.getLastActionBoundingBox() ?? undefined,
             receipt: lastReceipt,
@@ -564,7 +573,7 @@ export class BatchExecutor {
             recording.traceEvents.push(
               normalizeTraceEvent({
                 traceId: createTraceId('action'),
-                elapsedMs: Date.now() - startTime,
+                elapsedMs: clockNow() - startTime,
                 channel: 'action',
                 event: stepResult.success ? 'action.succeeded' : 'action.outcome_failed',
                 summary: stepResult.success
@@ -574,7 +583,7 @@ export class BatchExecutor {
                   action: step.action,
                   selector: step.selector ?? null,
                   selectorUsed: result.selectorUsed ?? null,
-                  durationMs: Date.now() - stepStart,
+                  durationMs: clockNow() - stepStart,
                   outcomeStatus: stepResult.outcomeStatus ?? null,
                   attempts: attemptsMade,
                   retryDecisionReason: stepResult.retryDecisionReason ?? null,
@@ -600,7 +609,7 @@ export class BatchExecutor {
                 recording.traceEvents.push(
                   normalizeTraceEvent({
                     traceId: createTraceId('action'),
-                    elapsedMs: Date.now() - startTime,
+                    elapsedMs: clockNow() - startTime,
                     channel: 'action',
                     event: 'action.retrying',
                     summary: `${step.action} retrying: ${lastRetryDecision.reason}`,
@@ -684,7 +693,7 @@ export class BatchExecutor {
                   effect,
                   anchor: step.anchor,
                   success: true,
-                  durationMs: Date.now() - stepStart,
+                  durationMs: clockNow() - stepStart,
                   receipt,
                   dispatchState: receipt.dispatchState,
                   attempts: attemptsMade,
@@ -692,7 +701,7 @@ export class BatchExecutor {
                   outcomeStatus: outcome.outcomeStatus,
                   matchedConditions: outcome.matchedConditions,
                   retryDecisionReason: 'not_needed_success',
-                  timestamp: Date.now(),
+                  timestamp: clockNow(),
                 });
                 succeeded = true;
                 break;
@@ -717,7 +726,7 @@ export class BatchExecutor {
               recording.traceEvents.push(
                 normalizeTraceEvent({
                   traceId: createTraceId('action'),
-                  elapsedMs: Date.now() - startTime,
+                  elapsedMs: clockNow() - startTime,
                   channel: 'action',
                   event: 'action.retrying',
                   summary: `${step.action} retrying: ${lastRetryDecision.reason}`,
@@ -783,17 +792,17 @@ export class BatchExecutor {
             executionId,
             attempt: attemptsMade,
             targetId: this.page.targetId,
-            targetProvenance: this.page.getTargetProvenance?.() as unknown as
-              | Record<string, unknown>
-              | undefined,
+            targetProvenance: this.page.getTargetProvenance
+              ? { ...this.page.getTargetProvenance() }
+              : undefined,
             success: false,
-            durationMs: Date.now() - stepStart,
+            durationMs: clockNow() - stepStart,
             error: errorMessage,
             hints,
             failureReason: reason,
             coveringElement,
             suggestion: getDispatchSuggestion(lastReceipt) ?? getSuggestion(reason),
-            timestamp: Date.now(),
+            timestamp: clockNow(),
             receipt: lastReceipt,
             dispatchState: lastReceipt?.dispatchState,
             retrySafe: lastReceipt?.retrySafe,
@@ -810,7 +819,7 @@ export class BatchExecutor {
             recording.traceEvents.push(
               normalizeTraceEvent({
                 traceId: createTraceId('action'),
-                elapsedMs: Date.now() - startTime,
+                elapsedMs: clockNow() - startTime,
                 channel: 'action',
                 event: 'action.failed',
                 severity: 'error',
@@ -845,7 +854,7 @@ export class BatchExecutor {
       }
     }
 
-    const totalDurationMs = Date.now() - startTime;
+    const totalDurationMs = clockNow() - startTime;
     const allSuccess =
       stoppedAtIndex === undefined &&
       results.every((result) => result.success || steps[result.index]?.optional);
@@ -923,7 +932,7 @@ export class BatchExecutor {
     let highlightInjected = false;
 
     try {
-      const ts = Date.now();
+      const ts = clockNow();
       const seq = String(recording.frames.length + 1).padStart(4, '0');
       const filename = `${seq}-${ts}-${stepResult.action}.${recording.format}`;
       const filepath = recording.io.join(recording.screenshotDir, filename);
@@ -1742,10 +1751,10 @@ export class BatchExecutor {
         }
 
         try {
-          const parsed = JSON.parse(readStringOr(params['payload'])) as {
-            event?: string;
-            data?: Record<string, unknown>;
-          };
+          const parsed = decodeObject(parseJson(readStringOr(params['payload'])), {
+            event: optionalJson(jsonString),
+            data: optionalJson(jsonRecord),
+          });
           if (parsed.event !== 'ws.frame.received') {
             return;
           }
@@ -1785,7 +1794,7 @@ export class BatchExecutor {
 
   private payloadMatchesWhere(payload: string, where: Record<string, unknown>): boolean {
     try {
-      const parsed = JSON.parse(payload) as Record<string, unknown>;
+      const parsed = parseJsonRecord(payload);
       return Object.entries(where).every(([key, expected]) => {
         const actual = key.split('.').reduce<unknown>((current, part) => {
           if (!current || typeof current !== 'object') {
@@ -1891,9 +1900,9 @@ export class BatchExecutor {
     landmark?: string
   ): Promise<string> {
     const initialText = from ?? (await readScopedText(this.page, selector, scope, landmark));
-    const deadline = Date.now() + timeout;
+    const deadline = clockNow() + timeout;
 
-    while (Date.now() < deadline) {
+    while (clockNow() < deadline) {
       const text = await readScopedText(this.page, selector, scope, landmark);
       if (text !== initialText && matchText(text, to, mode)) {
         return text;

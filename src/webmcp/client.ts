@@ -1,4 +1,6 @@
 import type { Page } from '../browser/page.ts';
+import { now as clockNow } from '../runtime/clock.ts';
+import { randomId } from '../runtime/id.ts';
 import type { WebMCPListResult, WebMCPStatus, WebMCPToolDescriptor } from './types.ts';
 
 interface WebMCPPageProbe {
@@ -212,8 +214,7 @@ export async function webmcpCall(
   const serializedInput = JSON.stringify(input ?? null);
   if (serializedInput === undefined) throw new Error('WebMCP tool input is not JSON-serializable');
   const executionId =
-    globalThis.crypto?.randomUUID?.() ??
-    `webmcp-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+    globalThis.crypto?.randomUUID?.() ?? `webmcp-${clockNow().toString(36)}-${randomId()}`;
   const expression = `(async () => {
     const context = document.modelContext ?? navigator.modelContext;
     if (!context) throw new Error('document.modelContext is unavailable.');

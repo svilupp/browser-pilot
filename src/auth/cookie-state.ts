@@ -1,3 +1,4 @@
+import { now as clockNow } from '../runtime/clock.ts';
 /**
  * Cookie snapshot parse/serialize + capture/restore.
  *
@@ -486,7 +487,7 @@ export async function restoreCookieState(
   page: CookieStatePage,
   state: CookieState
 ): Promise<CookieRestoreResult> {
-  const nowSeconds = Date.now() / 1000;
+  const nowSeconds = clockNow() / 1000;
 
   if (state.cookies.length === 0) {
     throw new CookieStateError('empty', 'Cookie state contains no cookies to restore');

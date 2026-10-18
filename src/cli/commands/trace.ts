@@ -19,8 +19,13 @@ import {
 } from '../../trace/background.ts';
 import { type ListenMode, LiveTraceCollector } from '../../trace/live.ts';
 import type { CanonicalTraceEvent, TraceView } from '../../trace/model.ts';
+import {
+  createPassiveTraceConnection,
+  TraceCleanupPendingError,
+} from '../../trace/passive-connection.ts';
 import { getSessionTracePath, readTraceEvents } from '../../trace/store.ts';
 import { buildTraceSummaries, buildTraceSummary } from '../../trace/views.ts';
+import { parseJson } from '../../utils/json.ts';
 import { attachSession, resolveSession } from '../attach.ts';
 import { output } from '../output.ts';
 import { getDefaultSession, loadSession } from '../session.ts';
@@ -207,7 +212,7 @@ async function resolveTraceSource(
       return { path: resolve(sourceHint), events: readTraceEvents(sourceHint) };
     }
 
-    const raw = JSON.parse(fs.readFileSync(sourceHint, 'utf-8')) as unknown;
+    const raw = parseJson(fs.readFileSync(sourceHint, 'utf-8'));
     const artifact = canonicalizeRecordingArtifact(raw);
     return { path: resolve(sourceHint), events: artifact.trace.events };
   }
@@ -230,7 +235,7 @@ async function resolveTraceSource(
 
   const artifactPath = resolve(getSessionTracePath(session.id), '..', 'recording.json');
   if (fs.existsSync(artifactPath)) {
-    const raw = JSON.parse(fs.readFileSync(artifactPath, 'utf-8')) as unknown;
+    const raw = parseJson(fs.readFileSync(artifactPath, 'utf-8'));
     const artifact = canonicalizeRecordingArtifact(raw);
     return { path: artifactPath, events: artifact.trace.events };
   }
@@ -243,14 +248,23 @@ async function runLiveTrace(
   options: TraceOptions,
   debug: boolean,
   mode: 'start' | 'tail' | 'watch',
-  lifecycle: { onStarted?: () => void } = {}
+  lifecycle: { onStarted?: () => void; onCleanupPending?: () => void } = {}
 ): Promise<{
   events: CanonicalTraceEvent[];
   bytesWritten: number;
   stopReason: 'signal' | 'timeout' | 'requested' | 'size_limit';
 }> {
   const session = await resolveSession(sessionId);
-  const { browser, page } = await attachSession(session, { trace: debug });
+  const { browser, page, viaDaemon } = await attachSession(session, { trace: debug });
+  const connection = await createPassiveTraceConnection({
+    cdp: page.cdpClient,
+    targetId: page.targetId,
+    session: session.id,
+    viaDaemon,
+  }).catch(async (error: unknown) => {
+    await browser.disconnect();
+    throw error;
+  });
   const tracePath = getSessionTracePath(session.id);
   fs.mkdirSync(dirname(tracePath), { recursive: true });
 
@@ -271,6 +285,13 @@ async function runLiveTrace(
     stopReason = reason;
     resolveStop();
   };
+  let revoked = false;
+  const removeRevocationListener = connection.onRevoked(() => {
+    if (!stopped) {
+      revoked = true;
+      stop('signal');
+    }
+  });
   const signalStop = () => stop('signal');
   process.once('SIGINT', signalStop);
   process.once('SIGTERM', signalStop);
@@ -288,13 +309,14 @@ async function runLiveTrace(
         }, 250)
       : undefined;
 
-  const collector = new LiveTraceCollector(page.cdpClient, {
+  const collector = new LiveTraceCollector(connection.cdp, {
     sessionId: session.id,
     targetId: page.targetId,
     mode: options.mode ?? 'all',
     match: options.match,
     maxPayload: options.maxPayload ?? 256,
     onEvent: (event) => {
+      if (stopped) return;
       const line = `${JSON.stringify(event)}\n`;
       const lineBytes = Buffer.byteLength(line);
       const writeCopies =
@@ -318,6 +340,19 @@ async function runLiveTrace(
     },
   });
 
+  const cleanupCollector = async () => {
+    while (true) {
+      try {
+        await connection.cleanup(() => collector.stop({ requireCleanup: true }));
+        return;
+      } catch (error) {
+        if (!(error instanceof TraceCleanupPendingError)) throw error;
+        lifecycle.onCleanupPending?.();
+        await new Promise<void>((resolve) => setTimeout(resolve, 100));
+      }
+    }
+  };
+
   if (!options.quiet && mode !== 'tail') {
     process.stderr.write(
       `Tracing session ${session.id} -> ${mode === 'start' ? tracePath : 'stdout'}\n`
@@ -326,16 +361,23 @@ async function runLiveTrace(
 
   try {
     await collector.start();
+    await connection.pauseControl();
     lifecycle.onStarted?.();
     await stopPromise;
-    await collector.stop();
+    await cleanupCollector();
+    if (revoked) throw new Error('Trace subscription was revoked; capture is incomplete');
     return { events: liveEvents, bytesWritten, stopReason };
   } finally {
+    removeRevocationListener();
     process.off('SIGINT', signalStop);
     process.off('SIGTERM', signalStop);
     if (timeoutTimer) clearTimeout(timeoutTimer);
     if (stopPoll) clearInterval(stopPoll);
-    await browser.disconnect();
+    try {
+      await cleanupCollector();
+    } finally {
+      await browser.disconnect();
+    }
   }
 }
 
@@ -536,6 +578,12 @@ async function runBackgroundTraceWorker(
     const result = await runLiveTrace(session.id, options, globalOptions.trace ?? false, 'start', {
       onStarted: () => {
         updateBackgroundTraceState(session.id, captureId, { status: 'running' });
+      },
+      onCleanupPending: () => {
+        updateBackgroundTraceState(session.id, captureId, {
+          status: 'stopping',
+          error: 'cleanup_pending: waiting for exclusive controller ownership',
+        });
       },
     });
     updateBackgroundTraceState(session.id, captureId, {

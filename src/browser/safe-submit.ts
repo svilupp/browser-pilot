@@ -1,3 +1,4 @@
+import { now as clockNow } from '../runtime/clock.ts';
 /**
  * Safe submit — submit with verification and outcome classification
  */
@@ -63,7 +64,7 @@ export async function submitAndVerify(
     waitForNavigation = 'auto',
   } = options;
 
-  const startTime = Date.now();
+  const startTime = clockNow();
 
   // Determine if we need network tracking or state signature
   const allConditions = [...(expectAny ?? []), ...(expectAll ?? []), ...(failIf ?? [])];
@@ -99,7 +100,7 @@ export async function submitAndVerify(
         outcomeStatus: 'success',
         matchedConditions: [],
         retrySafe: !dangerous,
-        durationMs: Date.now() - startTime,
+        durationMs: clockNow() - startTime,
       };
     }
 
@@ -118,7 +119,7 @@ export async function submitAndVerify(
       outcomeStatus: outcome.outcomeStatus,
       matchedConditions: outcome.matchedConditions,
       retrySafe: outcome.retrySafe,
-      durationMs: Date.now() - startTime,
+      durationMs: clockNow() - startTime,
     };
   } catch (error) {
     if (networkTracker) networkTracker.stop(page.cdpClient);
@@ -127,7 +128,7 @@ export async function submitAndVerify(
       outcomeStatus: 'failed',
       matchedConditions: [],
       retrySafe: !dangerous,
-      durationMs: Date.now() - startTime,
+      durationMs: clockNow() - startTime,
       error: error instanceof Error ? error.message : String(error),
     };
   }

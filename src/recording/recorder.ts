@@ -1,3 +1,17 @@
+import { now as clockNow } from '../runtime/clock.ts';
+import {
+  decodeObject,
+  jsonArray,
+  jsonBoolean,
+  jsonEnum,
+  jsonNumber,
+  jsonRecord,
+  jsonString,
+  jsonTraceSeverity,
+  nullableJson,
+  optionalJson,
+  parseJson,
+} from '../utils/json.ts';
 /**
  * Recorder class for capturing browser interactions via CDP
  *
@@ -185,7 +199,7 @@ export class Recorder {
     this.monoStart = performance.now();
     this.events = [];
     this.traceEvents = [];
-    this.startTime = Date.now();
+    this.startTime = clockNow();
     this.recording = true;
 
     try {
@@ -374,7 +388,7 @@ export class Recorder {
   private async finalize(): Promise<FullRecordingOutput> {
     this.recording = false;
     this.state = 'stopping';
-    const duration = Date.now() - this.startTime;
+    const duration = clockNow() - this.startTime;
     await this.cleanup();
     let timer: ReturnType<typeof setTimeout> | undefined;
     const deadline = this.options.drainTimeoutMs ?? 5000;
@@ -444,7 +458,7 @@ export class Recorder {
 
     try {
       if (payload.length > 65536) return;
-      const event = JSON.parse(payload) as RawRecordedEvent;
+      const event = decodeRecordedEvent(parseJson(payload));
       if (
         !['click', 'dblclick', 'input', 'change', 'keydown', 'submit', 'navigation'].includes(
           event.kind
@@ -512,13 +526,13 @@ export class Recorder {
     if (!this.recording || this.limited) return;
 
     try {
-      const data = JSON.parse(payload) as {
-        event: string;
-        severity?: 'info' | 'warn' | 'error';
-        summary?: string;
-        ts?: number;
-        data?: Record<string, unknown>;
-      };
+      const data = decodeObject(parseJson(payload), {
+        event: jsonString,
+        severity: optionalJson(jsonTraceSeverity),
+        summary: optionalJson(jsonString),
+        ts: optionalJson(jsonNumber),
+        data: optionalJson(jsonRecord),
+      });
 
       this.appendTrace(
         normalizeTraceEvent({
@@ -593,7 +607,7 @@ export class Recorder {
 
   /** Elapsed milliseconds since recording started. */
   private elapsed(): number {
-    return Date.now() - this.startTime;
+    return clockNow() - this.startTime;
   }
 
   /** Format a WebSocket payload, truncating or replacing binary data. */
@@ -633,7 +647,7 @@ export class Recorder {
         if (!this.matchesUrl(url)) return;
 
         this.wsUrls.set(requestId, url);
-        const now = Date.now();
+        const now = clockNow();
         this.wsEvents.push({
           requestId,
           timestamp: now,
@@ -664,7 +678,7 @@ export class Recorder {
         const response = params['response'] as { opcode: number; payloadData?: string } | undefined;
         const opcode = response?.opcode ?? 1;
         const { payload, length } = this.formatPayload(response?.payloadData, opcode);
-        const now = Date.now();
+        const now = clockNow();
 
         this.wsFrames.push({
           requestId,
@@ -698,7 +712,7 @@ export class Recorder {
         const response = params['response'] as { opcode: number; payloadData?: string } | undefined;
         const opcode = response?.opcode ?? 1;
         const { payload, length } = this.formatPayload(response?.payloadData, opcode);
-        const now = Date.now();
+        const now = clockNow();
 
         this.wsFrames.push({
           requestId,
@@ -731,7 +745,7 @@ export class Recorder {
 
         const url = this.wsUrls.get(requestId);
         this.wsUrls.delete(requestId);
-        const now = Date.now();
+        const now = clockNow();
         this.wsEvents.push({
           requestId,
           timestamp: now,
@@ -766,7 +780,7 @@ export class Recorder {
         if (!this.matchesUrl(url)) return;
 
         this.httpUrls.set(requestId, url);
-        const now = Date.now();
+        const now = clockNow();
 
         this.networkRequests.push({
           requestId,
@@ -807,7 +821,7 @@ export class Recorder {
               mimeType?: string;
             }
           | undefined;
-        const now = Date.now();
+        const now = clockNow();
 
         this.networkResponses.push({
           requestId,
@@ -949,4 +963,49 @@ export class Recorder {
 
     return entries;
   }
+}
+
+function decodeRecordedEvent(value: unknown): RawRecordedEvent {
+  const nullableString = (value: unknown) =>
+    value === undefined ? null : nullableJson(jsonString)(value);
+  return decodeObject(value, {
+    kind: jsonEnum(['click', 'dblclick', 'input', 'change', 'keydown', 'submit', 'navigation']),
+    timestamp: jsonNumber,
+    url: jsonString,
+    value: optionalJson(jsonString),
+    key: optionalJson(jsonString),
+    checked: optionalJson(jsonBoolean),
+    client: optionalJson((item) => decodeObject(item, { x: jsonNumber, y: jsonNumber })),
+    selectors: jsonArray((item) =>
+      decodeObject(item, {
+        selector: jsonString,
+        quality: jsonEnum([
+          'role-name',
+          'text',
+          'aria-label',
+          'testid',
+          'stable-attr',
+          'id',
+          'name-attr',
+          'css-path',
+        ]),
+      })
+    ),
+    element: optionalJson((item) =>
+      decodeObject(item, {
+        tag: jsonString,
+        id: nullableString,
+        name: nullableString,
+        type: nullableString,
+        role: nullableString,
+        ariaLabel: nullableString,
+        testid: nullableString,
+        text: nullableString,
+        autocomplete: optionalJson(jsonString),
+        private: optionalJson(jsonBoolean),
+        accessibleName: optionalJson(nullableString),
+        computedRole: optionalJson(nullableString),
+      })
+    ),
+  });
 }

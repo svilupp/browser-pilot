@@ -3,6 +3,7 @@ import * as fs from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { parseJsonRecord } from '../../src/utils/json.ts';
 
 const SESSION_DIR = join(homedir(), '.browser-pilot', 'sessions');
 const SESSION_SUFFIX = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -76,7 +77,7 @@ async function captureJsonOutput(fn: () => Promise<void>): Promise<Record<string
     process.stdout.write = originalWrite;
   }
 
-  return JSON.parse(output) as Record<string, unknown>;
+  return parseJsonRecord(output);
 }
 
 describe('bp clean --force', () => {
@@ -87,7 +88,7 @@ describe('bp clean --force', () => {
     deleteCalls.length = 0;
     stopCalls.length = 0;
     originalApiKey = process.env['BROWSERBASE_API_KEY'];
-    delete process.env['BROWSERBASE_API_KEY'];
+    Reflect.deleteProperty(process.env, 'BROWSERBASE_API_KEY');
     sessions = [
       {
         id: STUCK_SESSION_ID,
@@ -99,7 +100,7 @@ describe('bp clean --force', () => {
   });
 
   afterEach(() => {
-    if (originalApiKey === undefined) delete process.env['BROWSERBASE_API_KEY'];
+    if (originalApiKey === undefined) Reflect.deleteProperty(process.env, 'BROWSERBASE_API_KEY');
     else process.env['BROWSERBASE_API_KEY'] = originalApiKey;
   });
 

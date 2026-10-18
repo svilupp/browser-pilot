@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.8.0] - 2026-10-18
+
+### Added
+
+- Borrow existing named daemon sessions through `borrowNamedSession` and return an exact page with an idempotent handback receipt.
+- Install trusted owner policies with `startOwnerActionDaemon` and use `borrowOwnerActions` for typed observations, structured extraction and prepared native actions.
+- Fence every browser command through the daemon with an owner epoch, socket-bound grant and request sequence. Preserve unfinished work for explicit reconciliation.
+- Keep background trace passive while another controller acts, with exact-session telemetry and controller-owned instrumentation cleanup.
+
+### Changed
+
+- Daemon wire protocol 2 requires fenced clients across all providers. Upgrade CLI and daemon together outside an active workflow; older peers fail explicitly.
+- Strict owner profiles refuse raw CDP, raw Page borrowing and passive telemetry. Native actions report their prechecked guarantee; renderer-atomic execution remains unsupported.
+
 ## [0.7.0] - 2026-10-04
 
 ### Added

@@ -14,6 +14,10 @@ ignores:
   - "src/cli/**"
   - "src/daemon/**"
   - "src/index.ts"
-  # This Node-only bridge borrows persisted CLI sessions. Portable entry-point
+  # These Node-only bridges borrow persisted CLI sessions and host their owner.
+  # Portable entry-point
   # import graphs remain guarded by tests/fitness/core-portability.test.ts.
   - "src/adapters/node/observe-session.ts"
+  - "src/adapters/node/named-session.ts"
+  - "src/adapters/node/owner-actions.ts"
+  - "src/adapters/node/owner-action-daemon.ts"

@@ -1,3 +1,4 @@
+import { parseTraceEvent } from '../trace/model.ts';
 /**
  * Session logger for canonical trace logging.
  * Writes JSON Lines format to ~/.browser-pilot/sessions/{sessionId}/trace.jsonl
@@ -241,7 +242,7 @@ export class SessionLogger {
     }
 
     try {
-      const event = JSON.parse(line) as CanonicalTraceEvent;
+      const event = parseTraceEvent(line);
       return this.traceToCompatibilityEntry(event);
     } catch {
       return null;

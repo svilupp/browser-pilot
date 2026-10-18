@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs/promises';
 import { isRecord } from '../utils/json.ts';
+import { now as clockNow } from './clock.ts';
 
 function isProcessAlive(pid: number): boolean {
   try {
@@ -16,7 +17,7 @@ export async function acquireFileLock(
   path: string,
   timeoutMs = 5000
 ): Promise<() => Promise<void>> {
-  const deadline = Date.now() + timeoutMs;
+  const deadline = clockNow() + timeoutMs;
   const token = randomUUID();
   for (;;) {
     try {
@@ -56,7 +57,7 @@ export async function acquireFileLock(
         // remove it so one truncated file cannot wedge the session forever.
         try {
           const stat = await fs.stat(path);
-          if (Date.now() - stat.mtimeMs > Math.max(timeoutMs * 2, 30_000)) {
+          if (clockNow() - stat.mtimeMs > Math.max(timeoutMs * 2, 30_000)) {
             await fs.unlink(path).catch(() => {});
             continue;
           }
@@ -64,7 +65,7 @@ export async function acquireFileLock(
           // A concurrent owner may have released the lock.
         }
       }
-      if (Date.now() >= deadline) throw new Error(`Timed out acquiring file lock: ${path}`);
+      if (clockNow() >= deadline) throw new Error(`Timed out acquiring file lock: ${path}`);
       await new Promise((resolve) => setTimeout(resolve, 25));
     }
   }

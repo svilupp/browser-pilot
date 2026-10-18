@@ -4,6 +4,16 @@ import * as fs from 'node:fs';
 import { dirname, join } from 'node:path';
 import { isProcessAlive } from '../trace/background.ts';
 import { getSessionTracePath } from '../trace/store.ts';
+import {
+  decodeObject,
+  jsonArray,
+  jsonEnum,
+  jsonNumber,
+  jsonString,
+  optionalJson,
+  parseJson,
+  parseJsonRecord,
+} from '../utils/json.ts';
 
 export interface RecordingControlState {
   schemaVersion: 1;
@@ -38,9 +48,42 @@ export function recordingControlPaths(sessionId: string) {
 }
 export function readRecordingState(sessionId: string): RecordingControlState | null {
   try {
-    const value = JSON.parse(
-      fs.readFileSync(recordingControlPaths(sessionId).state, 'utf8')
-    ) as RecordingControlState;
+    const value = decodeObject(
+      parseJson(fs.readFileSync(recordingControlPaths(sessionId).state, 'utf8')),
+      {
+        schemaVersion: jsonEnum([1]),
+        recordingId: jsonString,
+        sessionId: jsonString,
+        targetId: optionalJson(jsonString),
+        pid: jsonNumber,
+        status: jsonEnum(['starting', 'ready', 'stopping', 'complete', 'failed']),
+        startedAt: jsonString,
+        updatedAt: jsonString,
+        artifactPath: jsonString,
+        canonicalPath: jsonString,
+        segmentPath: jsonString,
+        screenshotDir: jsonString,
+        timeoutMs: jsonNumber,
+        maxBytes: jsonNumber,
+        bytes: jsonNumber,
+        events: jsonNumber,
+        stopReason: optionalJson(
+          jsonEnum(['requested', 'signal', 'timeout', 'size_limit', 'target_closed'])
+        ),
+        error: optionalJson(jsonString),
+        markers: optionalJson(
+          jsonArray((item) =>
+            decodeObject(item, {
+              id: jsonString,
+              label: jsonString,
+              sequence: jsonNumber,
+              elapsedMs: jsonNumber,
+              at: jsonString,
+            })
+          )
+        ),
+      }
+    );
     if (
       value.schemaVersion !== 1 ||
       value.sessionId !== sessionId ||
@@ -98,7 +141,7 @@ export function readRecordingMarkers(
       .filter(Boolean)
       .flatMap((line) => {
         try {
-          const v = JSON.parse(line) as Record<string, unknown>;
+          const v = parseJsonRecord(line);
           return v['recordingId'] === state.recordingId &&
             typeof v['id'] === 'string' &&
             typeof v['label'] === 'string'

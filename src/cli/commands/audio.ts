@@ -1,3 +1,11 @@
+import {
+  decodeObject,
+  jsonArray,
+  jsonBoolean,
+  jsonNumber,
+  jsonString,
+  nullableJson,
+} from '../../utils/json.ts';
 /**
  * Audio command - Send and capture audio in a browser session
  *
@@ -601,7 +609,7 @@ export async function audioCommand(
         const rawDiag = await page.evaluate<string>(CHECK_DIAGNOSTICS_EXPRESSION);
         const parsedDiag: unknown = JSON.parse(rawDiag);
         if (!isRecord(parsedDiag)) throw new Error('Invalid audio diagnostics payload');
-        const diag = parsedDiag as unknown as CheckDiagnostics;
+        const diag = decodeDiagnostics(parsedDiag);
         const checkJson = buildCheckJson(diag);
         logger.logTrace({
           channel: 'voice',
@@ -874,4 +882,55 @@ export async function audioCommand(
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function decodeDiagnostics(value: unknown): CheckDiagnostics {
+  return decodeObject(value, {
+    overrides: (item) =>
+      decodeObject(item, {
+        getUserMedia: jsonBoolean,
+        connect: jsonBoolean,
+        audioContext: jsonBoolean,
+      }),
+    contexts: jsonArray((item) =>
+      decodeObject(item, { sampleRate: jsonNumber, state: jsonString })
+    ),
+    input: nullableJson((item) =>
+      decodeObject(item, {
+        contextState: jsonString,
+        isPlaying: jsonBoolean,
+        sampleRate: jsonNumber,
+      })
+    ),
+    output: nullableJson((item) =>
+      decodeObject(item, {
+        audioContexts: jsonNumber,
+        contextTaps: jsonNumber,
+        audioNodes: jsonNumber,
+        rtcConnections: jsonNumber,
+        mediaElements: jsonNumber,
+        pendingTracks: jsonNumber,
+        tappedTracks: jsonNumber,
+        capturing: jsonBoolean,
+        bufferedSamples: jsonNumber,
+      })
+    ),
+    rtcDetails: jsonArray((item) =>
+      decodeObject(item, {
+        state: jsonString,
+        audioReceivers: jsonNumber,
+        audioSenders: jsonNumber,
+        tapped: jsonBoolean,
+      })
+    ),
+    mediaElementDetails: jsonArray((item) =>
+      decodeObject(item, {
+        tag: jsonString,
+        hasSrcObject: jsonBoolean,
+        hasSrc: jsonBoolean,
+        audioTracks: jsonNumber,
+        tapped: jsonBoolean,
+      })
+    ),
+  });
 }

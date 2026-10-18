@@ -1,3 +1,4 @@
+import { now as clockNow } from '../runtime/clock.ts';
 /**
  * Audio encoding utilities — zero dependencies
  *
@@ -47,7 +48,7 @@ export function decodeAudioChunk(data: {
     right: new Float32Array(rightBytes.buffer),
     sampleRate: data.sampleRate,
     samples: data.samples,
-    timestamp: Date.now(),
+    timestamp: clockNow(),
   };
 }
 

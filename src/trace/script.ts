@@ -6,10 +6,10 @@ export function createTraceScript(bindingName: string, ownerId: string): string 
   const owner = ${JSON.stringify(ownerId)};
   const binding = globalThis[${JSON.stringify(bindingName)}];
   if (typeof binding !== 'function') return;
-  if (window.__bpTraceHub) { window.__bpTraceHub.sinks.set(owner,binding); return; }
+  if (window.__bpTraceHub) { if(!window.__bpTraceHub.sinks.has(owner)&&window.__bpTraceHub.sinks.size>=64)throw Error('Trace sink limit exceeded'); window.__bpTraceHub.sinks.set(owner,binding); return; }
   const sinks = new Map([[owner,binding]]), cleanup = [];
   let active = true;
-  const listen = (target,event,callback) => { if(!active)return; target.addEventListener(event,callback);cleanup.push(()=>target.removeEventListener(event,callback)); };
+  const listen = (target,event,callback) => { if(!active||cleanup.length>=2048)return; target.addEventListener(event,callback);cleanup.push(()=>target.removeEventListener(event,callback)); };
   const hub = {sinks,release(id) {
     sinks.delete(id); if(sinks.size)return;
     active=false;for(const dispose of cleanup.splice(0).reverse())try{dispose();}catch{}
@@ -21,18 +21,20 @@ export function createTraceScript(bindingName: string, ownerId: string): string 
     if(!active)return;
     try {
       globalThis.__bpTraceRecentEvents = globalThis.__bpTraceRecentEvents || [];
-      const payload = {
+      let payload = {
         event,
         severity,
         summary: summary || event,
         ts: Date.now(),
         data,
       };
-      globalThis.__bpTraceRecentEvents.push(payload);
+      let encoded=JSON.stringify(payload);
+      if(encoded.length>16384){payload={event:String(event).slice(0,100),severity:String(severity).slice(0,20),summary:String(summary||event).slice(0,1000),ts:Date.now(),data:{truncated:true,preview:encoded.slice(0,8192)}};encoded=JSON.stringify(payload);}
+      globalThis.__bpTraceRecentEvents.push(JSON.parse(encoded));
       if (globalThis.__bpTraceRecentEvents.length > 200) {
         globalThis.__bpTraceRecentEvents.splice(0, globalThis.__bpTraceRecentEvents.length - 200);
       }
-      for(const sink of sinks.values())try{sink(JSON.stringify(payload));}catch{}
+      for(const sink of sinks.values())try{sink(encoded);}catch{}
     } catch {}
   };
 
@@ -44,7 +46,7 @@ export function createTraceScript(bindingName: string, ownerId: string): string 
     const nextId = () => Math.random().toString(36).slice(2, 10);
 
     const patchInstance = (socket, urlValue) => {
-      if (!socket || socket.__bpTracePatched) return socket;
+      if (!socket || socket.__bpTracePatched || cleanup.length>=2040) return socket;
       socket.__bpTracePatched = true;
       socket.__bpTraceId = socket.__bpTraceId || nextId();
       socket.__bpTraceUrl = String(urlValue || socket.url || '');
@@ -184,7 +186,7 @@ export function createTraceScript(bindingName: string, ownerId: string): string 
   };
 
   const patchMediaElement = (element) => {
-    if (!active || !element || element.__bpTracePatched) return;
+    if (!active || !element || element.__bpTracePatched || cleanup.length>=2040) return;
     element.__bpTracePatched = true;cleanup.push(()=>{delete element.__bpTracePatched;});
 
     listen(element,'play', () => {

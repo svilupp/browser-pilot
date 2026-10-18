@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
+import { parseJsonRecord } from '../../src/utils/json.ts';
 
 const deleteCalls: string[] = [];
 
@@ -51,7 +52,7 @@ async function captureJsonOutput(fn: () => Promise<void>): Promise<Record<string
     process.stdout.write = originalWrite;
   }
 
-  return JSON.parse(out) as Record<string, unknown>;
+  return parseJsonRecord(out);
 }
 
 describe('bp close --force', () => {
@@ -61,7 +62,7 @@ describe('bp close --force', () => {
   beforeEach(() => {
     deleteCalls.length = 0;
     originalApiKey = process.env['BROWSERBASE_API_KEY'];
-    delete process.env['BROWSERBASE_API_KEY'];
+    Reflect.deleteProperty(process.env, 'BROWSERBASE_API_KEY');
     sessionToLoad = {
       id: STUCK_SESSION_ID,
       provider: 'browserbase',
@@ -73,7 +74,7 @@ describe('bp close --force', () => {
   });
 
   afterEach(() => {
-    if (originalApiKey === undefined) delete process.env['BROWSERBASE_API_KEY'];
+    if (originalApiKey === undefined) Reflect.deleteProperty(process.env, 'BROWSERBASE_API_KEY');
     else process.env['BROWSERBASE_API_KEY'] = originalApiKey;
   });
 

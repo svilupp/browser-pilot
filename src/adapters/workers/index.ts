@@ -9,6 +9,7 @@ import type {
   ProviderReleaseResult,
   ProviderSession,
 } from '../../providers/types.ts';
+import { now as clockNow } from '../../runtime/clock.ts';
 
 /** Narrow structural surface; compatible with generated Worker binding types. */
 export interface BrowserBinding {
@@ -101,8 +102,8 @@ export async function connect(options: WorkersConnectOptions): Promise<Browser> 
   const cf = options.cloudflare;
   if ('lab' in cf && cf.lab !== undefined)
     throw new CapabilityError('binding', 'Browser binding does not document lab selection');
-  const deadline = Date.now() + (options.timeout ?? 30000);
-  const remaining = () => Math.max(0, deadline - Date.now());
+  const deadline = clockNow() + (options.timeout ?? 30000);
+  const remaining = () => Math.max(0, deadline - clockNow());
   if (
     selection.provider !== 'cloudflare' ||
     selection.engine !== 'chromium' ||
@@ -185,13 +186,13 @@ export async function connect(options: WorkersConnectOptions): Promise<Browser> 
       connection: {
         kind: 'opener',
         open: async (_url, transportOptions) => {
-          const connectDeadline = Date.now() + (transportOptions?.timeout ?? 30000);
+          const connectDeadline = clockNow() + (transportOptions?.timeout ?? 30000);
           const connection = await withinBudget(binding.connectSession(id), transportOptions ?? {});
           return createWorkersTransportFactory({
             fetch: (url, init) => connection.webSocket.fetch(url, init),
           })('https://browser-binding.invalid', {
             ...transportOptions,
-            timeout: Math.max(0, connectDeadline - Date.now()),
+            timeout: Math.max(0, connectDeadline - clockNow()),
           });
         },
       },

@@ -1,3 +1,14 @@
+import { now as clockNow } from '../runtime/clock.ts';
+import {
+  decodeObject,
+  jsonArray,
+  jsonBoolean,
+  jsonNumber,
+  jsonString,
+  optionalJson,
+  parseJson,
+  parseJsonRecord,
+} from '../utils/json.ts';
 /**
  * Emit - inject messages into a page's own message flow.
  *
@@ -145,10 +156,9 @@ async function collectFromPrototype(
     realm.sessionId
   );
 
-  const raw = JSON.parse(listed.result?.value ?? '[]') as Array<{
-    url: string;
-    readyState: number;
-  }>;
+  const raw = jsonArray((value) =>
+    decodeObject(value, { url: jsonString, readyState: jsonNumber })
+  )(parseJson(listed.result?.value ?? '[]'));
 
   return {
     arrayObjectId: objects.objects.objectId,
@@ -402,10 +412,10 @@ export async function emitWsMessage(
     throw new Error(`WebSocket send failed: ${description}`);
   }
 
-  const outcome = JSON.parse(dispatch.result?.value ?? '{}') as {
-    ok?: boolean;
-    reason?: string;
-  };
+  const outcome = decodeObject(parseJson(dispatch.result?.value ?? '{}'), {
+    ok: optionalJson(jsonBoolean),
+    reason: optionalJson(jsonString),
+  });
   if (!outcome.ok) {
     confirmation.cancel();
     replyWatch?.cancel();
@@ -583,7 +593,7 @@ function watchForReply(
   settled(timeout: number, expectedRequestId: string): Promise<EmitReply | undefined>;
   cancel(): void;
 } {
-  const startedAt = Date.now();
+  const startedAt = clockNow();
   const regex = options.match ? globToRegex(options.match) : undefined;
   let found: EmitReply | undefined;
   let resolveNow: (() => void) | undefined;
@@ -609,7 +619,7 @@ function watchForReply(
     const payload = response?.payloadData ?? '';
     if (regex && !regex.test(payload)) return false;
     if (options.where && !matchesWhere(payload, options.where)) return false;
-    found = { payload, latencyMs: Date.now() - startedAt };
+    found = { payload, latencyMs: clockNow() - startedAt };
     clearTimer();
     resolveNow?.();
     return true;
@@ -657,7 +667,7 @@ function watchForReply(
 /** Dot-path field equality against a JSON frame payload. */
 export function matchesWhere(payload: string, where: Record<string, unknown>): boolean {
   try {
-    const parsed = JSON.parse(payload) as Record<string, unknown>;
+    const parsed = parseJsonRecord(payload);
     return Object.entries(where).every(([key, expected]) => {
       const actual = key.split('.').reduce<unknown>((current, part) => {
         if (!current || typeof current !== 'object') return undefined;

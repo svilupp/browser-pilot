@@ -1,3 +1,4 @@
+import { isRecord, jsonString, parseJsonRecord } from '../utils/json.ts';
 /**
  * Daemon transport — a Transport implementation backed by a Unix domain socket.
  *
@@ -8,6 +9,7 @@
 
 import { connect as netConnect, type Socket } from 'node:net';
 import type { Transport } from '../cdp/transport.ts';
+import type { OwnerGrant } from '../owner/lease-controller.ts';
 import { DAEMON_CONNECT_TIMEOUT_MS } from './types.ts';
 
 /**
@@ -39,6 +41,12 @@ export function createDaemonTransport(
       socket.off('error', handleInitialError);
 
       let buffer = '';
+      let grant: OwnerGrant | undefined;
+      let sequence = 0;
+      const acquiring = new Set<number>();
+      const beginning = new Set<number>();
+      const ending = new Map<number, string>();
+      const operations = new Set<string>();
       const messageHandlers: Array<(message: string) => void> = [];
       const closeHandlers: Array<() => void> = [];
       const errorHandlers: Array<(error: Error) => void> = [];
@@ -50,6 +58,29 @@ export function createDaemonTransport(
           const line = buffer.slice(0, newlineIdx).trim();
           buffer = buffer.slice(newlineIdx + 1);
           if (line.length > 0) {
+            const response = parseJsonRecord(line);
+            const responseId = typeof response['id'] === 'number' ? response['id'] : undefined;
+            const result = isRecord(response['result']) ? response['result'] : undefined;
+            if (responseId !== undefined && beginning.delete(responseId)) {
+              const id =
+                typeof result?.['operationId'] === 'string' ? result['operationId'] : undefined;
+              if (id) operations.add(id);
+            }
+            if (responseId !== undefined) {
+              const id = ending.get(responseId);
+              if (id) {
+                operations.delete(id);
+                ending.delete(responseId);
+              }
+            }
+            if (responseId !== undefined && acquiring.delete(responseId) && result?.['grantId']) {
+              if (grant?.grantId !== result['grantId'] || grant.ownerEpoch !== result['ownerEpoch'])
+                sequence = 0;
+              grant = {
+                grantId: jsonString(result['grantId']),
+                ownerEpoch: jsonString(result['ownerEpoch']),
+              };
+            }
             for (const handler of messageHandlers) {
               handler(line);
             }
@@ -75,7 +106,17 @@ export function createDaemonTransport(
           if (!socket.writable) {
             throw new Error('Daemon socket is not writable');
           }
-          const request = JSON.parse(message) as Record<string, unknown>;
+          const request = parseJsonRecord(message);
+          if (request['method'] === 'daemon.acquireLease') acquiring.add(request['id'] as number);
+          if (request['method'] === 'daemon.beginOperation') beginning.add(request['id'] as number);
+          if (request['method'] === 'daemon.endOperation')
+            ending.set(
+              request['id'] as number,
+              (request['params'] as { operationId: string }).operationId
+            );
+          if (operations.size && request['method'] !== 'daemon.beginOperation')
+            request['ownerOperationId'] = operations.values().next().value;
+          if (grant) request['ownerFence'] = { ...grant, sequence: ++sequence };
           if (budget) request['ipcBudget'] = { timeoutMs: budget.timeoutMs, sentAt: Date.now() };
           socket.write(`${JSON.stringify(request)}\n`);
         },

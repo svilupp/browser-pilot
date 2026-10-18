@@ -226,6 +226,24 @@ export {
   createCDPClient,
 } from './cdp/index.ts';
 export type { Transport, TransportFactory, TransportOptions } from './cdp/transport.ts';
+export type {
+  OwnerAction,
+  OwnerActionCapabilities,
+  OwnerActionContext,
+  OwnerActionPolicy,
+  OwnerActionPort,
+  OwnerActionReceipt,
+  OwnerActionService,
+  OwnerApproval,
+  OwnerAssurance,
+  OwnerExtractField,
+  OwnerExtractRequest,
+  OwnerExtractResult,
+  OwnerGrant,
+  OwnerObservation,
+  PreparedAction,
+} from './core/owner-actions/index.ts';
+export { createOwnerActionService } from './core/owner-actions/index.ts';
 // Optional host integration contracts.
 export {
   type ArtifactPutOptions,

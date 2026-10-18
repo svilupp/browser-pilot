@@ -1,9 +1,17 @@
+import { reportDiagnostic } from '../trace/tracer.ts';
 /**
  * CDP Client implementation
  * Handles command/response correlation and event subscription
  */
 
-import { isRecord } from '../utils/json.ts';
+import {
+  decodeObject,
+  isRecord,
+  jsonNumber,
+  jsonRecord,
+  jsonString,
+  optionalJson,
+} from '../utils/json.ts';
 import {
   CDPError,
   type CDPErrorData,
@@ -341,28 +349,51 @@ function buildCDPClient(
     try {
       const parsed: unknown = JSON.parse(raw);
       if (!isRecord(parsed)) {
-        if (debug) console.error('[CDP] Ignoring non-object message:', raw);
+        if (debug) reportDiagnostic('error', 'cdp', '[CDP] Ignoring non-object message:', raw);
         return;
       }
       if ('id' in parsed && typeof parsed['id'] === 'number') {
-        msg = parsed as unknown as CDPResponse;
+        msg = {
+          ...parsed,
+          ...decodeObject(parsed, {
+            id: jsonNumber,
+            result: (value) => value,
+            error: optionalJson((value) =>
+              decodeObject(value, {
+                code: jsonNumber,
+                message: jsonString,
+                data: optionalJson(jsonString),
+              })
+            ),
+            sessionId: optionalJson(jsonString),
+          }),
+        };
       } else if ('method' in parsed && typeof parsed['method'] === 'string') {
-        msg = parsed as unknown as CDPEvent;
+        msg = {
+          ...parsed,
+          ...decodeObject(parsed, {
+            method: jsonString,
+            params: optionalJson(jsonRecord),
+            sessionId: optionalJson(jsonString),
+          }),
+        };
       } else {
-        if (debug) console.error('[CDP] Ignoring invalid message shape:', raw);
+        if (debug) reportDiagnostic('error', 'cdp', '[CDP] Ignoring invalid message shape:', raw);
         return;
       }
     } catch {
-      if (debug) console.error('[CDP] Failed to parse message:', raw);
+      if (debug) reportDiagnostic('error', 'cdp', '[CDP] Failed to parse message:', raw);
       return;
     }
 
     if (debug) {
-      const redacted = redactCdpMessage(
-        msg as unknown as Record<string, unknown>,
-        (id) => pending.get(id)?.method
+      const redacted = redactCdpMessage({ ...msg }, (id) => pending.get(id)?.method);
+      reportDiagnostic(
+        'debug',
+        'cdp',
+        '[CDP] <--',
+        JSON.stringify(redacted, null, 2).slice(0, 500)
       );
-      console.log('[CDP] <--', JSON.stringify(redacted, null, 2).slice(0, 500));
     }
 
     // Response to a command (has id)
@@ -424,7 +455,8 @@ function buildCDPClient(
               try {
                 handler(info);
               } catch (e) {
-                if (debug) console.error('[CDP] Error in onTargetAttached handler:', e);
+                if (debug)
+                  reportDiagnostic('error', 'cdp', '[CDP] Error in onTargetAttached handler:', e);
               }
             }
           }
@@ -442,7 +474,7 @@ function buildCDPClient(
         try {
           handler(event.method, params, eventSessionId);
         } catch (e) {
-          if (debug) console.error('[CDP] Error in any-event handler:', e);
+          if (debug) reportDiagnostic('error', 'cdp', '[CDP] Error in any-event handler:', e);
         }
       }
 
@@ -456,7 +488,9 @@ function buildCDPClient(
               handler(params);
             } catch (e) {
               if (debug)
-                console.error(
+                reportDiagnostic(
+                  'error',
+                  'cdp',
                   `[CDP] Error in session handler for ${eventSessionId}/${event.method}:`,
                   e
                 );
@@ -476,7 +510,8 @@ function buildCDPClient(
             try {
               handler(params);
             } catch (e) {
-              if (debug) console.error(`[CDP] Error in handler for ${event.method}:`, e);
+              if (debug)
+                reportDiagnostic('error', 'cdp', `[CDP] Error in handler for ${event.method}:`, e);
             }
           }
         }
@@ -497,7 +532,7 @@ function buildCDPClient(
   });
 
   transport.onError((error: Error) => {
-    if (debug) console.error('[CDP] Transport error:', error);
+    if (debug) reportDiagnostic('error', 'cdp', '[CDP] Transport error:', error);
     connected = false;
     for (const [id, request] of pending) {
       clearTimeout(request.timer);
@@ -535,8 +570,8 @@ function buildCDPClient(
       const message = JSON.stringify(request);
 
       if (debug) {
-        const redacted = redactCdpMessage(request as unknown as Record<string, unknown>);
-        console.log('[CDP] -->', JSON.stringify(redacted).slice(0, 500));
+        const redacted = redactCdpMessage({ ...request });
+        reportDiagnostic('debug', 'cdp', '[CDP] -->', JSON.stringify(redacted).slice(0, 500));
       }
 
       if (options?.signal?.aborted || effectiveTimeout <= 0)

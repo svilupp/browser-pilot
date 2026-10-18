@@ -186,3 +186,23 @@ export function disableTracing(): void {
     globalTracer.disable();
   }
 }
+
+const diagnosticTracer = new Tracer({ enabled: true, level: 'debug', includeTimings: false });
+
+/** Route always-visible runtime diagnostics through the trace boundary. */
+export function reportDiagnostic(
+  level: TraceLevel,
+  category: TraceCategory,
+  message: string,
+  ...details: unknown[]
+): void {
+  const tracer = getTracer();
+  (tracer.isEnabled ? tracer : diagnosticTracer).emit({
+    level,
+    category,
+    action: [
+      message,
+      ...details.map((value) => (value instanceof Error ? value.message : String(value))),
+    ].join(' '),
+  });
+}

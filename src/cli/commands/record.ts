@@ -30,6 +30,7 @@ import { type ListenMode, Recorder, type RecorderListenOptions } from '../../rec
 import { redactRecordingURL } from '../../recording/redaction.ts';
 import type { RawRecordedEvent } from '../../recording/types.ts';
 import { buildTraceSummaries } from '../../trace/views.ts';
+import { parseJson } from '../../utils/json.ts';
 import { attachSession, resolveSession } from '../attach.ts';
 import { formatBrowserDiscoveryError, resolveCLIEndpoint } from '../browser-endpoint.ts';
 import { createLocalSession } from '../connect-service.ts';
@@ -423,7 +424,7 @@ async function loadArtifact(
     throw new Error(`Artifact not found: ${pathOrFallback}`);
   }
 
-  const raw = JSON.parse(nodeFs.readFileSync(pathOrFallback, 'utf-8')) as unknown;
+  const raw = parseJson(nodeFs.readFileSync(pathOrFallback, 'utf-8'));
   return {
     path: pathOrFallback,
     artifact: canonicalizeRecordingArtifact(

@@ -1,3 +1,4 @@
+import { reportDiagnostic } from '../trace/tracer.ts';
 /**
  * Request interception implementation
  */
@@ -126,7 +127,7 @@ export class RequestInterceptor {
       try {
         await matchingHandler.handler(intercepted, actions);
       } catch (err) {
-        console.error('[RequestInterceptor] Handler error:', err);
+        reportDiagnostic('error', 'action', '[RequestInterceptor] Handler error:', err);
         // Continue request on handler error
         if (!this.pendingRequests.get(requestId)?.handled) {
           await actions.continue();

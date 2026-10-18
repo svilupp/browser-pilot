@@ -1,4 +1,6 @@
 import { CapabilityError } from '../core/ports.ts';
+import { now as clockNow } from '../runtime/clock.ts';
+import { reportDiagnostic } from '../trace/tracer.ts';
 import { verifyChildSession, verifyDocumentContext } from './frame-identity.ts';
 /**
  * Page class - provides high-level browser automation API
@@ -485,7 +487,7 @@ export class Page {
             if (this.frameIdentityError && /^(Runtime|DOM|Input)\./.test(method))
               return Promise.reject(this.frameIdentityError);
             const remaining =
-              this.actionDeadline === undefined ? undefined : this.actionDeadline - Date.now();
+              this.actionDeadline === undefined ? undefined : this.actionDeadline - clockNow();
             if (remaining !== undefined && remaining <= 0)
               return Promise.reject(
                 Object.assign(new Error('Action deadline exceeded before dispatch'), {
@@ -674,7 +676,7 @@ export class Page {
   ): Promise<T> {
     if (this.actionDeadline !== undefined)
       throw new Error('Another action is still active on this Page');
-    this.actionDeadline = Date.now() + (options.timeout ?? DEFAULT_TIMEOUT);
+    this.actionDeadline = clockNow() + (options.timeout ?? DEFAULT_TIMEOUT);
     const dispatch = new ActionDispatch();
     try {
       return await fn(dispatch);
@@ -844,7 +846,9 @@ export class Page {
         } catch (e) {
           // Real client but auto-attach failed: OOPIF frames will be unreachable.
           // Surface it instead of silently degrading.
-          console.warn(
+          reportDiagnostic(
+            'warn',
+            'action',
             '[browser-pilot] Failed to enable cross-origin iframe (OOPIF) auto-attach; ' +
               `cross-origin frames will not be reachable: ${e instanceof Error ? e.message : String(e)}`
           );
@@ -2584,7 +2588,9 @@ export class Page {
           // Still same-origin (reachable): preserve the historical broken-frame
           // behaviour so DOM operations can still work via CDP.
           this.brokenFrame = frameKey;
-          console.warn(
+          reportDiagnostic(
+            'warn',
+            'action',
             `[browser-pilot] Frame "${frameKey}" execution context unavailable. ` +
               'JS evaluation will fail in this frame. DOM operations may still work.'
           );
@@ -2964,7 +2970,7 @@ export class Page {
     frameId: string,
     timeout: number
   ): Promise<{ sessionId: string; targetId: string; url: string } | null> {
-    const deadline = Date.now() + timeout;
+    const deadline = clockNow() + timeout;
     for (;;) {
       const record = this.oopifFrames.get(frameId);
       if (record) {
@@ -2972,7 +2978,7 @@ export class Page {
         // Session detached (e.g. reload); forget it and keep waiting for a fresh one.
         this.oopifFrames.delete(frameId);
       }
-      if (Date.now() >= deadline) return null;
+      if (clockNow() >= deadline) return null;
       await sleep(50);
     }
   }
@@ -2984,7 +2990,7 @@ export class Page {
   private async ensureOopifRootReady(timeout: number): Promise<number> {
     const sessionId = this.currentFrameSession;
     if (!sessionId) throw new Error('No active OOPIF frame session');
-    const deadline = Date.now() + timeout;
+    const deadline = clockNow() + timeout;
     for (;;) {
       try {
         const doc = await this.cdp.send<{ root: { nodeId: number } }>(
@@ -2998,7 +3004,7 @@ export class Page {
       } catch {
         // DOM not ready yet on the child session.
       }
-      if (Date.now() >= deadline) throw new Error('OOPIF document not ready');
+      if (clockNow() >= deadline) throw new Error('OOPIF document not ready');
       await sleep(50);
     }
   }
@@ -3045,7 +3051,7 @@ export class Page {
     timeout: number
   ): Promise<{ nodeId: number; objectId: string; selector: string } | null> {
     const selectors = Array.isArray(selector) ? selector : [selector];
-    const deadline = Date.now() + timeout;
+    const deadline = clockNow() + timeout;
     for (;;) {
       const root = await this.getOopifQueryRoot(sessionId);
       for (const sel of selectors) {
@@ -3109,7 +3115,7 @@ export class Page {
           // deepQuery/requestNode can throw during load; try the next candidate.
         }
       }
-      if (Date.now() >= deadline) return null;
+      if (clockNow() >= deadline) return null;
       await sleep(50);
     }
   }
@@ -3174,14 +3180,14 @@ export class Page {
         ? `function(sel) { ${DEEP_QUERY_SCRIPT} return deepQuery(sel, this) !== null; }`
         : `function(sel) { ${DEEP_QUERY_SCRIPT} ${VISIBLE_PREDICATE_SCRIPT} return bpElementVisible(deepQuery(sel, this)); }`;
 
-    const deadline = Date.now() + timeout;
+    const deadline = clockNow() + timeout;
     const fn = buildFn();
     for (;;) {
       for (const sel of selectors) {
         const present = (await this.evalInOopifRoot<boolean>(sel, sessionId, fn)) === true;
         if ((wantPresent && present) || (!wantPresent && !present)) return true;
       }
-      if (Date.now() >= deadline) return false;
+      if (clockNow() >= deadline) return false;
       await sleep(100);
     }
   }
@@ -3237,7 +3243,7 @@ export class Page {
         return { found: true, reason };
       }`;
 
-    const deadline = Date.now() + timeout;
+    const deadline = clockNow() + timeout;
     let lastFound = false;
     let lastReason = 'unknown';
     for (;;) {
@@ -3257,7 +3263,7 @@ export class Page {
           lastReason = reason ?? 'unknown';
         }
       }
-      if (Date.now() >= deadline) {
+      if (clockNow() >= deadline) {
         return lastFound
           ? { ok: false, found: true, selector: selectors[0]!, reason: lastReason }
           : { ok: false, found: false };
@@ -5609,7 +5615,7 @@ export class Page {
       try {
         handler(message);
       } catch (e) {
-        console.error('[Console handler error]', e);
+        reportDiagnostic('error', 'action', '[Console handler error]', e);
       }
     }
   }
@@ -5639,7 +5645,7 @@ export class Page {
       try {
         handler(error);
       } catch (e) {
-        console.error('[Error handler error]', e);
+        reportDiagnostic('error', 'action', '[Error handler error]', e);
       }
     }
   }
@@ -5671,12 +5677,16 @@ export class Page {
         await Promise.race([
           this.dialogHandler(dialog),
           sleep(DIALOG_TIMEOUT).then(() => {
-            console.warn('[browser-pilot] Dialog handler timed out after 5s, auto-dismissing');
+            reportDiagnostic(
+              'warn',
+              'action',
+              '[browser-pilot] Dialog handler timed out after 5s, auto-dismissing'
+            );
             return dialog.dismiss();
           }),
         ]);
       } catch (e) {
-        console.error('[Dialog handler error]', e);
+        reportDiagnostic('error', 'action', '[Dialog handler error]', e);
         await dialog.dismiss();
       }
     } else {
@@ -6886,7 +6896,7 @@ export class Page {
       await this.setupAudio();
     }
 
-    const start = Date.now();
+    const start = clockNow();
 
     // Start capture once — captureUntilSilence will skip its internal start()
     // since we're already capturing
@@ -6926,7 +6936,7 @@ export class Page {
     return {
       audio,
       latencyMs: firstChunkTime !== null ? firstChunkTime - start : -1,
-      totalMs: Date.now() - start,
+      totalMs: clockNow() - start,
     };
   }
 

@@ -1,3 +1,4 @@
+import { isRecord, parseJson } from '../utils/json.ts';
 /**
  * Session persistence for CLI
  * Stores session data in ~/.browser-pilot/sessions/
@@ -115,6 +116,7 @@ export interface EnvSettings {
 }
 
 export interface SessionMetadata {
+  bindingRevision?: number;
   refCache?: RefCache;
   logStats?: LogStats;
   connectionSource?: ResolvedBrowserSource;
@@ -194,7 +196,9 @@ async function saveSessionUnlocked(session: SessionData): Promise<void> {
 }
 
 export async function saveSession(session: SessionData): Promise<void> {
-  const release = await acquireFileLock(`${getSessionFilePath(session.id)}.lock`);
+  const filePath = getSessionFilePath(session.id);
+  await ensureSessionDir();
+  const release = await acquireFileLock(`${filePath}.lock`);
   try {
     await saveSessionUnlocked(session);
   } finally {
@@ -238,7 +242,7 @@ export async function loadSession(id: string): Promise<SessionData> {
 
   try {
     const content = await fs.readFile(filePath, 'utf-8');
-    return JSON.parse(content) as SessionData;
+    return parseSessionData(content);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
       throw new Error(`Session not found: ${id}`);
@@ -273,10 +277,18 @@ export async function updateSession(
       updates.metadata !== undefined
         ? { ...session.metadata, ...updates.metadata }
         : session.metadata;
+    const bindingChanged =
+      Object.hasOwn(updates, 'targetId') && updates.targetId !== session.targetId;
     const updated = {
       ...session,
       ...updates,
-      metadata: mergedMetadata,
+      metadata: bindingChanged
+        ? {
+            ...mergedMetadata,
+            refCache: undefined,
+            bindingRevision: (session.metadata?.bindingRevision ?? 0) + 1,
+          }
+        : mergedMetadata,
       lastActivity: new Date().toISOString(),
     };
     await saveSessionUnlocked(updated);
@@ -305,14 +317,34 @@ export async function updateSessionDaemon(
 /** Atomically move a logical session and its daemon transport to one exact page target. */
 export async function updateSessionTargetBinding(
   id: string,
-  binding: { targetId: string; currentUrl: string; cdpSessionId?: string }
+  binding: {
+    targetId: string;
+    currentUrl: string;
+    cdpSessionId?: string;
+    invalidateRefs?: boolean;
+    expectedRevision?: number;
+    expectedSocketPath?: string;
+  }
 ): Promise<SessionData> {
   const release = await acquireFileLock(`${getSessionFilePath(id)}.lock`);
   try {
     const session = await loadSession(id);
+    if (
+      binding.expectedSocketPath !== undefined &&
+      session.daemon?.socketPath !== binding.expectedSocketPath
+    )
+      throw new Error('Owner session binding changed before handback');
+    if (
+      binding.expectedRevision !== undefined &&
+      (session.metadata?.bindingRevision ?? 0) !== binding.expectedRevision
+    )
+      throw new Error('Owner session revision changed before handback');
     const daemon = session.daemon
       ? {
           ...session.daemon,
+          ...(binding.invalidateRefs && session.targetId !== binding.targetId
+            ? { cdpSessionId: undefined }
+            : {}),
           ...(binding.cdpSessionId ? { cdpSessionId: binding.cdpSessionId } : {}),
         }
       : undefined;
@@ -321,6 +353,13 @@ export async function updateSessionTargetBinding(
       targetId: binding.targetId,
       currentUrl: binding.currentUrl,
       lastActivity: new Date().toISOString(),
+      metadata: {
+        ...session.metadata,
+        bindingRevision: (session.metadata?.bindingRevision ?? 0) + 1,
+        ...(binding.invalidateRefs || session.targetId !== binding.targetId
+          ? { refCache: undefined }
+          : {}),
+      },
       ...(daemon ? { daemon } : {}),
     };
     await saveSessionUnlocked(updated);
@@ -415,7 +454,7 @@ export async function listSessions(): Promise<SessionData[]> {
       if (file.endsWith('.json')) {
         try {
           const content = await fs.readFile(join(SESSION_DIR, file), 'utf-8');
-          sessions.push(JSON.parse(content) as SessionData);
+          sessions.push(parseSessionData(content));
         } catch {
           // Skip invalid session files
         }
@@ -446,4 +485,57 @@ export function generateSessionId(): string {
 export async function getDefaultSession(): Promise<SessionData | null> {
   const sessions = await listSessions();
   return sessions[0] ?? null;
+}
+
+/** Required persisted identity plus the optional transport authority are checked before use. */
+function parseSessionData(text: string): SessionData {
+  const value = parseJson(text);
+  if (
+    !isRecord(value) ||
+    !['id', 'provider', 'wsUrl'].every((key) => typeof value[key] === 'string') ||
+    (value['schemaVersion'] !== undefined && value['schemaVersion'] !== 1)
+  )
+    throw new Error('Invalid saved session');
+  const daemon = value['daemon'];
+  if (
+    daemon !== undefined &&
+    (!isRecord(daemon) ||
+      typeof daemon['socketPath'] !== 'string' ||
+      typeof daemon['pid'] !== 'number')
+  )
+    throw new Error('Invalid saved daemon');
+  const transport = value['transport'];
+  if (
+    transport !== undefined &&
+    (!isRecord(transport) || !['daemon', 'direct'].includes(String(transport['mode'])))
+  )
+    throw new Error('Invalid saved transport');
+  // Older records predate display timestamps and the cached current URL.
+  for (const key of ['createdAt', 'lastActivity', 'currentUrl']) {
+    if (value[key] === undefined) value[key] = '';
+    else if (typeof value[key] !== 'string') throw new Error('Invalid saved session');
+  }
+  if (!isSessionData(value)) throw new Error('Invalid saved session');
+  return value;
+}
+
+function isSessionData(
+  value: Record<string, unknown>
+): value is Record<string, unknown> & SessionData {
+  return (
+    typeof value['id'] === 'string' &&
+    typeof value['wsUrl'] === 'string' &&
+    [
+      'generic',
+      'browserbase',
+      'browserless',
+      'browser-use',
+      'cloudflare',
+      'cloudflare:chromium',
+      'cloudflare:kitesurf',
+    ].includes(String(value['provider'])) &&
+    typeof value['createdAt'] === 'string' &&
+    typeof value['lastActivity'] === 'string' &&
+    typeof value['currentUrl'] === 'string'
+  );
 }

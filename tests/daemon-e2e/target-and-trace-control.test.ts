@@ -98,7 +98,7 @@ describe('Daemon target and trace control', () => {
       expect(started.exitCode).toBe(0);
       expect(started.json).toMatchObject({ active: true, status: 'running', maxMb: 1 });
 
-      await runCLI(
+      const tracedExec = await runCLI(
         [
           'exec',
           '-s',
@@ -107,6 +107,8 @@ describe('Daemon target and trace control', () => {
         ],
         { env: harness.discoveryEnv }
       );
+      expect(tracedExec.exitCode).toBe(0);
+
       const stopped = await runCLI(['trace', 'stop', '-s', sessionName, '--json'], {
         env: harness.discoveryEnv,
       });

@@ -1,3 +1,4 @@
+import { parseJsonRecord } from '../../src/utils/json.ts';
 /**
  * Unit tests for the session-scoped CDP view (createSessionScopedCDP).
  *
@@ -19,7 +20,7 @@ class FakeTransport implements Transport {
   private closeHandlers: Array<() => void> = [];
 
   send(message: string): void {
-    const parsed = JSON.parse(message) as Record<string, unknown>;
+    const parsed = parseJsonRecord(message);
     this.sent.push(parsed);
     if (typeof parsed['id'] === 'number') {
       const id = parsed['id'];
