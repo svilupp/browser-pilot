@@ -196,7 +196,9 @@ async function saveSessionUnlocked(session: SessionData): Promise<void> {
 }
 
 export async function saveSession(session: SessionData): Promise<void> {
-  const release = await acquireFileLock(`${getSessionFilePath(session.id)}.lock`);
+  const filePath = getSessionFilePath(session.id);
+  await ensureSessionDir();
+  const release = await acquireFileLock(`${filePath}.lock`);
   try {
     await saveSessionUnlocked(session);
   } finally {
