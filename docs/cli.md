@@ -326,6 +326,34 @@ Likely next steps:
 - `bp trace summary <artifact> --view ws`
 - `bp run workflow.json`
 
+### PR walkthrough video
+
+Enable remote debugging in desktop Chrome. Open the starting screen with demo
+data and connect to that tab. Chrome 153 or newer is required.
+
+```sh
+bp connect --name demo --target-url localhost:3000
+bp targets -s demo
+bp record video -s demo -f walkthrough.mp4 --label "Save a filtered view"
+```
+
+Wait for the recording message. Drive the tab by hand or pass `-s demo` to
+`bp exec` or `bp run` in another terminal. Press Ctrl+C to save. With a daemon session,
+`flightplan run --session demo` saves the clip when Flightplan returns control.
+
+| Option | Effect |
+| --- | --- |
+| `-s, --session <id>` | Required named session. The recorder stays on the selected tab across navigation. |
+| `-f, --file <path>` | Required path to a new `.mp4` file. |
+| `--label <text>` | Brief title on the starting screen. |
+| `--timeout <ms>` | Stop automatically. The default is 90 seconds. |
+| `--json` | Return `file`, `bytes`, `targetId`, and `codec` after saving. |
+
+The recorder checks support on the tab by calling `Page.startScreenRecording`.
+Chrome writes a silent AV1 MP4 at up to 1280×720 and 30 fps. Keep the tab open
+until the file saves. Use demo data because the video contains actual tab pixels.
+For GitHub playback, see the [PR walkthrough skill](https://github.com/svilupp/flightplan/tree/main/docs/skills/recording-pr-walkthroughs).
+
 ## Trace
 
 Choose this when the question spans time, failures, causality, network, console, permissions, media, or voice.

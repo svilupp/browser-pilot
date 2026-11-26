@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.9.0] - 2026-11-26
+
+### Added
+
+- `bp record video` saves a silent AV1 MP4 from a named tab on Chrome 153 or newer.
+  Add a brief title with `--label`. Record while driving the tab by hand, with
+  browser-pilot, or with Flightplan. See the [walkthrough guide](docs/cli.md#pr-walkthrough-video).
+
 ## [0.8.0] - 2026-10-18
 
 ### Added

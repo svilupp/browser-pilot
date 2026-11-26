@@ -163,6 +163,15 @@ bp connect --name validation --record
 bp exec -s validation -f ./artifacts/demo.workflow.json
 ```
 
+Capture a feature walkthrough on desktop Chrome 153 or newer. Drive the same tab
+and press Ctrl+C to save the MP4.
+
+```bash
+bp record video -s demo -f walkthrough.mp4 --label "Save a filtered view"
+```
+
+See [PR walkthrough video](docs/cli.md#pr-walkthrough-video).
+
 ## Drive the protocol with emit
 
 When the UI cannot produce the message you need, send a frame on a WebSocket the page already

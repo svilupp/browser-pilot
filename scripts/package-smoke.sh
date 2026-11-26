@@ -19,6 +19,7 @@ test -f "$smoke_dir/package/dist/daemon.mjs"
 test "$(node "$smoke_dir/package/dist/daemon.mjs" --help | head -1)" = 'Usage: daemon <sessionId> [--idle-timeout <ms>]'
 test "$(node "$smoke_dir/package/dist/daemon.mjs" --version)" = "$(node -p "require('./package.json').version")"
 test "$(node "$smoke_dir/package/dist/cli.mjs" --version)" = "$(node -p "require('./package.json').version")"
+test "$(node "$smoke_dir/package/dist/cli.mjs" record video --help | head -1)" = "bp record video - Capture a named session's tab as an MP4"
 
 cp scripts/package-library-smoke.mjs "$smoke_dir/package/.package-library-smoke.mjs"
 node "$smoke_dir/package/.package-library-smoke.mjs"
