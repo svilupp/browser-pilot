@@ -36,6 +36,7 @@ import { formatBrowserDiscoveryError, resolveCLIEndpoint } from '../browser-endp
 import { createLocalSession } from '../connect-service.ts';
 import { output } from '../output.ts';
 import { getDefaultSession, loadSession, type SessionData } from '../session.ts';
+import { recordVideoCommand } from './record-video.ts';
 
 type RecordProfile = 'automation' | 'realtime' | 'voice' | 'auth';
 type RecordSubcommand =
@@ -80,6 +81,10 @@ Session and output:
 Usage:
   bp record [options]
   bp record <inspect|summary|derive|export> [artifact] [options]
+  bp record video -s <session> -f <file.mp4> [options]
+
+Video:
+  Use bp record video --help for MP4 capture, title and timeout options.
 
 Capture options:
   -s, --session [id]   Existing session (omit: auto-connect, -s: latest, -s <id>: specific)
@@ -115,6 +120,7 @@ Examples:
   bp record inspect ./artifacts/demo.recording.json
   bp record derive ./artifacts/demo.recording.json -o ./artifacts/demo.workflow.json
   bp record export ./artifacts/demo.recording.json -o ./artifacts/demo.bundle.json
+  bp record video -s demo -f walkthrough.mp4 --label "Save a filtered view"
 
 Likely next commands:
   bp record summary ./artifacts/demo.recording.json
@@ -919,6 +925,10 @@ export async function recordCommand(
   args: string[],
   globalOptions: { session?: string; format?: 'json' | 'pretty'; trace?: boolean; help?: boolean }
 ): Promise<void> {
+  if (args[0] === 'video') {
+    await recordVideoCommand(args.slice(1), globalOptions);
+    return;
+  }
   const options = parseRecordArgs(args);
   const command = options.subcommand ?? 'capture';
 

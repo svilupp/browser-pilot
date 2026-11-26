@@ -212,6 +212,60 @@ for (const mode of ['direct', 'daemon'] as const) {
         JSON.parse(await readFile(join(home, 'second.json'), 'utf8')).recipe.steps.length
       ).toBeGreaterThan(recorded.recipe.steps.length);
       expect(await second.evaluate(() => innerWidth)).toBe(320);
+
+      const protocol = (await (
+        await fetch(`http://localhost:${chrome.port}/json/protocol`)
+      ).json()) as {
+        domains: Array<{ domain: string; commands?: Array<{ name: string }> }>;
+      };
+      const offersNativeRecording = protocol.domains
+        .find((domain) => domain.domain === 'Page')
+        ?.commands?.some((command) => command.name === 'startScreenRecording');
+      const mp4 = join(home, 'walkthrough.mp4');
+      const video = Bun.spawn(
+        [
+          bun,
+          entry,
+          'record',
+          'video',
+          '-s',
+          'review',
+          '-f',
+          mp4,
+          '--label',
+          'Capture a demo',
+          '--timeout',
+          '1200',
+          '--json',
+        ],
+        { env, stdout: 'pipe', stderr: 'pipe' }
+      );
+      const [videoOutput, videoLog, videoExit] = await Promise.all([
+        new Response(video.stdout).text(),
+        new Response(video.stderr).text(),
+        video.exited,
+      ]);
+      if (offersNativeRecording) {
+        expect({ code: videoExit, log: videoLog }).toEqual({
+          code: 0,
+          log: expect.stringContaining('Recording tab'),
+        });
+        const bytes = await readFile(mp4);
+        expect(bytes.toString('utf8', 4, 8)).toBe('ftyp');
+        expect(JSON.parse(videoOutput)).toMatchObject({
+          file: mp4,
+          bytes: bytes.length,
+          targetId: second.targetId,
+          codec: 'av1',
+        });
+      } else {
+        expect(videoExit).toBe(1);
+        expect(videoOutput + videoLog).toContain('does not support native tab recording');
+        expect(await Bun.file(mp4).exists()).toBe(false);
+      }
+      expect(await cli(['targets', '-s', 'review'])).toContainEqual(
+        expect.objectContaining({ targetId: second.targetId, current: true })
+      );
     } finally {
       const saved = await readFile(join(home, '.browser-pilot', 'sessions', 'review.json'), 'utf8')
         .then(JSON.parse)

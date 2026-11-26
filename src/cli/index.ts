@@ -85,7 +85,11 @@ Golden paths:
      record derive writes browser-pilot JSON steps, not Flightplan TOML.
      Translate the derived steps into Flightplan manually.
 
-  4. Debug a realtime or voice session
+  4. Record an MP4 walkthrough
+     bp record video -s demo -f walkthrough.mp4 --label "Save a filtered view"
+     # Drive the demo session, then press Ctrl+C to save.
+
+  5. Debug a realtime or voice session
      bp trace start -s dev --background
      # reproduce the issue; capture auto-stops after 10m/100MB
      bp trace stop -s dev

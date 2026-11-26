@@ -27,7 +27,7 @@ export const CLI_COMMANDS: readonly CLICommandMeta[] = [
   { name: 'run', description: 'Run a workflow file', showInRootHelp: true },
   {
     name: 'record',
-    description: 'Record a human workflow and derive replayable output',
+    description: 'Capture a replayable workflow or an MP4 walkthrough',
     showInRootHelp: true,
   },
   { name: 'trace', description: 'Inspect and analyze behavior over time', showInRootHelp: true },
@@ -62,7 +62,7 @@ export const CLI_ROUTE_GROUPS: readonly CLIRouteGroup[] = [
     commands: ['exec', 'run'],
   },
   {
-    label: 'Capture a human demo',
+    label: 'Capture a workflow or video',
     commands: ['record'],
   },
   {
